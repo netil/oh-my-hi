@@ -75,7 +75,7 @@ function addAutoHook() {
   if (!settings.hooks.Stop) settings.hooks.Stop = [];
   settings.hooks.Stop.push({
     matcher: '*',
-    hooks: [{ command: AUTO_HOOK_CMD }]
+    hooks: [{ type: 'command', command: AUTO_HOOK_CMD }]
   });
   writeSettings(settings);
   console.log('oh-my-hi: ✅ Auto-refresh enabled. data.json will be refreshed automatically on session end.');
