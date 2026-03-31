@@ -439,11 +439,11 @@
     prevStart2.setDate(prevStart2.getDate() - days);
     const cur2 = list.filter((i) => {
       let d = new Date(i.timestamp);
-      return d >= curStart && (!name || i.name === name);
+      return d >= curStart && (!name || matchUsageName(i.name, name));
     }).length;
     let prev2 = list.filter((i) => {
       let d = new Date(i.timestamp);
-      return d >= prevStart2 && d < curStart && (!name || i.name === name);
+      return d >= prevStart2 && d < curStart && (!name || matchUsageName(i.name, name));
     }).length;
     if (prev2 === 0) return cur2 > 0 ? 100 : 0;
     return Math.round(((cur2 - prev2) / prev2) * 100);
@@ -1283,10 +1283,10 @@
     drawRotatedBar('#tool-ctx-bar', contextEntries.map((e) => {
       return { label: e[0], value: e[1].tokens };
     }));
-    drawHourlyDistChart(tokenEntries, ko);
+    drawHourlyDistChart(tokenEntries);
   }
 
-  function drawHourlyDistChart(tokenEntries, ko) {
+  function drawHourlyDistChart(tokenEntries) {
     const el = document.getElementById('hourly-dist-chart');
     if (!el) return;
 
@@ -1374,7 +1374,6 @@
         },
         y: {
           clipPath: false,
-          clipPath: false,
           tick: { count: 5, format: (v) => fmtCompact(v) }
         }
       },
@@ -1388,29 +1387,6 @@
       size: { height: barHeight },
       padding: { left: 120 }
     });
-  }
-
-  // ── Tokens Activity sub-page ──
-  function renderTokensActivity() {
-    const usage = getUsage();
-    const days = customDateRange ? 0 : currentPeriod;
-    const tokenEntries = filterByPeriod(usage.tokenEntries || [], 'timestamp', days);
-
-    let html = '<div class="page-header">'
-      + '<h1>🗓️ ' + t('tokenActivityPage') + '</h1>'
-      + '</div>';
-
-    const tokenActivityMap = buildActivityMap(tokenEntries, (e) => {
-      return (e.rawInput || 0) + (e.outputTokens || 0) + (e.cacheRead || 0) + (e.cacheCreation || 0);
-    });
-    html += '<div class="section">'
-      + '<div class="section-title">' + t('tokenActivity') + ' <span class="section-title-sub">' + t('tokenActivityDesc') + '</span></div>'
-      + renderHeatmapFromMap(tokenActivityMap, days, t('tokenUnit'), true)
-      + '</div>';
-
-    html += '<div class="generated-at">' + t('generatedAt') + ' ' + formatDateTime(DATA.generatedAt) + ' · ' + (DATA.configDir || '') + '</div>';
-    content.innerHTML = html;
-    bindContentActions();
   }
 
   function renderTokenInsights(tokenEntries, modelMap, days) {
@@ -2563,7 +2539,6 @@
     outputNode.w = textWidth(outputNode.label);
 
     // Calculate group dimensions
-    const totalH = 0;
     let maxGroupW = 0;
     groups.forEach((g) => {
       let childrenW = 0;

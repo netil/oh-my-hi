@@ -311,8 +311,8 @@ async function main() {
     }
   }
 
-  // Open/refresh browser (skip for --status and --disable-auto)
-  openOrRefreshBrowser(indexPath);
+  // Open/refresh browser (skip for --data-only, --status and --disable-auto)
+  if (!dataOnly) openOrRefreshBrowser(indexPath);
 }
 
 /** Open browser tab or refresh if already open */

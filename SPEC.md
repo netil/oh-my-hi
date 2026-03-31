@@ -10,8 +10,7 @@ Parses harness configuration and usage data, builds a single-file HTML dashboard
 ```
 oh-my-hi/
 ├── SKILL.md                     # Skill definition (invoked as /omh)
-├── SPEC.md                      # This file
-├── task-categories.json         # Persistent task category mapping (user-editable)
+├── spec.md                      # This file
 ├── scripts/
 │   ├── generate-dashboard.mjs   # Main entry point
 │   └── parsers/
@@ -33,9 +32,11 @@ oh-my-hi/
 ├── templates/
 │   ├── dashboard.html           # HTML shell with placeholders
 │   ├── styles.css               # All CSS
-│   ├── app.js                   # Frontend JS (English i18n only)
+│   ├── app.js                   # Frontend JS (ES6+)
+│   ├── work-types.json          # Task category schema (25 types)
 │   └── locales/
-│       └── ko.json              # Korean locale (shipped)
+│       ├── en.json              # English locale (base)
+│       └── ko.json              # Korean locale
 └── output/                      # Generated artifacts
     ├── data.json                # Raw data (for programmatic access)
     └── index.html               # Single file with inlined data+locale+CSS+JS
@@ -46,7 +47,7 @@ oh-my-hi/
 | Parameter | Description |
 |-----------|-------------|
 | `/omh` | Full build: parse data → build web-ui → open/refresh browser |
-| `--data-only` | Regenerate data + web-ui (skip auto-refresh notice, still opens browser) |
+| `--data-only` | Regenerate data + web-ui (skip auto-refresh notice and browser open) |
 | `--enable-auto` | Register Stop hook for auto-rebuild on session end |
 | `--disable-auto` | Remove Stop hook |
 | `--status` | Show auto-refresh hook status |
@@ -114,11 +115,11 @@ Built at build time in `generate-dashboard.mjs`. Persisted in `task-categories.j
 3. Skill/agent description + name → keyword matching against category seeds
 4. Fallback → `other`
 
-**Categories**: code-edit, code-search, execution, review, planning, docs, browser, workflow, team, config, general, other
+**Categories** (25): code-edit, code-search, execution, review, planning, docs, browser, workflow, team, config, general, refactor, test, git, frontend, backend, database, devops, security, data, research, i18n, comms, pm, other
 
 ## i18n
 
-- **Base language**: English (hardcoded in app.js `I18N.en`)
+- **Base language**: English (`locales/en.json`, externalized)
 - **Korean**: `locales/ko.json` (shipped with project)
 - **Other locales**: Auto-generated English template on first build if locale file missing
 - **Build injection**: System locale detected → `locales/{locale}.json` loaded → injected as `__LOCALE_DATA__` with `_lang` field
@@ -154,7 +155,7 @@ configFiles, skills, agents, plugins, hooks, memory, mcpServers, rules, principl
 ## Key Architectural Decisions
 
 1. **Data inline (no fetch)**: index.html embeds data.json as `DATA` variable. Required for file:// protocol compatibility.
-2. **Single output file**: All CSS, JS, data, locale inlined into index.html. No external dependencies except CDN (billboard.js, d3).
-3. **Persistent category mapping**: `task-categories.json` survives rebuilds. User can manually reclassify items.
+2. **Single output file**: All CSS, JS, data, locale inlined into index.html. Billboard.js bundled inline, no CDN dependencies.
+3. **Persistent category mapping**: `task-categories.json` auto-generated at every build from `work-types.json` schema.
 4. **Locale built once**: Locale file generated on first build for unknown locales. Not rebuilt on subsequent runs.
 5. **AppleScript tab reuse**: macOS-only optimization. Searches all browser windows/tabs for URL match.

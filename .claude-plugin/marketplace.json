@@ -11,7 +11,7 @@
     {
       "name": "oh-my-hi",
       "description": "Visual dashboard for Claude Code harness — usage/token analysis of skills, agents, plugins, hooks, memory, MCP servers, rules, and principles",
-      "version": "0.2.2",
+      "version": "0.2.3",
       "author": {
         "name": "Jae Sung Park",
         "email": "alberto.park@gmail.com"

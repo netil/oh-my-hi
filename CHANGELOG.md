@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.2.3] - 2026-03-31
+
+### Fixed
+- Fix `ReferenceError: ko is not defined` crash on Token Analysis page (hourly distribution chart)
+- Fix `calcChange()` using strict equality instead of `matchUsageName()` for non-custom date ranges, causing incorrect change percentages for plugin-namespaced skills
+- Fix `--data-only` mode still opening/refreshing browser tab (now correctly skips browser activation)
+
+### Removed
+- Dead code: unused `renderTokensActivity()` function, duplicate `clipPath` property, unused `totalH` variable
+
 ## [0.2.2] - 2026-03-31
 
 ### Added
