@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.1.2] - 2026-03-31
+
+### Added
+- Estimated cost calculation based on Anthropic API token pricing (per model: input/output/cache read/cache write)
+- Cost stat cards: total cost, daily average cost, top 3 models by cost
+- Cost column and total row in model breakdown table
+- Cost breakdown insight in Token Insights section
+- Cost formula explanation with collapsible model pricing table and source link (anthropic.com/pricing)
+- Disclaimer note clarifying API-based estimate vs CLI subscription billing
+
+### Fixed
+- Period filter (7d/30d) now correctly counts today-inclusive (7d = today + 6 prior days)
+- Hide tooltip on active period button (date range already shown below)
+
 ## [0.1.1] - 2026-03-31
 
 ### Fixed

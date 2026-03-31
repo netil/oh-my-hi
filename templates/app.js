@@ -22,6 +22,15 @@
     inputTokens: "Input Tokens",
     outputTokens: "Output Tokens",
     cacheTokens: "Cache Tokens",
+    estimatedCost: "Estimated Cost",
+    totalCost: "Total Cost",
+    dailyAvgCost: "Daily Avg Cost",
+    costFormula: "Cost Calculation",
+    costFormulaDesc: "Reference cost converted at Anthropic API token pricing (per 1M tokens, USD). Claude Code CLI is subscription-based (Pro/Max/Team/Enterprise) and not billed per token — this estimate is unrelated to actual subscription charges.",
+    costFormulaDetail: "Cost = (Input × input price + Output × output price + Cache Read × cache read price + Cache Write × cache write price) ÷ 1,000,000",
+    costPricingTable: "Model Pricing Table (per 1M tokens)",
+    costCardNote: "Based on Anthropic API token pricing (<span style='color:#e74c3c'>not actual CLI subscription billing</span>)",
+    costPricingUnit: "USD per 1M tokens",
     tokenTrend: "Daily Token Usage",
     modelDist: "Model Distribution",
     tokenByModel: "Token Usage by Model",
@@ -541,7 +550,8 @@
       });
     }
     const cutoff = new Date();
-    cutoff.setDate(cutoff.getDate() - days);
+    cutoff.setDate(cutoff.getDate() - (days - 1));
+    cutoff.setHours(0, 0, 0, 0);
     return items.filter((i) => { return new Date(i[dateField]) >= cutoff; });
   }
 
@@ -716,6 +726,50 @@
     if (n >= 1e6) return (n / 1e6).toFixed(1) + 'M';
     if (n >= 1e4) return (n / 1e3).toFixed(1) + 'K';
     return fmtNum(n);
+  }
+
+  function fmtCost(n) {
+    if (n >= 1000) return '$' + fmtNum(Math.round(n));
+    if (n >= 100) return '$' + n.toFixed(1);
+    if (n >= 1) return '$' + n.toFixed(2);
+    if (n >= 0.01) return '$' + n.toFixed(3);
+    if (n > 0) return '<$0.01';
+    return '$0.00';
+  }
+
+  // Claude model pricing per 1M tokens (USD)
+  // https://docs.anthropic.com/en/docs/about-claude/models
+  const MODEL_PRICING = {
+    'opus-4': { input: 15, output: 75, cacheRead: 1.5, cacheCreation: 18.75 },
+    'sonnet-4': { input: 3, output: 15, cacheRead: 0.3, cacheCreation: 3.75 },
+    'haiku-4': { input: 0.8, output: 4, cacheRead: 0.08, cacheCreation: 1 },
+    'sonnet-3-5': { input: 3, output: 15, cacheRead: 0.3, cacheCreation: 3.75 },
+    'haiku-3-5': { input: 0.8, output: 4, cacheRead: 0.08, cacheCreation: 1 },
+    'opus-3': { input: 15, output: 75, cacheRead: 1.5, cacheCreation: 18.75 },
+    'sonnet-3': { input: 3, output: 15, cacheRead: 0.3, cacheCreation: 3.75 },
+    'haiku-3': { input: 0.25, output: 1.25, cacheRead: 0.03, cacheCreation: 0.3 },
+  };
+
+  function resolvePricingKey(model) {
+    if (!model || model === 'unknown') return null;
+    const s = model.replace(/^claude-/, '').replace(/-\d{8,}$/, '');
+    if (MODEL_PRICING[s]) return s;
+    const m = s.match(/^(opus|sonnet|haiku)-(\d+)(?:-\d+)?$/);
+    if (m) {
+      const base = m[1] + '-' + m[2];
+      if (MODEL_PRICING[base]) return base;
+    }
+    return null;
+  }
+
+  function calcEntryCost(entry) {
+    const key = resolvePricingKey(entry.model);
+    if (!key) return 0;
+    const p = MODEL_PRICING[key];
+    return ((entry.rawInput || 0) * p.input
+      + (entry.outputTokens || 0) * p.output
+      + (entry.cacheRead || 0) * p.cacheRead
+      + (entry.cacheCreation || 0) * p.cacheCreation) / 1e6;
   }
 
   function localizeDocsUrl(url) {
@@ -1089,7 +1143,7 @@
   function calcTokenChange(entries, days, sumFn) {
     if ((days === 0 && !customDateRange) || customDateRange) return null;
     let now = new Date();
-    let curStart = new Date(now); curStart.setDate(curStart.getDate() - days);
+    let curStart = new Date(now); curStart.setDate(curStart.getDate() - (days - 1)); curStart.setHours(0, 0, 0, 0);
     let prevStart = new Date(curStart); prevStart.setDate(prevStart.getDate() - days);
     let cur = 0, prev = 0;
     entries.forEach((e) => {
@@ -1135,15 +1189,66 @@
       + statCard(t('cacheTokens'), totalCache, changeCache, siOpts)
       + '</div>';
 
-    // Prep: modelMap
+    // Prep: modelMap + cost
+    let totalCost = 0;
+    const costDailyMap = {};
     const modelMapForInsights = {};
     tokenEntries.forEach((e) => {
+      const cost = calcEntryCost(e);
+      totalCost += cost;
       let short = (e.model || 'unknown').replace(/^claude-/, '').replace(/-\d{8,}$/, '');
-      if (!modelMapForInsights[short]) modelMapForInsights[short] = { input: 0, output: 0, cache: 0 };
+      if (!modelMapForInsights[short]) modelMapForInsights[short] = { input: 0, output: 0, cache: 0, cacheRead: 0, cacheCreation: 0, cost: 0 };
       modelMapForInsights[short].input += e.rawInput || 0;
       modelMapForInsights[short].output += e.outputTokens || 0;
       modelMapForInsights[short].cache += (e.cacheRead || 0) + (e.cacheCreation || 0);
+      modelMapForInsights[short].cacheRead += e.cacheRead || 0;
+      modelMapForInsights[short].cacheCreation += e.cacheCreation || 0;
+      modelMapForInsights[short].cost += cost;
+      // daily cost
+      const d = typeof e.timestamp === 'number' ? new Date(e.timestamp) : new Date(e.timestamp);
+      const dk = d.toISOString().substring(0, 10);
+      if (dk) costDailyMap[dk] = (costDailyMap[dk] || 0) + cost;
     });
+    const changeCost = calcTokenChange(allTokenEntries, days, (e) => calcEntryCost(e));
+    const costDays = Object.keys(costDailyMap).length;
+    const dailyAvgCost = costDays > 0 ? totalCost / costDays : 0;
+
+    // Cost cards: total, daily avg, top models
+    const modelsByCost = Object.entries(modelMapForInsights).sort((a, b) => b[1].cost - a[1].cost);
+    html += '<div style="margin-top:16px;margin-bottom:4px;font-size:13px;color:var(--text-secondary)">' + t('costCardNote') + '</div>'
+      + '<div class="card-grid">'
+      + statCard(t('totalCost'), fmtCost(totalCost), changeCost, { raw: true })
+      + statCard(t('dailyAvgCost'), fmtCost(dailyAvgCost), null, { raw: true, badge: (currentLang === 'ko' ? '활동 ' : '') + costDays + (currentLang === 'ko' ? '일 기준' : ' active days') });
+    modelsByCost.slice(0, 3).forEach((entry) => {
+      if (entry[1].cost > 0) {
+        const pct = totalCost > 0 ? Math.round((entry[1].cost / totalCost) * 100) : 0;
+        html += statCard(entry[0], fmtCost(entry[1].cost), null, { raw: true, badge: pct + '%' });
+      }
+    });
+    html += '</div>';
+
+    // Cost formula explanation
+    html += '<div class="section"><div class="section-title">' + t('costFormula') + '</div>'
+      + '<div class="card" style="padding:16px;overflow-x:auto">'
+      + '<div style="margin-bottom:12px;color:var(--text-secondary);font-size:13px">' + t('costFormulaDesc') + '</div>'
+      + '<div style="margin-bottom:12px;font-size:12px;color:var(--text-secondary);font-family:monospace;line-height:1.8">'
+      + t('costFormulaDetail')
+      + '</div>'
+      + '<details><summary style="cursor:pointer;font-size:13px;font-weight:600;margin-bottom:8px">' + t('costPricingTable') + '</summary>'
+      + '<table class="config-table" style="width:100%;margin-top:8px">'
+      + '<thead><tr><th>Model</th><th style="text-align:right">Input</th><th style="text-align:right">Output</th><th style="text-align:right">Cache Read</th><th style="text-align:right">Cache Write</th></tr></thead><tbody>';
+    Object.entries(MODEL_PRICING).forEach(function(entry) {
+      var p = entry[1];
+      html += '<tr><td><strong>' + entry[0] + '</strong></td>'
+        + '<td style="text-align:right">$' + p.input + '</td>'
+        + '<td style="text-align:right">$' + p.output + '</td>'
+        + '<td style="text-align:right">$' + p.cacheRead + '</td>'
+        + '<td style="text-align:right">$' + p.cacheCreation + '</td></tr>';
+    });
+    html += '</tbody></table>'
+      + '<div style="margin-top:8px;font-size:12px;color:var(--text-secondary)">'
+      + t('costPricingUnit') + ' · <a href="https://www.anthropic.com/pricing" target="_blank" style="color:var(--accent)">anthropic.com/pricing</a>'
+      + '</div></details></div></div>';
 
     // 1. Charts
     html += '<div class="chart-row">'
@@ -1173,15 +1278,20 @@
     if (modelEntries.length > 0) {
       html += '<div class="section"><div class="section-title">' + t('tokenByModel') + '</div>'
         + '<div class="card" style="padding:16px;overflow-x:auto"><table class="config-table" style="width:100%">'
-        + '<thead><tr><th>Model</th><th style="text-align:right">Input</th><th style="text-align:right">Output</th><th style="text-align:right">Cache</th><th style="text-align:right">Total</th></tr></thead><tbody>';
+        + '<thead><tr><th>Model</th><th style="text-align:right">Input</th><th style="text-align:right">Output</th><th style="text-align:right">Cache</th><th style="text-align:right">Total</th><th style="text-align:right">' + t('estimatedCost') + '</th></tr></thead><tbody>';
+      let tableTotalCost = 0;
       modelEntries.forEach((entry) => {
         const d = entry[1], tot = d.input + d.output + d.cache;
+        tableTotalCost += d.cost || 0;
         html += '<tr><td><strong>' + escapeHtml(entry[0]) + '</strong></td>'
           + '<td style="text-align:right">' + fmtCompact(d.input) + '</td>'
           + '<td style="text-align:right">' + fmtCompact(d.output) + '</td>'
           + '<td style="text-align:right">' + fmtCompact(d.cache) + '</td>'
-          + '<td style="text-align:right"><strong>' + fmtCompact(tot) + '</strong></td></tr>';
+          + '<td style="text-align:right"><strong>' + fmtCompact(tot) + '</strong></td>'
+          + '<td style="text-align:right">' + fmtCost(d.cost || 0) + '</td></tr>';
       });
+      html += '<tr style="border-top:2px solid var(--border)"><td colspan="5" style="text-align:right"><strong>Total</strong></td>'
+        + '<td style="text-align:right"><strong>' + fmtCost(tableTotalCost) + '</strong></td></tr>';
       html += '</tbody></table></div></div>';
     }
 
@@ -1549,6 +1659,18 @@
         detail += '\n' + (ko ? '기타: ' : 'Others: ') + others;
       }
       insights.push({ icon: '🤖', title: ko ? '모델 사용 분석' : 'Model Usage', detail: detail });
+    }
+
+    // 3b. Cost breakdown
+    let totalCostInsight = 0;
+    tokenEntries.forEach((e) => { totalCostInsight += calcEntryCost(e); });
+    if (totalCostInsight > 0) {
+      const costByModel = modelEntries.map((e) => e[0] + ' ' + fmtCost(e[1].cost || 0)).join(', ');
+      let detail = ko
+        ? '총 예상 비용: ' + fmtCost(totalCostInsight) + ' (Anthropic 공식 가격 기준).'
+        : 'Total estimated cost: ' + fmtCost(totalCostInsight) + ' (based on Anthropic official pricing).';
+      detail += '\n' + (ko ? '모델별: ' : 'By model: ') + costByModel;
+      insights.push({ icon: '💵', title: ko ? '비용 분석' : 'Cost Breakdown', detail: detail });
     }
 
     // 4. Daily average, peak, day-of-week, peak hours
@@ -2390,9 +2512,10 @@
       const badgeCls = 'stat-badge' + (opts.badgeColor ? ' stat-badge--' + opts.badgeColor : '');
       badgeHtml = '<div class="' + badgeCls + '">' + opts.badge + '</div>';
     }
+    const useRaw = opts && opts.raw;
     const useSI = opts && opts.si;
-    const displayValue = useSI ? fmtCompact(value) : fmtNum(value);
-    const rawHtml = useSI && value >= 1e4 ? '<div class="stat-raw">' + fmtNum(value) + '</div>' : '';
+    const displayValue = useRaw ? value : (useSI ? fmtCompact(value) : fmtNum(value));
+    const rawHtml = !useRaw && useSI && value >= 1e4 ? '<div class="stat-raw">' + fmtNum(value) + '</div>' : '';
     return '<div class="stat-card">'
       + '<div class="stat-label">' + label + '</div>'
       + '<div class="stat-value">' + displayValue + '</div>'

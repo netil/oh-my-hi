@@ -527,9 +527,17 @@ body.dark .page-header .page-desc {
   display: none;
 }
 
+.period-btn.active[data-tooltip]:hover::after {
+  display: none;
+}
+
 body.dark .period-btn[data-tooltip]:hover::after,
 body.dark .heatmap-cell:hover::after {
   color: #1a1b1e;
+}
+
+body.dark .period-btn.active[data-tooltip]:hover::after {
+  display: none;
 }
 
 .period-btn:hover {
