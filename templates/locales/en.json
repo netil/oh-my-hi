@@ -164,7 +164,7 @@
   "helpUsage": "Usage",
   "helpUsageDesc": "Generate the dashboard via the /omh skill.",
   "helpUpdate": "Update",
-  "helpUpdateDesc": "To update to the latest version, run the same install command:",
+  "helpUpdateDesc": "Re-add the marketplace to fetch the latest version, then reinstall:",
   "helpUpdateCli": "From the command line",
   "helpUpdateSession": "Claude Code (in-session)",
   "helpParams": "Parameters",

@@ -2388,8 +2388,10 @@
       + '<div class="card help-card"><p>' + t('helpUpdateDesc') + '</p>'
       + '<pre style="margin:8px 0 0;padding:8px 12px;background:#1a1b1e;color:#e0e0e0;border-radius:6px;font-size:13px;line-height:1.6"><code>'
       + '<span style="color:#6c757d"># ' + t('helpUpdateCli') + '</span>\n'
+      + '$ claude plugin marketplace add netil/oh-my-hi\n'
       + '$ claude plugin install oh-my-hi\n\n'
       + '<span style="color:#6c757d"># ' + t('helpUpdateSession') + '</span>\n'
+      + '/plugin marketplace add netil/oh-my-hi\n'
       + '/plugin install oh-my-hi@oh-my-hi-marketplace'
       + '</code></pre>'
       + '</div></div>';
