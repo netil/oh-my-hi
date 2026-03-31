@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.2.1] - 2026-03-31
+
+### Changed
+- Merge Installation and Update sections into single "Installation & Update" in README and Help page
+- Fix update instructions: marketplace add required before install
+
 ## [0.2.0] - 2026-03-31
 
 ### Added

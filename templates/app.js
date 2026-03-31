@@ -2376,16 +2376,10 @@
       + '<h1>❓ ' + t('helpTitle') + ' <a href="https://github.com/netil/oh-my-hi" target="_blank" style="font-size:14px;font-weight:400;color:var(--text-secondary);text-decoration:none;vertical-align:middle;margin-left:8px">GitHub ↗</a></h1>'
       + '</div>';
 
-    // Usage
+    // Install / Update
     html += '<div class="section">'
-      + '<div class="section-title">' + t('helpUsage') + '</div>'
-      + '<div class="card help-card"><p>' + t('helpUsageDesc') + '</p></div>'
-      + '</div>';
-
-    // Update
-    html += '<div class="section">'
-      + '<div class="section-title">' + t('helpUpdate') + '</div>'
-      + '<div class="card help-card"><p>' + t('helpUpdateDesc') + '</p>'
+      + '<div class="section-title">' + t('helpInstall') + '</div>'
+      + '<div class="card help-card"><p>' + t('helpInstallDesc') + '</p>'
       + '<pre style="margin:8px 0 0;padding:8px 12px;background:#1a1b1e;color:#e0e0e0;border-radius:6px;font-size:13px;line-height:1.6"><code>'
       + '<span style="color:#6c757d"># ' + t('helpUpdateCli') + '</span>\n'
       + '$ claude plugin marketplace add netil/oh-my-hi\n'

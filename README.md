@@ -23,33 +23,18 @@ Parses your entire Claude Code configuration and usage data, then generates an i
 #### From the Command Line
 
 ```bash
-# 1. Add marketplace
 claude plugin marketplace add netil/oh-my-hi
-
-# 2. Install plugin
 claude plugin install oh-my-hi
 ```
 
-#### Claude Code (via Plugin Marketplace)
+#### Claude Code (in-session)
 
 ```bash
 /plugin marketplace add netil/oh-my-hi
 /plugin install oh-my-hi@oh-my-hi-marketplace
 ```
 
-## Update
-
-Re-add the marketplace to fetch the latest version, then reinstall:
-
-```bash
-# From the Command Line
-$ claude plugin marketplace add netil/oh-my-hi
-$ claude plugin install oh-my-hi
-
-# Claude Code (in-session)
-/plugin marketplace add netil/oh-my-hi
-/plugin install oh-my-hi@oh-my-hi-marketplace
-```
+> Run the same commands to update to the latest version.
 
 ## Usage
 
