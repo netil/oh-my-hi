@@ -5,6 +5,7 @@
 
 Parses your entire Claude Code configuration and usage data, then generates an interactive single-file HTML dashboard you can open locally.
 
+<img src="./assets/dashboard.png" alt="Dashboard preview" width="800">
 
 ## What it shows
 
@@ -13,6 +14,9 @@ Parses your entire Claude Code configuration and usage data, then generates an i
 - **Activity heatmaps** — daily usage patterns across skills, agents, and commands
 - **Task categories** — auto-classified token usage by work type (code editing, docs, planning, etc.)
 - **Multi-workspace** — switch between global and per-project scopes
+
+<img src="./assets/token-overview.png" alt="Tokens" width="800">
+<img src="./assets/insights.png" alt="Insights" width="800">
 
 ## Installation
 
