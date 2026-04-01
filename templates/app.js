@@ -2224,7 +2224,15 @@
           color: { pattern: ['#7c3aed'] },
           clipPath: false,
           area: { linearGradient: true },
-          tooltip: { format: { title: fmtChartTooltipTitle, value: (v) => fmtCost(v) } }
+          tooltip: { format: { title: (d) => {
+            const dt = d instanceof Date ? d : new Date(d);
+            const monthNames = t('monthNames').split(',');
+            const monthStr = monthNames[dt.getMonth()] || String(dt.getMonth() + 1);
+            const w = Math.ceil(dt.getDate() / 7);
+            const isEn = currentLang === 'en';
+            const wStr = isEn ? (w + (['th','st','nd','rd'][w] || 'th')) : String(w);
+            return t('weekLabel', monthStr, wStr);
+          }, value: (v) => fmtCost(v) } }
         });
       }
     }
@@ -2263,7 +2271,10 @@
           color: { pattern: ['#0ca678'] },
           clipPath: false,
           area: { linearGradient: true },
-          tooltip: { format: { title: (d) => { const s = String(d); return s.length >= 7 ? s.substring(0, 7) : fmtChartTooltipTitle(d); }, value: (v) => fmtCost(v) } }
+          tooltip: { format: { title: (d) => {
+            const dt = d instanceof Date ? d : new Date(d);
+            return dt.getFullYear() + '.' + String(dt.getMonth() + 1).padStart(2, '0');
+          }, value: (v) => fmtCost(v) } }
         });
       }
     }

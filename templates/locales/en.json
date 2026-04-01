@@ -25,6 +25,7 @@
   "costPricingUnit": "USD per 1M tokens",
   "compareToggle": "Compare with previous period",
   "comparePrev": "Previous Period",
+  "weekLabel": "{1} week, {0}",
   "budgetTitle": "Cost Budget",
   "budgetDaily": "Daily",
   "budgetWeekly": "Weekly",

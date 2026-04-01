@@ -25,6 +25,7 @@
   "costPricingUnit": "USD / 1M 토큰",
   "compareToggle": "이전 기간과 비교",
   "comparePrev": "이전 기간",
+  "weekLabel": "{0} {1}째주",
   "budgetTitle": "비용 예산",
   "budgetDaily": "일별",
   "budgetWeekly": "주별",
