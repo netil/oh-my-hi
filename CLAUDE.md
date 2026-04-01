@@ -60,7 +60,7 @@ Execute in order when a version bump is requested:
 1. `npm test` — abort on failure
 2. **Semver bump** — update package.json + .claude-plugin/marketplace.json simultaneously
 3. **CHANGELOG.md** — add new version section with changes
-4. **SPEC.md** — sync if structure or features changed
+4. **SPEC.md** / **GUIDE.md** — sync if structure or features changed
 5. **Commit & push** — commit message format: `vX.Y.Z: {summary}`
 6. **Git tag** — create `git tag vX.Y.Z` and push
 7. **npm publish** — prompt user for OTP

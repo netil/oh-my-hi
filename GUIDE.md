@@ -21,8 +21,11 @@ Filter all usage data by time period:
 | **30d** | Last 30 days (today inclusive) |
 | **All** | All collected data since first session |
 | **📅** | Custom date range picker |
+| **⚖** | Compare toggle — overlays previous period data on stat cards and trend chart (7d/30d only) |
 
 Hover over a non-active button to preview the date range in a tooltip. The active range is shown below the buttons.
+
+**Compare mode**: When ⚖ is active, each stat card shows the previous period value below the current value, and the token trend chart overlays the previous period as a gray line. "Previous period" means the same-length window immediately before the current one (e.g., 7d selected → compares last 7 days vs. the 7 days before that).
 
 ### Search
 
@@ -48,7 +51,7 @@ The landing page showing a high-level summary of your harness activity.
 | **Popular Skills** | Top 5 most-used skills ranked by call count. |
 | **Activity Heatmap** | GitHub-style calendar heatmap of daily activity intensity. |
 | **Recent Activity** | Timeline of the 10 most recent skill, agent, and command invocations. |
-| **Unused Items** | Skills and agents that were registered but never called in the selected period. |
+| **Unused Items** | Skills, agents, and MCP servers that were registered but never called in the selected period. When more than 3 items are unused, a cleanup tip is shown suggesting how to reduce context loading. |
 
 ---
 
@@ -58,14 +61,27 @@ Token usage analytics across all Claude Code sessions.
 
 | Section | Description |
 |---------|-------------|
-| **Stat Cards** | Total tokens, input tokens, output tokens, cache tokens — each with period-over-period change. |
-| **Estimated Cost** | Total cost, daily average cost, and per-model cost cards. Based on Anthropic API token pricing (not actual CLI subscription billing). |
-| **Cost Calculation** | Expandable section with the pricing formula, collapsible model pricing table (per 1M tokens), and a link to [anthropic.com/pricing](https://www.anthropic.com/pricing). |
+| **Stat Cards** | Total tokens, input tokens, output tokens, cache tokens — each with period-over-period change. In compare mode, previous period values are also shown. |
 | **Model Distribution** | Donut chart of token usage by model. |
-| **Daily Token Usage** | Line chart of daily token consumption trend. |
+| **Daily Token Usage** | Area chart of daily token consumption trend. In compare mode, previous period is overlaid as a gray line. |
 | **Token Activity** | Calendar heatmap of daily token usage intensity. |
+| **Tokens by Task Category** | Horizontal bar chart grouping token usage by auto-classified work type (code editing, documentation, planning, etc.). |
+| **Token Usage by Tool** | Horizontal bar chart of tokens attributed to specific skills, agents, or tools (top 10). |
 | **Token Usage by Model** | Table breakdown: input, output, cache, total tokens, and estimated cost per model. |
 | **Token Insights** | Auto-generated analysis cards covering cache efficiency, response efficiency, model usage, cost breakdown, daily patterns, and peak hours. |
+
+---
+
+### 💰 Tokens > Cost
+
+Cost analysis and budget tracking.
+
+| Section | Description |
+|---------|-------------|
+| **Stat Cards** | Total cost, daily average cost, and per-model cost cards. Based on Anthropic API token pricing (not actual CLI subscription billing). |
+| **Cost Budget** | Configurable daily/weekly/monthly spending thresholds. Set values and click Save — stored in browser localStorage. Progress bars show current spending vs. budget, with warnings at 80% and exceeded amount + percentage at 100%+. |
+| **Cost Trend Charts** | Three area gradient charts (daily in orange, weekly in purple, monthly in green). When a budget is set, a blue dashed grid line marks the threshold. |
+| **Cost Calculation** | Expandable section with the pricing formula, collapsible model pricing table (per 1M tokens), and a link to [anthropic.com/pricing](https://www.anthropic.com/pricing). |
 
 #### Cost Calculation Formula
 
@@ -78,19 +94,40 @@ Prices are per 1M tokens (USD), sourced from Anthropic's official API pricing. C
 
 ---
 
-### 📋 Tokens > Analysis
+### 💬 Tokens > Prompt
 
-Deeper analysis of token consumption patterns.
+Prompt and response analysis.
 
 | Section | Description |
 |---------|-------------|
-| **Tokens by Task Category** | Horizontal bar chart grouping token usage by auto-classified work type (code editing, documentation, planning, etc.). Categories are derived from skill/agent descriptions and saved in `task-categories.json` for customization. |
-| **Token Usage by Tool** | Horizontal bar chart of tokens attributed to specific skills, agents, or tools (top 10). |
 | **Prompt Statistics** | Total prompts, average prompt length (chars), short prompt ratio (≤100 chars), long prompt ratio (≥500 chars). |
 | **Response Latency** | Average, median (P50), 95th percentile (P95), and max response time (human→assistant interval). |
-| **Session Analysis** | Total sessions, average messages per session, average session duration, longest session. |
 | **Hourly Token Distribution** | Bar chart of token usage by hour of day (24h). |
-| **Cache Efficiency** | Fresh input, cache read, cache creation token counts with percentages and overall cache hit rate. |
+| **Cache Efficiency** | Fresh input, cache read, cache creation token counts with percentages and overall cache hit rate. Followed by contextual tips: low hit rate warnings, high creation/read ratio detection, and session-level cache usage analysis. |
+
+---
+
+### 📋 Tokens > Session
+
+Session-level usage analysis.
+
+| Section | Description |
+|---------|-------------|
+| **Stat Cards** | Total sessions, average messages per session, average session duration, longest session. |
+| **Top Sessions** | Table of up to 20 sessions ranked by token usage. Shows date (with day of week), total tokens, estimated cost, duration, and models used. Click any row to open the session detail view. |
+
+#### Session Detail (`#session/{id}`)
+
+Clicking a session row navigates to a dedicated detail page:
+
+| Section | Description |
+|---------|-------------|
+| **Stat Cards** | Total tokens, estimated cost, duration, message count for this session. |
+| **Models Used** | Badges for each model used during the session with call counts. |
+| **Skills / Agents / MCP** | Badges showing which skills, agents, and MCP servers were invoked. |
+| **Activity Timeline** | Chronological table of every token entry: time, model, context, input/output/cache tokens, and cost. |
+
+Use the "← Back to Sessions" button to return to the session list.
 
 ---
 
@@ -155,6 +192,8 @@ Toggle via the theme button in the sidebar footer. Preference is persisted in `l
 ### Period Comparison
 
 Stat cards with a change percentage compare the selected period against the immediately preceding period of equal length. For example, 7d compares the last 7 days vs. the 7 days before that.
+
+Enable the ⚖ compare toggle in the sidebar to see explicit previous period values on stat cards and a gray overlay line on the token trend chart. Compare mode is available for 7d and 30d periods (disabled for All and custom ranges).
 
 ### Data Refresh
 
