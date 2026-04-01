@@ -4,7 +4,16 @@ import { fileURLToPath } from 'url';
 import path from 'path';
 import fs from 'fs';
 import { execSync } from 'child_process';
-import { transformSync } from 'esbuild';
+
+// Auto-install dependencies if missing
+const __boot_dir = path.dirname(fileURLToPath(import.meta.url));
+const __boot_root = path.resolve(__boot_dir, '..');
+if (!fs.existsSync(path.join(__boot_root, 'node_modules'))) {
+  console.log('oh-my-hi: installing dependencies...');
+  execSync('npm install --omit=dev', { cwd: __boot_root, stdio: 'inherit' });
+}
+
+const { transformSync } = await import('esbuild');
 
 import { parseSkills } from './parsers/skills.mjs';
 import { parseAgents } from './parsers/agents.mjs';

@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.2.4] - 2026-04-01
+
+### Fixed
+- Auto-install dependencies (`npm install`) when `node_modules` is missing, preventing `__BB_JS__`/`__EN_DATA__` build errors on first run
+- Use dynamic `import()` for esbuild to allow pre-import dependency check
+
 ## [0.2.3] - 2026-03-31
 
 ### Fixed
