@@ -73,6 +73,14 @@ Execute in order when a version bump is requested:
 - Charts: `bb.generate({ bindto, data, ... })` via billboard.js API
 - State persistence via localStorage: `harness-theme`, `harness-lang`, `harness-period`, `harness-budget`, `harness-compare`
 
+## Skill Spec Compliance
+
+SKILL.md follows the [Agent Skills Specification](https://agentskills.io/specification):
+- `name` must be lowercase alphanumeric + hyphens, matching the parent directory name
+- `description` is required (1-1024 chars), should describe what + when
+- `argument-hint` is a Claude Code extension (not in agentskills.io spec, but harmless)
+- Keep SKILL.md body under 500 lines; move detailed content to `references/` or `scripts/`
+
 ## Distribution
 
 - **npm**: `npm publish` (package name: `oh-my-hi`)
