@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.4.6] - 2026-04-04
+
+### Changed
+- First-run completion banner now shows only when new data has been generated (compares `generatedAt` with localStorage), and auto-hides after 3 seconds with a fade-out transition
+
 ## [0.4.5] - 2026-04-04
 
 ### Fixed

@@ -135,9 +135,15 @@ describe('Web UI — Templates', () => {
       assert.ok(js.includes('showFirstRunBanner()'), 'showFirstRunBanner called at boot');
     });
 
-    it('should reference _firstRun and _dateRange from DATA', () => {
-      assert.ok(js.includes('DATA._firstRun'), '_firstRun flag checked');
+    it('should reference generatedAt and _dateRange from DATA', () => {
+      assert.ok(js.includes('DATA.generatedAt'), 'generatedAt used for new-data detection');
       assert.ok(js.includes('DATA._dateRange'), '_dateRange used for date range display');
+    });
+
+    it('should auto-hide banner after 3 seconds', () => {
+      assert.ok(js.includes('setTimeout'), 'setTimeout used for auto-hide');
+      assert.ok(js.includes('firstrun-banner--hiding'), 'hiding class applied for fade-out');
+      assert.ok(js.includes('transitionend'), 'banner removed after transition ends');
     });
 
     it('should have firstrun close button inline handler', () => {

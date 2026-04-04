@@ -2059,6 +2059,12 @@ body.dark .bb-tooltip .value {
 .firstrun-banner {
   gap: 12px;
   background: #2f9e44;
+  transition: opacity 0.4s ease, transform 0.4s ease;
+}
+
+.firstrun-banner--hiding {
+  opacity: 0;
+  transform: translateY(-100%);
 }
 
 .firstrun-banner span {

@@ -4036,7 +4036,11 @@
 
   // ── First-run completion banner ──
   function showFirstRunBanner() {
-    if (!DATA._firstRun) return;
+    const LS_KEY = 'harness-last-seen-generatedAt';
+    const current = DATA.generatedAt;
+    const last = localStorage.getItem(LS_KEY);
+    if (!current || current === last) return;
+    localStorage.setItem(LS_KEY, current);
     const dr = DATA._dateRange;
     let dateStr = '';
     if (dr && dr.from && dr.to) {
@@ -4048,6 +4052,10 @@
     banner.innerHTML = '<span>' + t('firstRunBannerMsg') + dateStr + '</span>'
       + '<button class="firstrun-close" onclick="this.parentElement.remove()" title="' + t('close') + '">✕</button>';
     document.body.prepend(banner);
+    setTimeout(() => {
+      banner.classList.add('firstrun-banner--hiding');
+      banner.addEventListener('transitionend', () => banner.remove(), { once: true });
+    }, 3000);
   }
 
   // ── Boot ──
