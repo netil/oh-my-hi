@@ -45,5 +45,10 @@ If the user chooses **enable**, run `--enable-auto`. If they choose **disable**,
 Find and run the script (searches plugin cache first, then marketplaces):
 
 ```bash
-SCRIPT=$(find "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/plugins" -name "generate-dashboard.mjs" -path "*/scripts/generate-dashboard.mjs" -print -quit 2>/dev/null) && node "$SCRIPT" $ARGUMENTS
+SCRIPT=$(find "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/plugins" -name "generate-dashboard.mjs" -path "*/scripts/generate-dashboard.mjs" -print -quit 2>/dev/null)
+if [ -z "$SCRIPT" ]; then
+  echo "oh-my-hi: ERROR — generate-dashboard.mjs not found. Try: /omh --update"
+  exit 1
+fi
+node "$SCRIPT" $ARGUMENTS
 ```
