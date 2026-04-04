@@ -4036,13 +4036,14 @@
 
   // ── New-data banner ──
   function showFirstRunBanner() {
-    const LS_KEY = 'harness-last-seen-generatedAt';
     const current = DATA.generatedAt;
     if (!current) return;
-    let last;
-    try { last = localStorage.getItem(LS_KEY); } catch (e) { return; }
-    if (current === last) return;
-    try { localStorage.setItem(LS_KEY, current); } catch (e) { return; }
+    // Use URL ?seen=<generatedAt> to track "already shown" state.
+    // history.replaceState works on file:// URLs and persists across refreshes.
+    const params = new URLSearchParams(location.search);
+    if (params.get('seen') === current) return;
+    params.set('seen', current);
+    try { history.replaceState(null, '', location.pathname + '?' + params.toString() + location.hash); } catch (e) { /* ignore */ }
     const dr = DATA._dateRange;
     let dateStr = '';
     if (dr && dr.from && dr.to) {

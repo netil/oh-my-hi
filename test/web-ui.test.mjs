@@ -140,6 +140,12 @@ describe('Web UI — Templates', () => {
       assert.ok(js.includes('DATA._dateRange'), '_dateRange used for date range display');
     });
 
+    it('should use URL ?seen param to track shown state', () => {
+      assert.ok(js.includes('URLSearchParams'), 'URLSearchParams used for seen-state tracking');
+      assert.ok(js.includes('history.replaceState'), 'history.replaceState updates ?seen param');
+      assert.ok(js.includes("params.get('seen')"), 'seen param checked against generatedAt');
+    });
+
     it('should auto-hide banner after 3 seconds', () => {
       assert.ok(js.includes('setTimeout'), 'setTimeout used for auto-hide');
       assert.ok(js.includes('firstrun-banner--hiding'), 'hiding class applied for fade-out');
