@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.4.3] - 2026-04-04
+
+### Fixed
+- Plugin path resolution: SKILL.md `find` command now searches `plugins/` cache directory instead of relying on `CLAUDE_PLUGIN_ROOT` (which points to the marketplace mirror, not the versioned install cache with `scripts/`)
+
+### Added
+- First-run completion banner: after full data loads on first run, a green banner shows the parsed date range (e.g. "✅ Full data loaded · Jan 1, 2025 – Apr 4, 2026") with an × close button that only disappears on user click
+
 ## [0.4.2] - 2026-04-03
 
 ### Changed
