@@ -4034,13 +4034,15 @@
     document.body.prepend(banner);
   }
 
-  // ── First-run completion banner ──
+  // ── New-data banner ──
   function showFirstRunBanner() {
     const LS_KEY = 'harness-last-seen-generatedAt';
     const current = DATA.generatedAt;
-    const last = localStorage.getItem(LS_KEY);
-    if (!current || current === last) return;
-    localStorage.setItem(LS_KEY, current);
+    if (!current) return;
+    let last;
+    try { last = localStorage.getItem(LS_KEY); } catch (e) { return; }
+    if (current === last) return;
+    try { localStorage.setItem(LS_KEY, current); } catch (e) { return; }
     const dr = DATA._dateRange;
     let dateStr = '';
     if (dr && dr.from && dr.to) {
