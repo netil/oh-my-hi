@@ -4054,7 +4054,9 @@
     document.body.prepend(banner);
     setTimeout(() => {
       banner.classList.add('firstrun-banner--hiding');
-      banner.addEventListener('transitionend', () => banner.remove(), { once: true });
+      const removeBanner = () => { if (banner.isConnected) banner.remove(); };
+      banner.addEventListener('transitionend', removeBanner, { once: true });
+      setTimeout(removeBanner, 500); // fallback if transitionend doesn't fire
     }, 3000);
   }
 

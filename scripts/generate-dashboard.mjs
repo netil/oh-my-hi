@@ -355,7 +355,7 @@ async function main() {
     console.log(`  [1/3] scanning ${scopes.length} workspace(s)...`);
     const scopeData = await collectAllScopes(scopes, { days: 0, cachePath: CACHE_PATH, progress: true });
     console.log('  [2/3] building dashboard...');
-    const data = buildDataObject(scopes, scopeData, systemLocale);
+    const data = buildDataObject(scopes, scopeData, systemLocale, { _dateRange: computeDateRange(scopeData) });
     writeDataJs(data, dataPath);
     console.log('  [3/3] opening browser...');
     openOrRefreshBrowser(indexPath);
