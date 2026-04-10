@@ -1,5 +1,23 @@
 #!/usr/bin/env node
+// @ts-check
 // generate-dashboard.mjs — oh-my-hi dashboard generator
+
+/**
+ * @typedef {{ id: string, label: string, type: 'global'|'project',
+ *   configPath: string, projectPath: string|null }} Scope
+ */
+
+/**
+ * @typedef {{ globalClaudeTokens: number, projectClaudeTokens: number,
+ *   autoMemoryTokens: number, skillsDescTokens: number,
+ *   mcpToolsTokens: number, principlesTokens: number }} ContextStats
+ */
+
+/**
+ * @typedef {{ usage: import('./parsers/usage.mjs').UsageResult,
+ *   contextStats: ContextStats,
+ *   dateRange: { start: number|null, end: number|null } }} ScopeData
+ */
 import { fileURLToPath } from 'url';
 import path from 'path';
 import fs from 'fs';

@@ -1,4 +1,51 @@
+// @ts-check
 // usage.mjs — history, transcript, stats-cache parser
+
+/**
+ * @typedef {{ timestamp: number|string, model: string|null,
+ *   inputTokens: number, outputTokens: number,
+ *   cacheRead: number, cacheCreation: number, rawInput: number,
+ *   context: string, contextName: string, sessionId: string,
+ *   latencyMs?: number }} TokenEntry
+ */
+
+/**
+ * @typedef {{ timestamp: number|string, text: string, preview: string,
+ *   charLen: number, sessionId: string }} PromptStat
+ */
+
+/**
+ * @typedef {{ timestamp: number|string, latencyMs: number,
+ *   sessionId: string }} LatencyEntry
+ */
+
+/**
+ * @typedef {{ name: string, count: number, sessionId: string }} CommandUsage
+ */
+
+/**
+ * @typedef {{ _schemaVersion: number, [filePath: string]: {
+ *   size: number, mtime: number,
+ *   result: TranscriptParseResult } }} MtimeIndex
+ */
+
+/**
+ * @typedef {{ parsed: number, total: number }} CacheStats
+ */
+
+/**
+ * @typedef {{ commands: CommandUsage[], skills: string[], agents: string[],
+ *   mcpCalls: string[], tokenEntries: TokenEntry[], promptStats: PromptStat[],
+ *   latencyEntries: LatencyEntry[], dailyActivity: object[],
+ *   _cacheStats: CacheStats }} UsageResult
+ */
+
+/**
+ * @typedef {{ skills: string[], agents: string[], mcpCalls: string[],
+ *   tokenEntries: TokenEntry[], promptStats: PromptStat[],
+ *   latencyEntries: LatencyEntry[] }} TranscriptParseResult
+ */
+
 import fs from 'fs';
 import fsp from 'fs/promises';
 import path from 'path';
@@ -155,7 +202,7 @@ function writeCacheFile(filePath, data) {
  * Load transcript cache by merging base + all segments.
  * Also migrates legacy formats (single JSON, year-split gz).
  * @param {string} cachePath - legacy base path (used to derive cache dir)
- * @returns {object} merged cache
+ * @returns {Record<string, any>} merged cache keyed by file path
  */
 export function loadTranscriptCache(cachePath) {
   if (!cachePath) return {};
@@ -738,14 +785,12 @@ function mergeTranscriptResults(results) {
 }
 
 /**
- * Parse usage data
+ * Parse all usage data from transcripts and history.
  * @param {string} configDir - Claude config root path
- * @param {number} days - 0 for all, >0 for last N days
- * @param {string|null} projectDir - single project dir, or null for global
- * @param {object} [opts] - options
- * @param {object} [opts.cache] - mutable transcript cache object
- * @param {string} [opts.cachePath] - path to persist cache on disk
- * @returns {object} parsed usage data + cache stats
+ * @param {number} [days=0] - 0 for all, >0 for last N days
+ * @param {string|null} [projectDir=null] - single project dir, or null for global
+ * @param {{ cache?: Record<string, any>, cachePath?: string }} [opts]
+ * @returns {Promise<UsageResult>}
  */
 export async function parseUsage(configDir, days = 0, projectDir = null, opts = {}) {
   const cutoffMs = calcCutoff(days);

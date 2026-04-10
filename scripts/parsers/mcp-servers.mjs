@@ -1,3 +1,4 @@
+// @ts-check
 // mcp-servers.mjs — .claude.json / mcp.json MCP server parser
 // IMPORTANT: Never expose env values (tokens/secrets); only return key names
 import fs from 'fs';

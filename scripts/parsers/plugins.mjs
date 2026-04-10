@@ -1,3 +1,4 @@
+// @ts-check
 // plugins.mjs — plugins/installed_plugins.json parser
 import fs from 'fs';
 import path from 'path';

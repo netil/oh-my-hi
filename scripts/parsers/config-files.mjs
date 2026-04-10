@@ -1,3 +1,4 @@
+// @ts-check
 // config-files.mjs — CLAUDE.md, AGENTS.md and other root config file parser
 import fs from 'fs';
 import path from 'path';

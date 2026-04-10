@@ -1,3 +1,4 @@
+// @ts-check
 // scopes.mjs — project scope detector
 import fs from 'fs';
 import path from 'path';

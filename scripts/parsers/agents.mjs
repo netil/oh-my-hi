@@ -1,3 +1,4 @@
+// @ts-check
 // agents.mjs — agents/*.md parser
 import fs from 'fs';
 import path from 'path';

@@ -1,3 +1,4 @@
+// @ts-check
 // rules.mjs — rules/*.md and principles/*.md parser (no frontmatter)
 import fs from 'fs';
 import path from 'path';

@@ -1,3 +1,4 @@
+// @ts-check
 // memory.mjs — projects/*/memory/*.md parser
 import fs from 'fs';
 import path from 'path';

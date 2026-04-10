@@ -1,3 +1,4 @@
+// @ts-check
 // commands.mjs — commands/*.md parser (frontmatter-based, like skills)
 import fs from 'fs';
 import path from 'path';

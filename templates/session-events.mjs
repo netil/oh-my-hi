@@ -1,3 +1,4 @@
+// @ts-check
 // session-events.mjs — pure session analysis helpers used by the Context
 // Explorer. Extracted from templates/app.js so they can be unit-tested without
 // a browser. All functions here are pure: output depends solely on arguments,
@@ -6,8 +7,63 @@
 // Build integration: the generator strips `export ` keywords and prepends the
 // file to app.js. Source of truth lives here — don't edit the inlined copy.
 
+/**
+ * @typedef {{ timestamp: number|string, model: string|null, inputTokens: number,
+ *   outputTokens: number, cacheRead: number, cacheCreation: number,
+ *   rawInput: number, context: string, contextName: string,
+ *   sessionId: string, latencyMs?: number }} TokenEntry
+ */
+
+/**
+ * @typedef {{ timestamp: number|string, text: string, preview: string,
+ *   charLen: number, sessionId: string }} PromptStat
+ */
+
+/**
+ * @typedef {{ tokenEntries: TokenEntry[], promptStats: PromptStat[] }} UsageData
+ */
+
+/**
+ * @typedef {{ globalClaudeTokens?: number, projectClaudeTokens?: number,
+ *   autoMemoryTokens?: number, skillsDescTokens?: number,
+ *   mcpToolsTokens?: number, principlesTokens?: number }} ContextStats
+ */
+
+/**
+ * @typedef {{ ev1: string, ev2: string, ev3: string, ev4: string, ev5: string,
+ *   ev6: string, ev7: string, principles: string,
+ *   globalClaude?: string, projectClaude?: string, autoMemory?: string,
+ *   skillsDesc?: string, mcpTools?: string }} ContextLabels
+ */
+
+/**
+ * @typedef {{ id: string, count: number, minTs: number, maxTs: number,
+ *   firstPrompt: { ts: number, text: string|null, len: number }|null,
+ *   model: string|null, peakTokens: number }} ReplayableSession
+ */
+
+/**
+ * @typedef {{ isSession: boolean, isSynthetic?: boolean, id: number,
+ *   t: number, kind: string, tokens: number, color: string,
+ *   vis: 'full'|'brief'|'hidden', link: string|null,
+ *   cumulative: number, delta: number, model: string|null,
+ *   timestamp: number|null, contextName: string,
+ *   rawInput: number, cacheRead: number, cacheCreation: number,
+ *   outputTokens: number }} SessionEvent
+ */
+
+/**
+ * @typedef {{ name: string, hidden: number, brief: number, full: number,
+ *   totalTokens: number }} VisibilityEntry
+ */
+
 // Map a context type + name to a render kind and color used by the timeline.
 // The returned `kind` drives KIND_META badges; `color` feeds chart segments.
+/**
+ * @param {string} ctx
+ * @param {string} ctxName
+ * @returns {{ kind: string, color: string }}
+ */
 export function mapSessionCtx(ctx, ctxName) {
   const TOOL_COLORS = {
     Read:   '#8A8880', Grep:   '#8A8880', Glob:   '#8A8880',
@@ -26,6 +82,7 @@ export function mapSessionCtx(ctx, ctxName) {
 
 // Parse a token entry's timestamp to a numeric ms value. Accepts either
 // numeric epoch or ISO string.
+/** @param {{ timestamp: number|string }} e @returns {number} */
 function tsOf(e) {
   return typeof e.timestamp === 'number' ? e.timestamp : new Date(e.timestamp).getTime();
 }
@@ -34,6 +91,10 @@ function tsOf(e) {
 // A "session" is a group of API turns sharing the same sessionId; sessions
 // with fewer than 2 turns are filtered out since there's nothing to replay.
 // Returned entries are sorted newest-first by maxTs.
+/**
+ * @param {UsageData|null|undefined} usage
+ * @returns {ReplayableSession[]}
+ */
 export function listReplayableSessions(usage) {
   const entries = (usage && usage.tokenEntries) || [];
   const prompts = (usage && usage.promptStats) || [];
@@ -72,14 +133,20 @@ export function listReplayableSessions(usage) {
 }
 
 // Build a timeline of events from a real session's tokenEntries. Returns an
-// array of { isSession, id, t, kind, tokens, color, vis, link, cumulative,
-// delta, model, timestamp, contextName, rawInput, cacheRead, cacheCreation,
-// outputTokens } plus synthetic startup entries prepended at negative `t`.
+// array of SessionEvent objects plus synthetic startup entries prepended at
+// negative `t`.
 //
 // Pure function with explicit deps:
 //   usage         — { tokenEntries, promptStats }
 //   contextStats  — per-scope startup token breakdown (CLAUDE.md, memory, ...)
 //   labels        — { ev1, ev2, ev3, ev4, ev5, ev6, ev7, principles } string map
+/**
+ * @param {string} sessionId
+ * @param {UsageData|null|undefined} usage
+ * @param {ContextStats|null|undefined} contextStats
+ * @param {ContextLabels} labels
+ * @returns {SessionEvent[]}
+ */
 export function buildSessionEvents(sessionId, usage, contextStats, labels) {
   const allEntries = (usage && usage.tokenEntries) || [];
   const entries = allEntries
@@ -219,13 +286,20 @@ export function buildSessionEvents(sessionId, usage, contextStats, labels) {
 }
 
 // Aggregate terminal visibility by context name across all sessions.
-// Returns an array of { name, hidden, brief, full, totalTokens } sorted by
-// totalTokens descending.  Uses the same vis assignment logic as
-// buildSessionEvents (user prompt → full, startup synthetic → hidden, rest → brief).
+// Returns an array sorted by totalTokens descending. Uses the same vis
+// assignment logic as buildSessionEvents (user prompt → full, startup
+// synthetic → hidden, rest → brief).
 //
 // `contextStats` provides the per-scope startup token breakdown; its keys become
 // dedicated "hidden" entries. Since startup tokens are a fixed per-session cost,
 // `sessionCount` multiplies them to reflect actual consumption in the period.
+/**
+ * @param {UsageData|null|undefined} usage
+ * @param {ContextStats|null|undefined} contextStats
+ * @param {ContextLabels} labels
+ * @param {number} sessionCount
+ * @returns {VisibilityEntry[]}
+ */
 export function aggregateVisibility(usage, contextStats, labels, sessionCount) {
   const entries = (usage && usage.tokenEntries) || [];
   const prompts = (usage && usage.promptStats) || [];

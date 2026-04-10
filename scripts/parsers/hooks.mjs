@@ -1,3 +1,4 @@
+// @ts-check
 // hooks.mjs — settings.json hooks parser
 import fs from 'fs';
 import path from 'path';

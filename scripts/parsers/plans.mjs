@@ -1,3 +1,4 @@
+// @ts-check
 // plans.mjs — plans/*.md parser (plain markdown, no frontmatter)
 import fs from 'fs';
 import path from 'path';

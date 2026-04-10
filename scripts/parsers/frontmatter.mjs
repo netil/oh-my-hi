@@ -1,3 +1,4 @@
+// @ts-check
 // frontmatter.mjs — YAML frontmatter parser (no dependencies)
 import fs from 'fs';
 

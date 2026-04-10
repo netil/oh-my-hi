@@ -1,3 +1,4 @@
+// @ts-check
 // todos.mjs — todos/*.json parser (active tasks only)
 import fs from 'fs';
 import path from 'path';

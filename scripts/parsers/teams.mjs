@@ -1,3 +1,4 @@
+// @ts-check
 // teams.mjs — teams/*/config.json parser
 import fs from 'fs';
 import path from 'path';

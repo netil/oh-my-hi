@@ -1,3 +1,4 @@
+// @ts-check
 // skills.mjs — local + plugin SKILL.md parser
 import fs from 'fs';
 import path from 'path';
