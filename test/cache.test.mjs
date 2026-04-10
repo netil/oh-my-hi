@@ -21,7 +21,7 @@ const CLAUDE_CONFIG_DIR = process.env.CLAUDE_CONFIG_DIR
 // which overwrite data.json / data.js / index.html with plugin-mode artifacts
 // (e.g. _devBuild:undefined, DEV BUILD badge gone). That leaks into the
 // developer's live dashboard. Snapshot before the suite, restore after.
-const SNAPSHOT_FILES = ['data.json', 'data.js', 'index.html'];
+const SNAPSHOT_FILES = ['data.json', 'data.js', 'data-core.js', 'data-usage.js', 'index.html'];
 const snapshots = new Map();
 before(() => {
   for (const f of SNAPSHOT_FILES) {
@@ -119,9 +119,12 @@ describe('Incremental Cache', () => {
 
     it('should have zero parsed on second run with same cache', async () => {
       assert.ok(firstRunResult._cacheStats.parsed > 0, 'first run should parse files');
+      const t1 = firstRunResult._cacheStats.total;
       sharedCache._parsed = 0;
       const r2 = await parseUsage(CLAUDE_CONFIG_DIR, 0, null, { cache: sharedCache });
-      assert.equal(r2._cacheStats.parsed, 0, 'second run should parse 0 files');
+      // Allow for new .jsonl files created by the live session between the two calls
+      const newFiles = Math.max(0, r2._cacheStats.total - t1);
+      assert.equal(r2._cacheStats.parsed, newFiles, 'second run should only parse newly added files');
     });
 
     it('should apply cutoff filtering with days parameter', async () => {
@@ -209,14 +212,16 @@ describe('Data.js Separation', () => {
 
   it('index.html should load data via script src', () => {
     const html = fs.readFileSync(path.join(OUTPUT, 'index.html'), 'utf-8');
-    assert.ok(html.includes('src="data.js"'), 'should have <script src="data.js">');
+    assert.ok(html.includes('src="data-core.js"'), 'should have <script src="data-core.js">');
+    assert.ok(html.includes('src="data-usage.js"'), 'should have <script src="data-usage.js">');
     assert.ok(!html.includes('let DATA ='), 'should NOT have inline DATA');
   });
 
   it('index.html should not contain __DATA__ placeholder', () => {
     const template = fs.readFileSync(path.join(ROOT, 'templates', 'dashboard.html'), 'utf-8');
     assert.ok(!template.includes('__DATA__'), 'template should not have __DATA__ placeholder');
-    assert.ok(template.includes('src="data.js"'), 'template should reference data.js');
+    assert.ok(template.includes('src="data-core.js"'), 'template should reference data-core.js');
+    assert.ok(template.includes('src="data-usage.js"'), 'template should reference data-usage.js');
   });
 });
 

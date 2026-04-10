@@ -10,6 +10,7 @@ Parses your entire Claude Code configuration and usage data, then generates an i
 ## What it shows
 
 - **Harness overview** — skills, agents, plugins, hooks, memory, MCP servers, rules, principles, commands, teams, plans
+- **Context budget** — estimated token distribution between visible and invisible contexts (startup, tools, user messages)
 - **Token analytics** — usage by model, daily trends, cache efficiency, prompt statistics, response latency
 - **Context Window Explorer** — replay any past session turn-by-turn to see exactly how the context window filled up
 - **Activity heatmaps** — daily usage patterns across skills, agents, and commands
@@ -94,7 +95,7 @@ See **[GUIDE.md](GUIDE.md)** for a detailed walkthrough of each dashboard sectio
 1. **Parse** — Reads your Claude Code config directory for skills, agents, plugins, hooks, memory, MCP servers, rules, principles, commands, teams, plans, and usage transcripts
 2. **Analyze** — Extracts token usage, prompt stats, response latency, activity patterns from `.jsonl` transcripts
 3. **Classify** — Auto-categorizes token usage into work types (code editing, docs, planning, etc.) based on skill/agent descriptions. Saves to `task-categories.json` for user customization
-4. **Build** — Generates `index.html` (shell with CSS/JS) + `data.js` (minified data). Data is separated from the shell so that only data needs updating on refresh
+4. **Build** — Generates `index.html` (shell with CSS/JS) + `data-core.js` (515KB, instant load) + `data-usage.js` (~9MB, deferred). Progressive loading ensures the dashboard renders immediately while full usage data loads in the background
 5. **Open** — On macOS, reuses an existing browser tab if found (AppleScript). On Windows/Linux, opens a new tab
 
 ## i18n

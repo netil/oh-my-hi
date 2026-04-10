@@ -1,5 +1,27 @@
 # Changelog
 
+## [0.7.0] - 2026-04-10
+
+### Added
+- **Context Budget section** on Overview page — estimates token distribution across hidden (startup), brief (tool output), and full (user-visible) contexts. Canvas-based stacked bar + top-8 ranked table. Hidden token cost is multiplied by session count in the selected period for accurate estimation. Subtitle explicitly labels the data as "estimated."
+- **Progressive data loading** — dashboard now loads in two phases: `data-core.js` (515KB, sync) for instant initial render, then `data-usage.js` (~9MB, deferred) for usage-heavy views. Legacy single `data.js` preserved for backwards compatibility.
+- **`drawStackedBar()` reusable canvas helper** — DPR-aware proportional bar renderer, used by Context Budget and available for future sections.
+- **`aggregateVisibility()` function** in `session-events.mjs` — aggregates tokenEntries + contextStats into per-context visibility breakdown with session count scaling for startup costs.
+- **`localizeDocsUrl` extended** — now handles `code.claude.com/docs/en/` URLs in addition to `docs.anthropic.com/en/docs/`, enabling i18n for all Claude documentation links in the Context Explorer.
+- **Test coverage reporting** — `npm test` now includes `--experimental-test-coverage` flag, printing line/branch/function coverage on every run.
+- **Tests**: 216 total (+18 new) — aggregateVisibility (8), progressive loading build (1), session count multiplier (2); web-ui template tests (7); cache schema version (1), flaky cache test fix (1).
+
+### Changed
+- **Help page section order** — Run Parameters section moved to the top for faster discoverability.
+- **Context Explorer timeline nav buttons** (top/bottom) hidden in example mode, visible only in session mode.
+- **Context Explorer "자세히 →" links** now follow i18n locale — Korean users see `/docs/ko/` URLs instead of `/docs/en/`.
+- **Turn count in session list** now formatted with `fmtCompact` (locale-aware comma separators under 10K, SI prefix above).
+
+### Fixed
+- **Session list showing hash IDs** — `promptStats` entries from old cache lacked `preview` field. Added `CACHE_SCHEMA_VERSION` to mtime index; version mismatch invalidates the index and forces a full re-parse with correct preview extraction.
+- **Lightweight mode merge never applied** — `savePending()` cleared `_new` flags before the merge step read them, so incremental data.js updates were always empty. Merge now runs before `savePending`. Full re-parse (schema invalidation) replaces arrays instead of appending to avoid duplicates.
+- **Context Budget period filter** — visibility data now filtered by the selected date range (was showing unfiltered totals).
+
 ## [0.6.0] - 2026-04-09
 
 ### Added

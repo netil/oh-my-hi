@@ -7,6 +7,7 @@ import {
   mapSessionCtx,
   listReplayableSessions,
   buildSessionEvents,
+  aggregateVisibility,
 } from '../templates/session-events.mjs';
 
 // --- mapSessionCtx ---------------------------------------------------------
@@ -225,5 +226,117 @@ describe('buildSessionEvents', () => {
     // tokens = 5000 (delta from 0). After subtraction, adjusted tokens must
     // be less than the raw delta.
     assert.ok(real[0].tokens < 5000, 'first event reduced for overlap with synthetics');
+  });
+});
+
+// --- aggregateVisibility ---------------------------------------------------
+
+const VIS_LABELS = {
+  globalClaude: 'Global CLAUDE.md', projectClaude: 'Project CLAUDE.md',
+  autoMemory: 'Auto Memory', skillsDesc: 'Skill Descriptions',
+  mcpTools: 'MCP Tools', principles: 'Principles',
+};
+
+describe('aggregateVisibility', () => {
+  it('returns empty array for empty usage', () => {
+    const result = aggregateVisibility({}, {}, VIS_LABELS);
+    assert.deepEqual(result, []);
+  });
+
+  it('returns empty array for null usage', () => {
+    const result = aggregateVisibility(null, null, VIS_LABELS);
+    assert.deepEqual(result, []);
+  });
+
+  it('classifies entries near prompts as full', () => {
+    const usage = {
+      tokenEntries: [
+        { timestamp: 1000, outputTokens: 100, context: 'general', contextName: 'conversation', sessionId: 's1' },
+      ],
+      promptStats: [{ timestamp: 1001, sessionId: 's1' }],
+    };
+    const result = aggregateVisibility(usage, {}, VIS_LABELS);
+    const conv = result.find(v => v.name === 'conversation');
+    assert.ok(conv);
+    assert.equal(conv.full, 1);
+    assert.equal(conv.brief, 0);
+  });
+
+  it('classifies entries without prompts as brief', () => {
+    const usage = {
+      tokenEntries: [
+        { timestamp: 1000, outputTokens: 200, context: 'tool', contextName: 'Read', sessionId: 's1' },
+      ],
+      promptStats: [],
+    };
+    const result = aggregateVisibility(usage, {}, VIS_LABELS);
+    const r = result.find(v => v.name === 'Read');
+    assert.ok(r);
+    assert.equal(r.brief, 1);
+    assert.equal(r.full, 0);
+  });
+
+  it('adds startup context stats as hidden entries', () => {
+    const cs = { globalClaudeTokens: 500, autoMemoryTokens: 300 };
+    const result = aggregateVisibility({ tokenEntries: [], promptStats: [] }, cs, VIS_LABELS);
+    assert.equal(result.length, 2);
+    const gc = result.find(v => v.name === 'Global CLAUDE.md');
+    assert.ok(gc);
+    assert.equal(gc.hidden, 1);
+    assert.equal(gc.totalTokens, 500);
+  });
+
+  it('sorts by totalTokens descending', () => {
+    const usage = {
+      tokenEntries: [
+        { timestamp: 1000, outputTokens: 50, context: 'tool', contextName: 'Read' },
+        { timestamp: 2000, outputTokens: 200, context: 'tool', contextName: 'Write' },
+      ],
+      promptStats: [],
+    };
+    const result = aggregateVisibility(usage, {}, VIS_LABELS);
+    assert.equal(result[0].name, 'Write');
+    assert.equal(result[1].name, 'Read');
+  });
+
+  it('sums totalTokens from outputTokens and startup', () => {
+    const usage = {
+      tokenEntries: [
+        { timestamp: 1000, outputTokens: 100, context: 'tool', contextName: 'Bash' },
+        { timestamp: 2000, outputTokens: 150, context: 'tool', contextName: 'Bash' },
+      ],
+      promptStats: [],
+    };
+    const cs = { skillsDescTokens: 400 };
+    const result = aggregateVisibility(usage, cs, VIS_LABELS);
+    const bash = result.find(v => v.name === 'Bash');
+    assert.equal(bash.totalTokens, 250);
+    assert.equal(bash.brief, 2);
+    const skills = result.find(v => v.name === 'Skill Descriptions');
+    assert.equal(skills.totalTokens, 400);
+    assert.equal(skills.hidden, 1);
+  });
+
+  it('skips zero-token startup entries', () => {
+    const cs = { globalClaudeTokens: 0, mcpToolsTokens: 0, autoMemoryTokens: 100 };
+    const result = aggregateVisibility({ tokenEntries: [], promptStats: [] }, cs, VIS_LABELS);
+    assert.equal(result.length, 1);
+    assert.equal(result[0].name, 'Auto Memory');
+  });
+
+  it('multiplies hidden tokens by sessionCount', () => {
+    const cs = { globalClaudeTokens: 500 };
+    const result = aggregateVisibility({ tokenEntries: [], promptStats: [] }, cs, VIS_LABELS, 10);
+    const gc = result.find(v => v.name === 'Global CLAUDE.md');
+    assert.equal(gc.totalTokens, 5000);
+    assert.equal(gc.hidden, 10);
+  });
+
+  it('defaults sessionCount to 1 when omitted', () => {
+    const cs = { autoMemoryTokens: 200 };
+    const result = aggregateVisibility({ tokenEntries: [], promptStats: [] }, cs, VIS_LABELS);
+    const mem = result.find(v => v.name === 'Auto Memory');
+    assert.equal(mem.totalTokens, 200);
+    assert.equal(mem.hidden, 1);
   });
 });

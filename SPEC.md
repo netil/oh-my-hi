@@ -41,8 +41,10 @@ oh-my-hi/
 │       └── ko.json              # Korean locale
 └── output/                      # Generated artifacts
     ├── data.json                # Raw data (for programmatic access)
-    ├── data.js                  # Minified data for browser (let DATA = ...)
-    ├── index.html               # Dashboard shell (CSS+JS+locales, loads data.js)
+    ├── data-core.js             # Core data for instant load (~515KB, sync)
+    ├── data-usage.js            # Usage data (~9MB, deferred via <script defer>)
+    ├── data.js                  # Legacy single-file (backwards compat)
+    ├── index.html               # Dashboard shell (CSS+JS+locales, loads data-core.js + data-usage.js)
     ├── cache/
     │   ├── mtime-index.json     # File path → mtime mapping (relative paths)
     │   ├── base-*.json.gz       # Compacted cache (after 50 segments)
@@ -74,11 +76,11 @@ Full mode (/omh):
   3. Parse changed transcript files (incremental via mtime/size cache)
   4. Save cache segment (gzipped, append-only) + mtime index
   5. Build task categories (description-based classification → task-categories.json)
-  6. Generate data.json + data.js (minified for browser)
+  6. Generate data.json + data-core.js + data-usage.js + data.js (minified for browser)
   7. Generate index.html (only on version change or first run):
      - dashboard.html template + __STYLES__ + __APP_JS__ + __LOCALE_DATA__ + billboard.js
      - __APP_JS__ = inlined .mjs modules (session-events, context-example) + app.js
-     - Data loaded via <script src="data.js"> (not inlined)
+     - Data loaded via <script src="data-core.js"> (sync) + <script src="data-usage.js" defer>
   8. Open/refresh browser + async update check (24h cache)
 
 Lightweight mode (--data-only, Stop hook):
@@ -170,7 +172,7 @@ Built at build time in `generate-dashboard.mjs`. Persisted in `task-categories.j
 
 | Page | Hash | Content |
 |------|------|---------|
-| Harness Overview | `#overview` | Stats cards, category distribution donut, daily trend, popular skills, activity heatmap, recent activity, insights, unused items (incl. MCP servers + cleanup tips) |
+| Harness Overview | `#overview` | Stats cards, category distribution donut, daily trend, popular skills, context budget (canvas stacked bar + top items, estimated), activity heatmap, recent activity, insights, unused items (incl. MCP servers + cleanup tips) |
 | Token Overview | `#tokens` | Token stats, model distribution donut, trend chart, activity heatmap, task category bar, tool context bar, model table, insights |
 | Token: Cost | `#tokens-cost` | Cost cards, budget config + progress bars, cost trend charts (daily/weekly/monthly with budget grid lines), cost formula |
 | Token: Prompt | `#tokens-prompt` | Prompt stats, response latency, hourly distribution, cache efficiency + tips |
@@ -190,10 +192,10 @@ configFiles, skills, agents, plugins, hooks, memory, mcpServers, rules, principl
 
 ## Key Architectural Decisions
 
-1. **Data separated from shell**: `index.html` is the dashboard shell (CSS/JS/locales), `data.js` holds the data. Shell is rebuilt only on version change; data is updated independently via `<script src="data.js">` (works with `file://` protocol).
-2. **Incremental cache**: Transcript parse results cached as gzipped segments (append-only). Only changed files are re-parsed. Compaction merges segments when count exceeds 50.
-3. **Lightweight mode**: `--data-only` (Stop hook) uses a mtime-index for change detection without loading full cache. Writes plain JSON pending files, updates `data.js` by merging into existing `data.json`.
-4. **Progressive loading**: On cold start, shows 7-day preview immediately, then loads full data in background.
+1. **Data separated from shell**: `index.html` is the dashboard shell (CSS/JS/locales). Data is split into `data-core.js` (~515KB, sync) and `data-usage.js` (~9MB, deferred). Shell is rebuilt only on version change; data is updated independently. Works with `file://` protocol.
+2. **Progressive data loading**: `data-core.js` loads instantly with scopes + metadata, allowing Overview to render immediately. `data-usage.js` loads asynchronously with full token/prompt/latency data, then triggers `mergeUsageData()` → re-render. Legacy single `data.js` is also generated for backwards compatibility.
+3. **Incremental cache**: Transcript parse results cached as gzipped segments (append-only). Only changed files are re-parsed. Compaction merges segments when count exceeds 50.
+4. **Lightweight mode**: `--data-only` (Stop hook) uses a mtime-index for change detection without loading full cache. Writes plain JSON pending files, updates `data.js` by merging into existing `data.json`.
 5. **Persistent category mapping**: `task-categories.json` auto-generated at every build from `work-types.json` schema.
 6. **Auto-update check**: `/omh` queries npm registry asynchronously (3s timeout, 24h cache). Notifies when new version is available.
 7. **AppleScript tab reuse**: macOS-only optimization. Searches all browser windows/tabs for URL match.

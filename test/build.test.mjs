@@ -108,7 +108,7 @@ describe('Build', () => {
       assert.ok(!html.includes('>__BB_CSS__<'), 'BB_CSS placeholder');
       assert.ok(!html.includes('>__STYLES__<'), 'STYLES placeholder');
       assert.ok(!html.includes('>__APP_JS__<'), 'APP_JS placeholder');
-      assert.ok(html.includes('src="data.js"'), 'DATA should be loaded via external data.js');
+      assert.ok(html.includes('src="data-core.js"'), 'DATA should be loaded via external data-core.js');
       assert.ok(!html.includes('__VERSION__'), 'VERSION placeholder');
     });
 
@@ -116,6 +116,17 @@ describe('Build', () => {
       assert.ok(fs.existsSync(path.join(OUTPUT, 'data.js')), 'data.js should exist');
       const dataJs = fs.readFileSync(path.join(OUTPUT, 'data.js'), 'utf-8');
       assert.ok(dataJs.startsWith('let DATA ='), 'data.js should define DATA variable');
+    });
+
+    it('should have progressive loading split files', () => {
+      assert.ok(fs.existsSync(path.join(OUTPUT, 'data-core.js')), 'data-core.js should exist');
+      assert.ok(fs.existsSync(path.join(OUTPUT, 'data-usage.js')), 'data-usage.js should exist');
+      const core = fs.readFileSync(path.join(OUTPUT, 'data-core.js'), 'utf-8');
+      assert.ok(core.startsWith('let DATA ='), 'data-core.js should define DATA');
+      assert.ok(core.includes('_usageReady'), 'data-core.js should have _usageReady flag');
+      const usage = fs.readFileSync(path.join(OUTPUT, 'data-usage.js'), 'utf-8');
+      assert.ok(usage.startsWith('let DATA_USAGE ='), 'data-usage.js should define DATA_USAGE');
+      assert.ok(usage.includes('_onUsageReady'), 'data-usage.js should call _onUsageReady');
     });
 
     it('should contain inlined billboard.js', () => {

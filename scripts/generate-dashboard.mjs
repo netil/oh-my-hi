@@ -285,6 +285,7 @@ async function main() {
 
     // Load mtime index (tiny file) instead of full cache
     const mtimeIndex = loadMtimeIndex(CACHE_PATH);
+    const mtimeIndexSize = Object.keys(mtimeIndex).length;
     const cache = {};
     for (const [fp, mtimeMs] of Object.entries(mtimeIndex)) {
       cache[fp] = { mtimeMs, size: 0, result: null };
@@ -305,31 +306,37 @@ async function main() {
     const total = Object.keys(cache).filter(k => !k.startsWith('_')).length;
     console.log(`  transcripts: ${total} files (${parsed} parsed, ${total - parsed} skipped)`);
 
-    // Save as pending + update mtime index
-    savePending(CACHE_PATH, cache);
-    saveMtimeIndex(CACHE_PATH, cache);
-
-    // Build index.html if missing or version changed
-    if (needsHtmlRebuild(indexPath)) {
-      writeHtml(indexPath, detectSystemLocale());
-    }
-
-    // Update data.js by merging new entries into existing data.json
+    // Update data.js by merging new entries — must run BEFORE savePending()
+    // because savePending clears _new flags that the merge depends on.
     const dataJsPath = path.join(OUTPUT, 'data.js');
     const dataJsMissing = !fs.existsSync(dataJsPath);
 
     if ((parsed > 0 || dataJsMissing) && fs.existsSync(dataPath)) {
       try {
         const existingData = JSON.parse(fs.readFileSync(dataPath, 'utf-8'));
-        // Merge new usage entries from freshly parsed files
         if (parsed > 0) {
-          for (const [key, entry] of Object.entries(cache)) {
-            if (key.startsWith('_') || !entry?._new || !entry.result) continue;
-            const r = entry.result;
-            const globalUsage = existingData.scopeData?.global?.usage;
-            if (globalUsage) {
-              for (const field of ['skills', 'agents', 'mcpCalls', 'tokenEntries', 'promptStats', 'latencyEntries']) {
-                if (r[field]?.length) globalUsage[field].push(...r[field]);
+          const globalUsage = existingData.scopeData?.global?.usage;
+          if (globalUsage) {
+            // Full re-parse (schema invalidation): all files are new, replace usage arrays
+            const fullReparse = mtimeIndexSize === 0 && parsed >= total;
+            if (fullReparse) {
+              const merged = { skills: [], agents: [], mcpCalls: [], tokenEntries: [], promptStats: [], latencyEntries: [] };
+              for (const [key, entry] of Object.entries(cache)) {
+                if (key.startsWith('_') || !entry?._new || !entry.result) continue;
+                const r = entry.result;
+                for (const field of Object.keys(merged)) {
+                  if (r[field]?.length) merged[field].push(...r[field]);
+                }
+              }
+              Object.assign(globalUsage, merged);
+            } else {
+              // Incremental: append only new entries
+              for (const [key, entry] of Object.entries(cache)) {
+                if (key.startsWith('_') || !entry?._new || !entry.result) continue;
+                const r = entry.result;
+                for (const field of ['skills', 'agents', 'mcpCalls', 'tokenEntries', 'promptStats', 'latencyEntries']) {
+                  if (r[field]?.length) globalUsage[field].push(...r[field]);
+                }
               }
             }
           }
@@ -338,6 +345,15 @@ async function main() {
         writeDataJs(existingData, dataPath);
         console.log('  data.js updated');
       } catch { /* skip — full rebuild on next /omh */ }
+    }
+
+    // Save as pending + update mtime index
+    savePending(CACHE_PATH, cache);
+    saveMtimeIndex(CACHE_PATH, cache);
+
+    // Build index.html if missing or version changed
+    if (needsHtmlRebuild(indexPath)) {
+      writeHtml(indexPath, detectSystemLocale());
     }
 
     console.log('oh-my-hi: done (lightweight)');
@@ -663,10 +679,31 @@ function writeDataJs(data, dataPath) {
   // data.json — full data for programmatic access
   fs.writeFileSync(dataPath, JSON.stringify(data), 'utf-8');
 
-  // data.js — minified data for browser (<script src="data.js">)
-  const inlineData = { ...data, scopeData: minifyUsageData(data.scopeData), _minified: true };
-  const dataJsPath = path.join(path.dirname(dataPath), 'data.js');
-  fs.writeFileSync(dataJsPath, 'let DATA = ' + escapeForScript(JSON.stringify(inlineData)) + ';', 'utf-8');
+  const outDir = path.dirname(dataPath);
+  const minifiedScopeData = minifyUsageData(data.scopeData);
+
+  // --- Progressive loading: split into core + usage ---
+  // data-core.js (~400KB sync): everything except per-scope usage arrays
+  const coreScopes = {};
+  const usageScopes = {};
+  for (const [scope, sdata] of Object.entries(minifiedScopeData)) {
+    const { usage, ...meta } = sdata;
+    coreScopes[scope] = { ...meta, usage: {} };
+    if (usage && Object.keys(usage).length > 0) usageScopes[scope] = usage;
+  }
+  const coreData = { ...data, scopeData: coreScopes, _minified: true, _usageReady: false };
+  fs.writeFileSync(path.join(outDir, 'data-core.js'),
+    'let DATA = ' + escapeForScript(JSON.stringify(coreData)) + ';', 'utf-8');
+
+  // data-usage.js (~9MB deferred): per-scope usage arrays + merge callback
+  fs.writeFileSync(path.join(outDir, 'data-usage.js'),
+    'let DATA_USAGE = ' + escapeForScript(JSON.stringify(usageScopes))
+    + ';if(typeof window._onUsageReady==="function")window._onUsageReady();', 'utf-8');
+
+  // data.js — legacy single-file (for backwards compatibility / tests)
+  const inlineData = { ...data, scopeData: minifiedScopeData, _minified: true };
+  fs.writeFileSync(path.join(outDir, 'data.js'),
+    'let DATA = ' + escapeForScript(JSON.stringify(inlineData)) + ';', 'utf-8');
 }
 
 /**

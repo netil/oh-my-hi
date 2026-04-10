@@ -7,6 +7,9 @@ import { gzipSync, gunzipSync } from 'zlib';
 
 const PARALLEL_CONCURRENCY = Math.max(os.cpus().length, 4);
 
+// Increment when parser output schema changes (forces full re-parse via mtime index invalidation)
+const CACHE_SCHEMA_VERSION = 2;
+
 /**
  * Run async functions in parallel with concurrency limit
  */
@@ -365,10 +368,12 @@ export function loadMtimeIndex(cachePath) {
   if (!cachePath) return {};
   try {
     const raw = JSON.parse(fs.readFileSync(mtimeIndexPath(cachePath), 'utf8'));
+    // Schema version mismatch → invalidate index to force full re-parse
+    if (raw._schemaVersion !== CACHE_SCHEMA_VERSION) return {};
     const base = raw._base || '';
     const result = {};
     for (const [key, val] of Object.entries(raw)) {
-      if (key === '_base') continue;
+      if (key === '_base' || key === '_schemaVersion') continue;
       result[base ? path.join(base, key) : key] = val;
     }
     return result;
@@ -390,7 +395,7 @@ export function saveMtimeIndex(cachePath, cache) {
       entries.push([key, entry.mtimeMs]);
     }
     const base = commonPrefix(entries.map(e => e[0]));
-    const index = { _base: base };
+    const index = { _base: base, _schemaVersion: CACHE_SCHEMA_VERSION };
     for (const [absPath, mtimeMs] of entries) {
       index[absPath.slice(base.length + 1)] = mtimeMs;
     }
@@ -411,7 +416,11 @@ async function cachedParseTranscriptFile(fp, cache) {
     const cached = cache[fp];
     if (cached && cached.mtimeMs === stat.mtimeMs) {
       // Full cache hit (has result) or mtime-only stub (skip — already processed)
-      if (cached.size === stat.size) return cached.result;
+      if (cached.size === stat.size) {
+        // Schema check: if promptStats entries lack 'preview', cache is stale — re-parse
+        const ps = cached.result?.promptStats;
+        if (!ps || ps.length === 0 || 'preview' in ps[0]) return cached.result;
+      }
       // Mtime match but size=0 means mtime-only stub from lightweight mode — skip
       if (cached.size === 0) return null;
     }

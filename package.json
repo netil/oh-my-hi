@@ -1,6 +1,6 @@
 {
   "name": "oh-my-hi",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "description": "Oh, so that's what Claude's been doing! — Claude Code harness insights dashboard",
   "repository": {
     "type": "git",
@@ -17,7 +17,7 @@
     "analytics"
   ],
   "scripts": {
-    "test": "node --test test/*.test.mjs",
+    "test": "node --experimental-test-coverage --test test/*.test.mjs",
     "build": "node scripts/generate-dashboard.mjs --data-only"
   },
   "homepage": "https://github.com/netil/oh-my-hi",

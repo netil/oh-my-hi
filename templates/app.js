@@ -76,6 +76,8 @@
       }
     }
     delete DATA._minified;
+    // Legacy single data.js has full usage — mark ready immediately.
+    if (DATA._usageReady === undefined) DATA._usageReady = true;
   }
 
   // ── i18n ──
@@ -720,8 +722,10 @@
 
   function localizeDocsUrl(url) {
     if (!url) return url;
-    // /en/docs/ → /{lang}/docs/
-    return url.replace('/en/docs/', '/' + currentLang + '/docs/');
+    // docs.anthropic.com/en/docs/ → /{lang}/docs/
+    // code.claude.com/docs/en/   → /docs/{lang}/
+    return url.replace('/en/docs/', '/' + currentLang + '/docs/')
+              .replace('/docs/en/', '/docs/' + currentLang + '/');
   }
 
   function docsLinkHtml(url) {
@@ -2494,6 +2498,62 @@
       html += '</div></div>';
     }
 
+    // Context Budget — visibility heatmap (filtered by selected period)
+    let visBarSegments = [];
+    const visLabels = {
+      globalClaude: t('visGlobalClaude'), projectClaude: t('visProjectClaude'),
+      autoMemory: t('visAutoMemory'), skillsDesc: t('visSkillsDesc'),
+      mcpTools: t('visMcpTools'), principles: t('visPrinciples')
+    };
+    const filteredUsage = {
+      tokenEntries: filterByPeriod(usage.tokenEntries || [], 'timestamp', days),
+      promptStats: filterByPeriod(usage.promptStats || [], 'timestamp', days)
+    };
+    // Count distinct sessions in the filtered period for startup cost scaling.
+    const periodSessionIds = new Set();
+    filteredUsage.tokenEntries.forEach((e) => { if (e.sessionId) periodSessionIds.add(e.sessionId); });
+    const visData = aggregateVisibility(filteredUsage, sd.contextStats || {}, visLabels, periodSessionIds.size);
+    if (visData.length > 0) {
+      const visTotal = visData.reduce((s, v) => s + v.totalTokens, 0);
+      html += '<div class="section">'
+        + '<div class="section-title">' + t('visHeatmapTitle') + ' <span class="section-title-sub">' + t('visHeatmapDesc') + '</span></div>'
+        + '<div class="card" style="padding:16px">';
+      // Canvas stacked bar
+      const hiddenTok = visData.reduce((s, v) => s + (v.hidden > 0 ? v.totalTokens : 0), 0);
+      const briefTok = visData.reduce((s, v) => s + (v.hidden === 0 && v.full === 0 ? v.totalTokens : 0), 0);
+      const fullTok = visData.reduce((s, v) => s + (v.full > 0 && v.hidden === 0 ? v.totalTokens : 0), 0);
+      visBarSegments = [
+        { label: t('visHidden'), tokens: hiddenTok, color: '#6B6964' },
+        { label: t('visBrief'),  tokens: briefTok,  color: '#E8A45C' },
+        { label: t('visFull'),   tokens: fullTok,    color: '#558A42' }
+      ].filter((s) => s.tokens > 0);
+      const barSegments = visBarSegments;
+      html += '<div style="height:24px;border-radius:6px;overflow:hidden;margin-bottom:12px;background:var(--color-bg-secondary)">'
+        + '<canvas id="vis-bar" style="width:100%;height:100%;display:block"></canvas></div>';
+      // Legend
+      html += '<div style="display:flex;gap:16px;margin-bottom:14px;font-size:12px;color:var(--text-secondary)">';
+      barSegments.forEach((seg) => {
+        html += '<span><span style="display:inline-block;width:10px;height:10px;border-radius:2px;background:' + seg.color + ';margin-right:4px;vertical-align:-1px"></span>'
+          + escapeHtml(seg.label) + ' ' + fmtCompact(seg.tokens) + '</span>';
+      });
+      html += '</div>';
+      // Top items list
+      const topItems = visData.slice(0, 8);
+      html += '<div style="display:grid;grid-template-columns:1fr auto auto;gap:4px 12px;font-size:12px;align-items:center">';
+      html += '<div style="font-weight:600;color:var(--text-secondary)">' + t('visName') + '</div>'
+        + '<div style="font-weight:600;color:var(--text-secondary);text-align:right">' + t('visTokens') + '</div>'
+        + '<div style="font-weight:600;color:var(--text-secondary);text-align:center">' + t('visVisibility') + '</div>';
+      topItems.forEach((v) => {
+        const vis = v.hidden > 0 ? 'hidden' : (v.full > 0 ? 'full' : 'brief');
+        const visColor = vis === 'hidden' ? '#6B6964' : vis === 'full' ? '#558A42' : '#E8A45C';
+        const visLabel = vis === 'hidden' ? t('visHidden') : vis === 'full' ? t('visFull') : t('visBrief');
+        html += '<div style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="' + escapeHtml(v.name) + '">' + escapeHtml(v.name) + '</div>'
+          + '<div style="text-align:right;font-family:var(--font-mono);color:var(--text-secondary)">' + fmtCompact(v.totalTokens) + '</div>'
+          + '<div style="text-align:center"><span style="display:inline-block;padding:1px 6px;border-radius:3px;font-size:10px;font-weight:600;color:#fff;background:' + visColor + '">' + escapeHtml(visLabel) + '</span></div>';
+      });
+      html += '</div></div></div>';
+    }
+
     // Activity Heatmap — based on transcript usage data
     html += '<div class="section">'
       + '<div class="section-title">' + t('activity') + ' <span class="section-title-sub">' + t('activityDesc') + '</span></div>'
@@ -2559,6 +2619,33 @@
     // Draw charts with billboard.js
     drawTrendChart(usage, days);
     drawDonutChart();
+    // Draw canvas stacked bar for context budget
+    if (visBarSegments.length > 0) {
+      drawStackedBar('vis-bar', visBarSegments.map((s) => ({ value: s.tokens, color: s.color })));
+    }
+  }
+
+  // ── Reusable canvas stacked bar ──
+  // segments: [{ value: number, color: string }]
+  // Draws proportional segments into a <canvas>, respecting devicePixelRatio.
+  function drawStackedBar(canvasId, segments) {
+    const el = document.getElementById(canvasId);
+    if (!el) return;
+    const dpr = window.devicePixelRatio || 1;
+    const W = el.clientWidth * dpr;
+    const H = el.clientHeight * dpr;
+    el.width = W;
+    el.height = H;
+    const ctx = el.getContext('2d');
+    const total = segments.reduce((s, seg) => s + seg.value, 0);
+    if (total <= 0) return;
+    let x = 0;
+    segments.forEach((seg, i) => {
+      const w = i === segments.length - 1 ? W - x : Math.round(seg.value / total * W);
+      ctx.fillStyle = seg.color;
+      ctx.fillRect(x, 0, w, H);
+      x += w;
+    });
   }
 
   // ── Charts (billboard.js) ──
@@ -3083,6 +3170,29 @@
       + '<h1>❓ ' + t('helpTitle') + ' <a href="https://github.com/netil/oh-my-hi" target="_blank" style="font-size:14px;font-weight:400;color:var(--text-secondary);text-decoration:none;vertical-align:middle;margin-left:8px">GitHub ↗</a></h1>'
       + '</div>';
 
+    // Parameters
+    html += '<div class="section">'
+      + '<div class="section-title">' + t('helpParams') + '</div>'
+      + '<div class="card help-card">'
+      + '<table class="config-table help-param-table" style="width:100%"><tbody>'
+      + '<tr><td class="help-param-code"><code>/omh</code></td><td>' + t('helpParamDefault') + '</td></tr>'
+      + '<tr><td class="help-param-code"><code>/omh --data-only</code></td><td>' + t('helpParamDataOnly') + '</td></tr>'
+      + '<tr><td class="help-param-code"><code>/omh --enable-auto</code></td><td>' + t('helpParamEnableAuto') + '</td></tr>'
+      + '<tr><td class="help-param-code"><code>/omh --disable-auto</code></td><td>' + t('helpParamDisableAuto') + '</td></tr>'
+      + '<tr><td class="help-param-code"><code>/omh --update</code></td><td>' + t('helpParamUpdate') + '</td></tr>'
+      + '<tr><td class="help-param-code"><code>/omh --status</code></td><td>' + t('helpParamStatus') + '</td></tr>'
+      + '<tr><td class="help-param-code"><code>/omh &lt;path&gt; [path...]</code></td><td>' + t('helpParamPaths') + '</td></tr>'
+      + '</tbody></table>'
+      + '</div></div>';
+
+    // Context Budget
+    html += '<div class="section">'
+      + '<div class="section-title">📊 ' + t('visHeatmapTitle') + '</div>'
+      + '<div class="card help-list">'
+      + helpRow('helpBudgetBar', 'helpBudgetBarDesc', '▬')
+      + helpRow('helpBudgetTable', 'helpBudgetTableDesc', '📋')
+      + '</div></div>';
+
     // Context Explorer
     html += '<div class="section">'
       + '<div class="section-title">🪟 ' + t('helpContextExplorer') + '</div>'
@@ -3109,21 +3219,6 @@
       + helpRow('helpLatency', 'helpLatencyDesc', '⏱️')
       + helpRow('helpActivity', 'helpActivityDesc', '📊')
       + helpRow('helpCommands', 'helpCommandsDesc', '⌨️')
-      + '</div></div>';
-
-    // Parameters
-    html += '<div class="section">'
-      + '<div class="section-title">' + t('helpParams') + '</div>'
-      + '<div class="card help-card">'
-      + '<table class="config-table help-param-table" style="width:100%"><tbody>'
-      + '<tr><td class="help-param-code"><code>/omh</code></td><td>' + t('helpParamDefault') + '</td></tr>'
-      + '<tr><td class="help-param-code"><code>/omh --data-only</code></td><td>' + t('helpParamDataOnly') + '</td></tr>'
-      + '<tr><td class="help-param-code"><code>/omh --enable-auto</code></td><td>' + t('helpParamEnableAuto') + '</td></tr>'
-      + '<tr><td class="help-param-code"><code>/omh --disable-auto</code></td><td>' + t('helpParamDisableAuto') + '</td></tr>'
-      + '<tr><td class="help-param-code"><code>/omh --update</code></td><td>' + t('helpParamUpdate') + '</td></tr>'
-      + '<tr><td class="help-param-code"><code>/omh --status</code></td><td>' + t('helpParamStatus') + '</td></tr>'
-      + '<tr><td class="help-param-code"><code>/omh &lt;path&gt; [path...]</code></td><td>' + t('helpParamPaths') + '</td></tr>'
-      + '</tbody></table>'
       + '</div></div>';
 
     // Data parsing reference
@@ -3718,7 +3813,7 @@
       +   '<div id="cw-main" style="display:flex;padding:14px 20px 0;gap:16px;flex:1;min-height:0">'
       +     '<div style="flex:1;min-width:0;position:relative">'
       +       '<div id="cw-timeline" class="cw-scroll" style="width:100%;height:100%;overflow-y:auto;padding-right:8px"></div>'
-      +       '<div id="cw-tl-nav" style="position:absolute;bottom:8px;right:16px;display:flex;gap:3px;opacity:0;pointer-events:none;transition:opacity 0.2s;z-index:2">'
+      +       '<div id="cw-tl-nav" style="position:absolute;bottom:8px;right:16px;display:none;gap:3px;opacity:0;pointer-events:none;transition:opacity 0.2s;z-index:2">'
       +         '<button id="cw-tl-top" style="width:24px;height:24px;border-radius:4px;border:1px solid var(--cw-border);background:var(--cw-surface);color:var(--cw-text-dim);cursor:pointer;display:flex;align-items:center;justify-content:center" title="맨 위로"><svg width="9" height="6" viewBox="0 0 9 6" fill="currentColor"><path d="M4.5 0L9 6H0z"/></svg></button>'
       +         '<button id="cw-tl-bottom" style="width:24px;height:24px;border-radius:4px;border:1px solid var(--cw-border);background:var(--cw-surface);color:var(--cw-text-dim);cursor:pointer;display:flex;align-items:center;justify-content:center" title="맨 아래로"><svg width="9" height="6" viewBox="0 0 9 6" fill="currentColor"><path d="M4.5 6L0 0H9z"/></svg></button>'
       +       '</div>'
@@ -4363,7 +4458,7 @@
             + '</div>';
         }
         if (hovEvent.link) {
-          html += '<a href="' + escapeHtml(hovEvent.link) + '" target="_blank" style="display:inline-block;margin-top:10px;font-size:13px;color:#D97757;text-decoration:none;border-bottom:1px solid rgba(217,119,87,0.3)">' + escapeHtml(t('cwe_learnMore')) + '</a>';
+          html += '<a href="' + escapeHtml(localizeDocsUrl(hovEvent.link)) + '" target="_blank" style="display:inline-block;margin-top:10px;font-size:13px;color:#D97757;text-decoration:none;border-bottom:1px solid rgba(217,119,87,0.3)">' + escapeHtml(t('cwe_learnMore')) + '</a>';
         }
         html += '</div>';
       } else {
@@ -4682,7 +4777,7 @@
         const f = formatSessionOption(s);
         const active = s.id === state.sessionId;
         const bg = active ? 'rgba(217,119,87,0.08)' : 'transparent';
-        const metaParts = [f.dateStr, f.turns + ' ' + t('cwe_sessionTurns')];
+        const metaParts = [f.dateStr, fmtCompact(f.turns) + ' ' + t('cwe_sessionTurns')];
         const tagParts = [];
         if (f.modelStr) tagParts.push('<span style="padding:1px 5px;border-radius:3px;background:rgba(217,119,87,0.12);color:#D97757;font-size:10px;font-weight:600">' + escapeHtml(f.modelStr) + '</span>');
         if (f.peakStr)  tagParts.push('<span style="padding:1px 5px;border-radius:3px;background:rgba(138,136,128,0.1);color:var(--cw-text-faint);font-size:10px;font-weight:600">' + escapeHtml(f.peakStr) + ' ctx</span>');
@@ -4746,7 +4841,7 @@
         + '<span title="' + escapeHtml(f.snippet) + '" style="font-size:12px;color:var(--cw-text-2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0">' + escapeHtml(f.snippet) + '</span>'
         + '</div>');
       parts.push(chip(t('cwe_infoDate'), f.dateStr, true));
-      parts.push(chip(t('cwe_infoTurns'), String(f.turns), true));
+      parts.push(chip(t('cwe_infoTurns'), fmtCompact(f.turns), true));
       if (f.modelStr) parts.push(chip(t('cwe_infoModel'), f.modelStr, true));
       if (f.peakStr)  parts.push(chip(t('cwe_infoPeak'), f.peakStr, true));
       sessionInfo.innerHTML = parts.join('');
@@ -4806,6 +4901,7 @@
       if (mode === 'session') {
         sessionTools.style.display = 'inline-flex';
         bottomBar.style.display = 'none';
+        if (tlNav) tlNav.style.display = 'flex';
         // Bar hidden → give cw-main the same 16px bottom that the bar used to provide.
         mainEl.style.paddingBottom = '16px';
         // Entering session mode always starts fresh — nothing selected,
@@ -4824,6 +4920,7 @@
       } else {
         sessionTools.style.display = 'none';
         bottomBar.style.display = 'flex';
+        if (tlNav) { tlNav.style.display = 'none'; tlNav.style.opacity = '0'; tlNav.style.pointerEvents = 'none'; }
         mainEl.style.paddingBottom = '0';
         state.budget = MAX;
         closeSessionList();
@@ -4854,16 +4951,19 @@
     // rely on the module-level `contextSubPath` which is kept in sync by
     // setMode() / selectSession() / applyHash().
     pendingContextSid = null;
+    const tlNav = document.getElementById('cw-tl-nav');
     const deepLinkSid = contextSubPath;
     if (deepLinkSid === 'session' && replayableSessions.length > 0) {
       state.mode = 'session';
       sessionTools.style.display = 'inline-flex';
       bottomBar.style.display = 'none';
+      if (tlNav) tlNav.style.display = 'flex';
       mainEl.style.paddingBottom = '16px';
     } else if (deepLinkSid && deepLinkSid !== 'example' && replayableSessions.some((s) => s.id === deepLinkSid)) {
       state.mode = 'session';
       sessionTools.style.display = 'inline-flex';
       bottomBar.style.display = 'none';
+      if (tlNav) tlNav.style.display = 'flex';
       mainEl.style.paddingBottom = '16px';
       selectSession(deepLinkSid);
     } else if (!deepLinkSid && replayableSessions.length > 0) {
@@ -4871,6 +4971,7 @@
       state.mode = 'session';
       sessionTools.style.display = 'inline-flex';
       bottomBar.style.display = 'none';
+      if (tlNav) tlNav.style.display = 'flex';
       mainEl.style.paddingBottom = '16px';
       contextSubPath = 'session';
       try { pushState(false); } catch (e) { /* ignore */ }
@@ -4949,7 +5050,6 @@
     if (listBottomBtn) listBottomBtn.addEventListener('mousedown', (e) => { e.preventDefault(); e.stopPropagation(); sessionList.scrollTop = sessionList.scrollHeight; });
 
     // Timeline scroll nav — overlay at bottom-right, visible on hover
-    const tlNav = document.getElementById('cw-tl-nav');
     const tlTopBtn = document.getElementById('cw-tl-top');
     const tlBottomBtn = document.getElementById('cw-tl-bottom');
     if (tlNav && timelineEl) {
@@ -5732,3 +5832,42 @@
   showPartialBanner();
   showFirstRunBanner();
   checkDataVersion();
+
+  // ── Progressive loading: deferred usage merge ──
+  // data-core.js loads instantly (~400KB). data-usage.js (~9MB) loads async
+  // via defer and calls _onUsageReady when available. Merge usage into
+  // DATA.scopeData and re-render so usage-dependent views become live.
+  function mergeUsageData() {
+    if (typeof DATA_USAGE === 'undefined') return;
+    const _KEY_REV = {
+      ts:'timestamp', m:'model', it:'inputTokens', ot:'outputTokens',
+      cr:'cacheRead', cc:'cacheCreation', ri:'rawInput', cx:'context',
+      cn:'contextName', sid:'sessionId', ms:'latencyMs', cl:'charLen',
+      n:'name', t:'tool', c:'count', d:'date', cmd:'command', p:'project',
+      mc:'messageCount', sc:'sessionCount', tc:'toolCallCount'
+    };
+    for (const scope in DATA_USAGE) {
+      if (!DATA.scopeData[scope]) continue;
+      const u = DATA_USAGE[scope];
+      const sidList = u._sidList || [];
+      delete u._sidList;
+      for (const field in u) {
+        if (!Array.isArray(u[field])) continue;
+        u[field] = u[field].map((item) => {
+          const obj = {};
+          for (const k in item) {
+            const rk = _KEY_REV[k] || k;
+            if (rk === 'sessionId') { obj[rk] = item[k] != null ? sidList[item[k]] : null; }
+            else { obj[rk] = item[k]; }
+          }
+          return obj;
+        });
+      }
+      DATA.scopeData[scope].usage = u;
+    }
+    DATA._usageReady = true;
+    render();
+  }
+  // If DATA_USAGE already loaded (cached / fast network), merge immediately.
+  if (typeof DATA_USAGE !== 'undefined') { mergeUsageData(); }
+  else { window._onUsageReady = mergeUsageData; }

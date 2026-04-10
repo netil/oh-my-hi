@@ -26,6 +26,11 @@ describe('Web UI — Templates', () => {
       assert.ok(html.includes('id="content"'));
       assert.ok(html.includes('id="sidebar-period"'));
     });
+
+    it('should use progressive loading split scripts', () => {
+      assert.ok(html.includes('src="data-core.js"'), 'loads data-core.js sync');
+      assert.ok(html.includes('src="data-usage.js" defer'), 'loads data-usage.js deferred');
+    });
   });
 
   describe('app.js', () => {
@@ -260,6 +265,65 @@ describe('Web UI — Templates', () => {
       assert.ok(js.includes("contextSubPath = 'example'"), 'example mode path tracked');
     });
 
+    it('should hide timeline nav buttons in example mode', () => {
+      // cw-tl-nav starts hidden (display:none) since default is example mode.
+      // Session mode toggles it to display:flex.
+      assert.ok(js.includes('id="cw-tl-nav"'), 'timeline nav container exists');
+      assert.ok(js.includes('id="cw-tl-top"'), 'top scroll button exists');
+      assert.ok(js.includes('id="cw-tl-bottom"'), 'bottom scroll button exists');
+      // Initial state is display:none (hidden in example mode)
+      const navMatch = js.match(/id="cw-tl-nav"[^>]*style="[^"]*display:\s*none/);
+      assert.ok(navMatch, 'cw-tl-nav starts with display:none');
+      // setMode toggles visibility
+      assert.ok(js.includes("tlNav.style.display = 'flex'"), 'session mode shows nav');
+      assert.ok(js.includes("tlNav.style.display = 'none'"), 'example mode hides nav');
+    });
+
+    it('should localize code.claude.com docs URLs', () => {
+      // localizeDocsUrl handles both docs.anthropic.com and code.claude.com patterns
+      assert.ok(js.includes("/docs/en/"), 'code.claude.com en pattern present in source');
+      assert.ok(js.includes("'/docs/' + currentLang + '/'"), 'code.claude.com URL localization');
+      assert.ok(js.includes("'/' + currentLang + '/docs/'"), 'docs.anthropic.com URL localization');
+      // Learn more link uses localizeDocsUrl
+      assert.ok(js.includes('localizeDocsUrl(hovEvent.link)'), 'CWE learn-more link localized');
+    });
+
+    it('should format turn counts with fmtCompact', () => {
+      // Session list and info chip should use fmtCompact for turn numbers
+      assert.ok(js.includes('fmtCompact(f.turns)'), 'turns formatted with fmtCompact');
+    });
+
+    it('should have Context Budget section in overview', () => {
+      assert.ok(js.includes('aggregateVisibility'), 'aggregateVisibility called');
+      assert.ok(js.includes("id=\"vis-bar\""), 'canvas bar element for context budget');
+      assert.ok(js.includes('drawStackedBar'), 'drawStackedBar function defined');
+      assert.ok(js.includes("t('visHeatmapTitle')"), 'context budget title localized');
+      assert.ok(js.includes("t('visHidden')"), 'hidden label used');
+      assert.ok(js.includes("t('visBrief')"), 'brief label used');
+      assert.ok(js.includes("t('visFull')"), 'full label used');
+      // Period filtering applied before aggregation
+      assert.ok(js.includes('filterByPeriod(usage.tokenEntries'), 'tokenEntries filtered by period');
+      assert.ok(js.includes('filterByPeriod(usage.promptStats'), 'promptStats filtered by period');
+      // Session count multiplier for hidden startup cost
+      assert.ok(js.includes('periodSessionIds'), 'session count computed for period');
+    });
+
+    it('should have reusable drawStackedBar canvas helper', () => {
+      assert.ok(js.includes('function drawStackedBar'), 'drawStackedBar defined');
+      assert.ok(js.includes('devicePixelRatio'), 'DPR-aware rendering');
+      // Called for context budget bar
+      assert.ok(js.includes("drawStackedBar('vis-bar'"), 'invoked for vis-bar canvas');
+    });
+
+    it('should support progressive data loading', () => {
+      assert.ok(js.includes('_usageReady'), 'usage ready flag');
+      assert.ok(js.includes('mergeUsageData'), 'mergeUsageData function defined');
+      assert.ok(js.includes('DATA_USAGE'), 'DATA_USAGE referenced');
+      assert.ok(js.includes('_onUsageReady'), 'deferred callback registered');
+      // Legacy single data.js path sets _usageReady immediately
+      assert.ok(js.includes('DATA._usageReady = true'), 'legacy path marks ready');
+    });
+
     it('should have Help page Context Explorer section', () => {
       assert.ok(js.includes('helpContextExplorer'), 'helpContextExplorer key used in renderHelp');
       assert.ok(js.includes('helpCweSession'), 'helpCweSession key used');
@@ -369,6 +433,10 @@ describe('Web UI — Templates', () => {
         'cwe_modeSession', 'cwe_modeExample',
         'cwe_infoPrompt', 'cwe_infoDate', 'cwe_infoTurns', 'cwe_infoModel', 'cwe_infoPeak',
         'sidebarShowMore', 'sidebarShowAll',
+        // Context Budget
+        'visHeatmapTitle', 'visHeatmapDesc', 'visHidden', 'visBrief', 'visFull',
+        'visTokens', 'visName', 'visVisibility',
+        'visGlobalClaude', 'visProjectClaude', 'visAutoMemory', 'visSkillsDesc', 'visMcpTools', 'visPrinciples',
       ];
       for (const key of requiredKeys) {
         assert.ok(en[key], `missing en key: ${key}`);

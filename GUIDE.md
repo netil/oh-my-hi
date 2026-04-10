@@ -51,6 +51,7 @@ The landing page showing a high-level summary of your harness activity.
 | **Category Distribution** | Donut chart showing the proportion of skills, agents, and commands. |
 | **Daily Trend** | Line chart of daily activity (skills + agents + commands combined). |
 | **Popular Skills** | Top 5 most-used skills ranked by call count. |
+| **Context Budget** | Estimated token distribution between visible and invisible contexts. A canvas stacked bar shows the proportion of hidden (startup: CLAUDE.md, memory, skill descriptions, MCP tools, principles), brief (tool outputs), and full (user-visible) tokens. The top 8 context consumers are listed with their token count and visibility badge. Hidden startup tokens are multiplied by the number of sessions in the selected period. |
 | **Activity Heatmap** | GitHub-style calendar heatmap of daily activity intensity. |
 | **Recent Activity** | Timeline of the 10 most recent skill, agent, and command invocations. |
 | **Unused Items** | Skills, agents, and MCP servers that were registered but never called in the selected period. When more than 3 items are unused, a cleanup tip is shown suggesting how to reduce context loading. |
@@ -162,6 +163,8 @@ Interactive simulator that shows what fills the Claude Code context window durin
 - **Detailed per-turn panel** with model, timestamp, cumulative context size, delta, and cache hit ratio.
 - **URL persistence** — `#context/{sessionId}` lets you bookmark or refresh without losing state. Changing the sidebar period, scope, or language keeps the selected session.
 - **Smart session list scroll** — when the search layer is open, the scroll position is preserved across list close/reopen with the same sort. Only changing the sort criterion resets the list to the top.
+
+**Documentation links** in the timeline panel ("자세히 →") follow the current language setting — Korean locale shows Korean docs, English locale shows English docs.
 
 Navigation: click 🪟 `Context Explorer` in the sidebar, or use the deep link `#context` (example mode), `#context/session` (session mode, no selection), or `#context/{sessionId}` (session mode, specific session).
 

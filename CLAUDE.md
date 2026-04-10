@@ -37,7 +37,9 @@ skills/omh/SKILL.md              # Plugin skill definition
 .claude-plugin/plugin.json       # Plugin metadata
 test/*.test.mjs                  # Tests (Node test runner)
 output/                          # Generated artifacts (gitignored)
-  data.js                        # Minified data for browser
+  data-core.js                   # Core data (scopes, metadata) — sync load (~515KB)
+  data-usage.js                  # Usage data (tokenEntries etc.) — deferred (~9MB)
+  data.js                        # Legacy single-file (backwards compat)
   cache/                         # Incremental cache (gzip segments + mtime index)
   pending/                       # Lightweight mode deltas (plain JSON)
 ```
@@ -46,7 +48,7 @@ output/                          # Generated artifacts (gitignored)
 
 | Page | Hash | Sub-menu of |
 |------|------|-------------|
-| Harness Overview | `#overview` | — |
+| Harness Overview | `#overview` | — (includes Context Budget) |
 | Token Overview | `#tokens` | — |
 | Token: Cost | `#tokens-cost` | Tokens |
 | Token: Prompt | `#tokens-prompt` | Tokens |

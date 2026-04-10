@@ -217,3 +217,62 @@ export function buildSessionEvents(sessionId, usage, contextStats, labels) {
 
   return synthetic.concat(out);
 }
+
+// Aggregate terminal visibility by context name across all sessions.
+// Returns an array of { name, hidden, brief, full, totalTokens } sorted by
+// totalTokens descending.  Uses the same vis assignment logic as
+// buildSessionEvents (user prompt → full, startup synthetic → hidden, rest → brief).
+//
+// `contextStats` provides the per-scope startup token breakdown; its keys become
+// dedicated "hidden" entries. Since startup tokens are a fixed per-session cost,
+// `sessionCount` multiplies them to reflect actual consumption in the period.
+export function aggregateVisibility(usage, contextStats, labels, sessionCount) {
+  const entries = (usage && usage.tokenEntries) || [];
+  const prompts = (usage && usage.promptStats) || [];
+
+  // Bucket prompt timestamps by 2-second windows for fast lookup.
+  const promptBuckets = new Set();
+  prompts.forEach((p) => {
+    const ts = typeof p.timestamp === 'number' ? p.timestamp : new Date(p.timestamp).getTime();
+    promptBuckets.add(Math.round(ts / 2000));
+  });
+
+  const map = {};
+  const ensure = (name) => {
+    if (!map[name]) map[name] = { name: name, hidden: 0, brief: 0, full: 0, totalTokens: 0 };
+    return map[name];
+  };
+
+  // Per-turn aggregation from tokenEntries (brief / full).
+  entries.forEach((e) => {
+    const ts = typeof e.timestamp === 'number' ? e.timestamp : new Date(e.timestamp).getTime();
+    const nearPrompt = promptBuckets.has(Math.round(ts / 2000));
+    const vis = nearPrompt ? 'full' : 'brief';
+    const name = e.contextName || (e.context === 'general' ? 'conversation' : e.context);
+    const agg = ensure(name);
+    agg[vis] += 1;
+    agg.totalTokens += (e.outputTokens || 0);
+  });
+
+  // Startup context (hidden) from contextStats.
+  // Multiply by sessionCount since startup tokens are consumed every session.
+  const sc = Math.max(sessionCount || 1, 1);
+  const cs = contextStats || {};
+  const startupDefs = [
+    { key: 'globalClaudeTokens',  label: labels.globalClaude },
+    { key: 'projectClaudeTokens', label: labels.projectClaude },
+    { key: 'autoMemoryTokens',    label: labels.autoMemory },
+    { key: 'skillsDescTokens',    label: labels.skillsDesc },
+    { key: 'mcpToolsTokens',      label: labels.mcpTools },
+    { key: 'principlesTokens',    label: labels.principles },
+  ];
+  startupDefs.forEach((def) => {
+    const toks = cs[def.key] || 0;
+    if (toks <= 0) return;
+    const agg = ensure(def.label);
+    agg.hidden += sc;
+    agg.totalTokens += toks * sc;
+  });
+
+  return Object.values(map).sort((a, b) => b.totalTokens - a.totalTokens);
+}
