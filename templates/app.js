@@ -720,6 +720,51 @@
       + (entry.cacheCreation || 0) * p.cacheCreation) / 1e6;
   }
 
+  // F2: Efficiency aggregation over tokenEntries.
+  // Returns per-item stats for a given context type ('skill' or 'agent').
+  // Cached per scope/entries-reference to avoid recomputing across renders.
+  let _efficiencyCache = null;
+  function computeEfficiencyMap(contextType) {
+    const usage = getUsage();
+    const entries = usage.tokenEntries || [];
+    if (!_efficiencyCache || _efficiencyCache.entries !== entries) {
+      _efficiencyCache = { entries, skill: null, agent: null };
+    }
+    if (_efficiencyCache[contextType]) return _efficiencyCache[contextType];
+    const map = {};
+    let totalContextCost = 0;
+    for (let i = 0; i < entries.length; i++) {
+      const e = entries[i];
+      if (e.context !== contextType) continue;
+      const name = e.contextName || 'unknown';
+      const row = map[name] || (map[name] = {
+        name, callCount: 0, totalInput: 0, totalOutput: 0, totalCache: 0, totalCost: 0,
+      });
+      row.callCount += 1;
+      row.totalInput += (e.rawInput || 0);
+      row.totalOutput += (e.outputTokens || 0);
+      row.totalCache += (e.cacheRead || 0) + (e.cacheCreation || 0);
+      const c = calcEntryCost(e);
+      row.totalCost += c;
+      totalContextCost += c;
+    }
+    const result = { map, totalCost: totalContextCost };
+    _efficiencyCache[contextType] = result;
+    return result;
+  }
+
+  /** Top N names (by totalCost) within a context type, optionally restricted
+   *  to a whitelist (e.g. names that appear in the user's item list). */
+  function topCostContributors(contextType, n, whitelist) {
+    const { map } = computeEfficiencyMap(contextType);
+    const wl = whitelist && whitelist.length ? new Set(whitelist) : null;
+    return Object.values(map)
+      .filter((r) => r.totalCost > 0 && (!wl || wl.has(r.name)))
+      .sort((a, b) => b.totalCost - a.totalCost)
+      .slice(0, n)
+      .map((r) => r.name);
+  }
+
   function localizeDocsUrl(url) {
     if (!url) return url;
     // docs.anthropic.com/en/docs/ → /{lang}/docs/
@@ -773,23 +818,27 @@
 
     html += navItem('overview', '📊', t('overview'), null, currentView === 'overview' && !currentDetail);
     const isTokensArea = currentView === 'tokens' || currentView === 'tokens-cost' || currentView === 'tokens-prompt' || currentView === 'tokens-session' || currentView === 'session';
-    if (isTokensArea) expandedCategories._tokens = true;
-    const isTokensExpanded = expandedCategories._tokens || false;
-    html += '<div class="nav-item' + (isTokensArea ? ' active' : '') + '" data-action="toggle-tokens">'
-      + '<span class="icon">🪙</span>'
-      + '<span class="label">' + t('tokens') + '</span>'
-      + '<span class="chevron' + (isTokensExpanded ? ' expanded' : '') + '">▶</span>'
+    // Tokens group is always expanded — no collapse toggle, sub-items
+    // visible from first render. Clicking the header still navigates
+    // to the Tokens overview.
+    html += navItem('tokens', '🪙', t('tokens'), null, currentView === 'tokens');
+    html += '<div class="nav-sub">'
+      + navItem('tokens-cost', '💰', t('tokensCost'), null, currentView === 'tokens-cost')
+      + navItem('tokens-prompt', '💬', t('tokensPrompt'), null, currentView === 'tokens-prompt')
+      + navItem('tokens-session', '📋', t('tokensSession'), null, currentView === 'tokens-session' || currentView === 'session')
       + '</div>';
-    if (isTokensExpanded) {
-      html += '<div class="nav-sub">'
-        + navItem('tokens-cost', '💰', t('tokensCost'), null, currentView === 'tokens-cost')
-        + navItem('tokens-prompt', '💬', t('tokensPrompt'), null, currentView === 'tokens-prompt')
-        + navItem('tokens-session', '📋', t('tokensSession'), null, currentView === 'tokens-session' || currentView === 'session')
-        + '</div>';
-    }
     html += navItem('structure', '🗂️', t('structure'), null, currentView === 'structure' && !currentDetail);
     html += navItem('context', '🪟', t('contextExplorer'), null, currentView === 'context' && !currentDetail);
     html += '<div class="nav-separator"></div>';
+
+    // F2: top 3 cost contributors for 🔥 badges on sidebar.
+    // Restrict to items that actually appear in this user's item list so
+    // built-in Claude contexts (Explore, general-purpose, …) don't crowd out
+    // the user's own skills/agents.
+    const skillNames = (sd.skills || []).map((s) => s.name);
+    const agentNames = (sd.agents || []).map((a) => a.name);
+    const topSkillSet = new Set(topCostContributors('skill', 3, skillNames));
+    const topAgentSet = new Set(topCostContributors('agent', 3, agentNames));
 
     CATEGORIES.forEach((cat) => {
       let items = sd[cat.key] || [];
@@ -822,9 +871,14 @@
       visibleItems.forEach((item) => {
         let name = getItemName(cat.key, item);
         const isChildActive = currentDetail && currentDetail.category === cat.key && currentDetail.name === name;
+        const hotBadge = (cat.key === 'skills' && topSkillSet.has(name))
+          || (cat.key === 'agents' && topAgentSet.has(name))
+          ? '<span class="cost-hot" title="' + escapeHtml(t('efficiencyTopBadge')) + '">🔥</span>'
+          : '';
         html += '<div class="nav-child' + (isChildActive ? ' active' : '') + '" data-action="detail" data-category="' + cat.key + '" data-name="' + escapeHtml(name) + '" title="' + escapeHtml(name) + '">'
           + '<span class="dot" style="background:' + cat.color + '"></span>'
           + '<span class="label">' + escapeHtml(name) + '</span>'
+          + hotBadge
           + '</div>';
       });
       if (shouldCap) {
@@ -844,13 +898,7 @@
       if (!navItemEl) return;
       let action = navItemEl.dataset.action;
 
-      if (action === 'toggle-tokens') {
-        expandedCategories._tokens = !expandedCategories._tokens;
-        currentView = 'tokens';
-        currentDetail = null;
-        pushState(true);
-        render();
-      } else if (action === 'toggle-category') {
+      if (action === 'toggle-category') {
         let cat = navItemEl.dataset.category;
         expandedCategories[cat] = !expandedCategories[cat];
         currentView = cat;
@@ -1199,17 +1247,22 @@
       prevAll = prevInput + prevOutput + prevCache;
     }
 
-    const siOpts = { si: true };
     let html = '<div class="page-header">'
       + '<h1>🪙 ' + t('tokensTitle') + '</h1>'
       + '<div class="page-desc">' + t('tokensDesc') + '</div>'
       + '</div>'
       + renderPeriodFilter()
-      + '<div class="card-grid">'
-      + statCard(t('totalTokens'), totalAll, changeAll, canCompare ? { si: true, compare: { label: t('comparePrev'), value: fmtCompact(prevAll) } } : siOpts)
-      + statCard(t('inputTokens'), totalInput, changeInput, canCompare ? { si: true, compare: { label: t('comparePrev'), value: fmtCompact(prevInput) } } : siOpts)
-      + statCard(t('outputTokens'), totalOutput, changeOutput, canCompare ? { si: true, compare: { label: t('comparePrev'), value: fmtCompact(prevOutput) } } : siOpts)
-      + statCard(t('cacheTokens'), totalCache, changeCache, canCompare ? { si: true, compare: { label: t('comparePrev'), value: fmtCompact(prevCache) } } : siOpts)
+      + '<div class="overview-hero solo">'
+      + renderBarCard({
+          titleKey: 'totalTokens',
+          total: totalAll,
+          totalChange: changeAll,
+          rows: [
+            { label: t('inputTokens'),  value: totalInput,  change: changeInput,  color: '#4263eb' },
+            { label: t('outputTokens'), value: totalOutput, change: changeOutput, color: '#0ca678' },
+            { label: t('cacheTokens'),  value: totalCache,  change: changeCache,  color: '#e8590c' },
+          ],
+        })
       + '</div>';
 
     // Model map
@@ -2215,6 +2268,41 @@
       }
     }
 
+    // Month-end projection (F1)
+    const todayISO = new Date().toISOString().substring(0, 10);
+    const proj = projectMonthEnd(costDailyMap, todayISO, tokenBudget && tokenBudget.monthly);
+    if (proj) {
+      html += '<div class="budget-projection">';
+      if (proj.confidence === 'none') {
+        html += '<div class="budget-projection-title">' + t('projectionTitle') + '</div>'
+          + '<div class="budget-projection-empty">' + t('projectionInsufficient') + '</div>';
+      } else {
+        const diffCls = proj.overBudget ? 'over' : (proj.diff !== null ? 'under' : '');
+        const diffText = proj.diff === null
+          ? ''
+          : (proj.overBudget
+              ? ' · <span class="budget-projection-diff over">+' + fmtCost(proj.diff) + ' ' + t('overBudget') + '</span>'
+              : ' · <span class="budget-projection-diff under">−' + fmtCost(-proj.diff) + ' ' + t('underBudget') + '</span>');
+        const confBadge = proj.confidence === 'low'
+          ? ' <span class="budget-projection-badge">' + t('projectionLowConfidence', proj.sampleDays) + '</span>'
+          : '';
+        html += '<div class="budget-projection-title">' + t('projectionTitle') + confBadge + '</div>'
+          + '<div class="budget-projection-desc">' + t('projectionDesc') + '</div>'
+          + '<div class="budget-projection-row">'
+          + '<div class="budget-projection-metric"><div class="budget-projection-label">' + t('projected') + '</div>'
+          + '<div class="budget-projection-value ' + diffCls + '">' + fmtCost(proj.projected) + '</div></div>'
+          + '<div class="budget-projection-metric"><div class="budget-projection-label">' + t('monthToDate') + '</div>'
+          + '<div class="budget-projection-value">' + fmtCost(proj.monthToDate) + '</div></div>'
+          + '<div class="budget-projection-metric"><div class="budget-projection-label">' + t('dailyAvg7d') + '</div>'
+          + '<div class="budget-projection-value">' + fmtCost(proj.dailyAvg) + '</div></div>'
+          + '<div class="budget-projection-metric"><div class="budget-projection-label">' + t('daysRemaining', proj.daysRemaining) + '</div>'
+          + '<div class="budget-projection-value">' + proj.daysRemaining + '</div></div>'
+          + '</div>'
+          + '<div class="budget-projection-footer">' + fmtCost(proj.monthToDate) + ' + ' + fmtCost(proj.dailyAvg) + ' × ' + proj.daysRemaining + diffText + '</div>';
+      }
+      html += '</div>';
+    }
+
     html += '</div>';
     return html;
   }
@@ -2453,16 +2541,19 @@
     const unusedAgents = getItems('agents').filter((a) => { return countUsage('agents', a.name, days) === 0; });
     const unusedMcps = getItems('mcpServers').filter((m) => { return countUsage('mcpServers', m.name, days) === 0; });
 
+    const regressionHtml = renderRegressionCard(usage);
+    const usageBarHtml = renderUsageBarCard(
+      totalAll, totalSkills, totalAgents, totalCommands,
+      changeAll, changeSkills, changeAgents, changeCommands
+    );
     let html = '<div class="page-header">'
       + '<h1>' + t('overviewTitle') + '</h1>'
       + '<div class="file-path" style="margin-top:8px"><span class="file-path-label">' + t('configPathLabel') + '</span> ' + escapeHtml(scopePath) + '</div>'
       + '</div>'
       + renderPeriodFilter()
-      + '<div class="card-grid">'
-      + statCard(t('totalUsage'), totalAll, changeAll, { si: true })
-      + statCard(t('skillCalls'), totalSkills, changeSkills, { si: true })
-      + statCard(t('agentCalls'), totalAgents, changeAgents, { si: true })
-      + statCard(t('commands'), totalCommands, changeCommands, { si: true })
+      + '<div class="overview-hero' + (regressionHtml ? '' : ' solo') + '">'
+      +   regressionHtml
+      +   usageBarHtml
       + '</div>';
 
     // Category distribution + Daily trend chart
@@ -2628,6 +2719,7 @@
   // ── Reusable canvas stacked bar ──
   // segments: [{ value: number, color: string }]
   // Draws proportional segments into a <canvas>, respecting devicePixelRatio.
+  // Layout math lives in layoutStackedBar() (canvas-bars.mjs) and is unit-tested.
   function drawStackedBar(canvasId, segments) {
     const el = document.getElementById(canvasId);
     if (!el) return;
@@ -2637,15 +2729,11 @@
     el.width = W;
     el.height = H;
     const ctx = el.getContext('2d');
-    const total = segments.reduce((s, seg) => s + seg.value, 0);
-    if (total <= 0) return;
-    let x = 0;
-    segments.forEach((seg, i) => {
-      const w = i === segments.length - 1 ? W - x : Math.round(seg.value / total * W);
-      ctx.fillStyle = seg.color;
-      ctx.fillRect(x, 0, w, H);
-      x += w;
-    });
+    const rects = layoutStackedBar(segments, W);
+    for (const r of rects) {
+      ctx.fillStyle = r.color;
+      ctx.fillRect(r.x, 0, r.w, H);
+    }
   }
 
   // ── Charts (billboard.js) ──
@@ -3208,6 +3296,17 @@
       + '<div style="margin-top:14px;padding-top:12px;border-top:1px solid var(--border)">'
       + '<a href="#context" style="font-size:13px;font-weight:600;color:var(--accent);text-decoration:none">→ ' + t('helpContextExplorer') + '</a>'
       + '</div>'
+      + '</div></div>';
+
+    // v0.8.0: Insights & optimization
+    html += '<div class="section">'
+      + '<div class="section-title">💡 ' + t('helpInsightsTitle') + '</div>'
+      + '<div class="card help-list">'
+      + helpRow('helpRegression', 'helpRegressionDesc', '⚠️')
+      + helpRow('helpUsageBar', 'helpUsageBarDesc', '▭')
+      + helpRow('helpLogScale', 'helpLogScaleDesc', '📐')
+      + helpRow('helpCostProjection', 'helpCostProjectionDesc', '💰')
+      + helpRow('helpEfficiency', 'helpEfficiencyDesc', '⚡')
       + '</div></div>';
 
     // Token & usage parsing
@@ -4008,31 +4107,22 @@
       const segments = []; // { visIdx, x, w } for hit-testing
 
       if (state.mode === 'session') {
-        const sumDeltas = view.blocks.reduce((s, b) => s + b._tokens, 0);
-        const sessionScale = sumDeltas > 0 ? view.totalTokens / sumDeltas : 1;
-        const totalPct = view.totalTokens / state.budget * 100;
-        const MIN_PX = 0.5 / W; // skip truly sub-pixel blocks
-        let cumPct = 0;
-        const planned = view.blocks.map((b) => {
-          const w = (b._tokens / state.budget * 100) * sessionScale;
-          const left = cumPct;
-          cumPct += w;
-          return { b, w, left };
-        }).filter(({ w }) => w / 100 * W >= MIN_PX);
-
-        planned.forEach(({ b, w, left }, ri) => {
-          const isLast = ri === planned.length - 1;
-          const widthPct = isLast ? Math.max(0, totalPct - left) : w;
+        // Geometry lives in layoutSessionBar() (canvas-bars.mjs, unit-tested).
+        // Hover/alpha colouring stays here because it depends on live UI state.
+        const laid = layoutSessionBar(view.blocks, view.totalTokens, state.budget, W);
+        const blockByVis = new Map();
+        view.blocks.forEach((b) => blockByVis.set(b.visIdx, b));
+        laid.forEach((seg) => {
+          const b = blockByVis.get(seg.visIdx);
+          if (!b) return;
           const isHov = b.visIdx === activeIdx;
           const catMatch = state.hovCat && b.color === state.hovCat;
           const dimmed = state.hovCat ? !catMatch : (activeIdx !== null && !isHov);
           const opacity = (isHov || catMatch) ? 1 : (dimmed ? 0.25 : 0.65);
-          const x = left / 100 * W;
-          const segW = Math.max(0.5, widthPct / 100 * W);
           ctx.globalAlpha = opacity;
           ctx.fillStyle = b.color;
-          ctx.fillRect(x, 0, segW, H);
-          segments.push({ visIdx: b.visIdx, x, w: segW });
+          ctx.fillRect(seg.x, 0, seg.w, H);
+          segments.push({ visIdx: b.visIdx, x: seg.x, w: seg.w });
         });
       } else {
         // Example mode (~36 blocks)
@@ -5457,6 +5547,7 @@
     if (skillAuthor) html += metaCard('AUTHOR', skillAuthor);
     html += '</div>';
 
+    html += renderEfficiencyBlock('skill', item.name);
     html += descriptionBlock(item.description);
 
     if (item.argumentHint) {
@@ -5489,6 +5580,7 @@
     if (agentAuthor) html += metaCard('AUTHOR', agentAuthor);
     html += '</div>';
 
+    html += renderEfficiencyBlock('agent', item.name);
     html += descriptionBlock(item.description);
     html += filePathBlock(item.filePath);
     html += markdownBodyBlock(item.body, 'content');
@@ -5726,6 +5818,228 @@
       + metaCard('LAST USED', lastUsed ? relativeTime(lastUsed) : t('never'));
   }
 
+  // F6: Generic bar breakdown card — one card showing a total with its
+  // sub-metrics rendered as proportional bars (relative to the total).
+  // Used on #overview (harness usage) and #tokens (token breakdown).
+  //
+  // opts = {
+  //   titleKey: string,             // i18n key for the card title
+  //   total:    number,             // total value, used as 100% baseline
+  //   totalChange: number|null,     // percentage change vs previous period
+  //   rows: [{ label, value, change, color }]
+  //   barScale: 'linear' | 'log' | 'auto' (default: 'auto')
+  // }
+  //
+  // barScale auto-switches to log when max(row.value)/min(row.value) > 100,
+  // so wide-range data (e.g. tokens where cache dwarfs input/output) still
+  // shows visible sub-metrics. The %/value columns always display the real
+  // linear share — only the bar fill width changes.
+  function renderBarCard(opts) {
+    const total = opts.total || 0;
+    const rows = opts.rows || [];
+    const changeBadge = (change) => {
+      if (change === null || change === undefined) return '';
+      const cls = change > 0 ? 'positive' : change < 0 ? 'negative' : 'neutral';
+      const prefix = change > 0 ? '+' : '';
+      return '<span class="usage-bar-change ' + cls + '" title="' + escapeHtml(t('vsPrevPeriodTooltip')) + '">'
+        + prefix + fmtCompact(change) + '%</span>';
+    };
+
+    // Decide scale. Layout math (log-threshold + width computation) lives
+    // in canvas-bars.mjs and is unit-tested.
+    const rowValues = rows.map((r) => r.value);
+    const autoScale = computeBarScale(rowValues);
+    /** @type {{ useLog: boolean, logMinExp: number, logMaxExp: number }} */
+    let scale = autoScale;
+    if (opts.barScale === 'linear') {
+      scale = { useLog: false, logMinExp: 0, logMaxExp: 0 };
+    } else if (opts.barScale === 'log') {
+      scale = { useLog: true, logMinExp: autoScale.logMinExp, logMaxExp: autoScale.logMaxExp };
+    }
+    const useLog = scale.useLog;
+
+    let html = '<div class="usage-bar-card">'
+      + '<div class="usage-bar-head">'
+      +   '<div class="usage-bar-head-label">' + t(opts.titleKey) + '</div>'
+      +   '<div class="usage-bar-head-right">'
+      +     '<div class="usage-bar-head-value">'
+      +       '<span class="usage-bar-total">' + fmtCompact(total) + '</span>'
+      +       changeBadge(opts.totalChange)
+      +     '</div>'
+      +     '<div class="usage-bar-head-sub">' + t('vsPrevPeriodCaption') + '</div>'
+      +   '</div>'
+      + '</div>';
+    if (useLog) {
+      html += '<div class="usage-bar-scale-notice">'
+        +   '<span class="usage-bar-scale-badge">' + t('barScaleLog') + '</span>'
+        +   '<span class="usage-bar-scale-desc">' + t('barScaleLogDesc') + '</span>'
+        + '</div>';
+    }
+    html += '<div class="usage-bar-rows">';
+    for (const r of rows) {
+      const linearPct = total > 0 ? (r.value / total) * 100 : 0;
+      const barWidth = computeBarWidth(r.value, total, scale);
+      html += '<div class="usage-bar-row">'
+        + '<div class="usage-bar-row-label">' + escapeHtml(String(r.label)) + '</div>'
+        + '<div class="usage-bar-row-track">'
+        +   '<div class="usage-bar-row-fill" style="width:' + barWidth.toFixed(1) + '%;background:' + r.color + '"></div>'
+        + '</div>'
+        + '<div class="usage-bar-row-value">' + fmtCompact(r.value) + '</div>'
+        + '<div class="usage-bar-row-pct">' + (linearPct < 1 && linearPct > 0 ? '<1' : Math.round(linearPct)) + '%</div>'
+        + '<div class="usage-bar-row-change">' + changeBadge(r.change) + '</div>'
+        + '</div>';
+    }
+    html += '</div></div>';
+    return html;
+  }
+
+  // Harness usage bar card — thin wrapper around renderBarCard
+  function renderUsageBarCard(totalAll, totalSkills, totalAgents, totalCommands, changeAll, changeSkills, changeAgents, changeCommands) {
+    return renderBarCard({
+      titleKey: 'totalUsage',
+      total: totalAll,
+      totalChange: changeAll,
+      rows: [
+        { label: t('skillCalls'),  value: totalSkills,   change: changeSkills,   color: 'var(--color-skills)' },
+        { label: t('agentCalls'),  value: totalAgents,   change: changeAgents,   color: 'var(--color-agents)' },
+        { label: t('commands'),    value: totalCommands, change: changeCommands, color: '#6366f1' },
+      ],
+    });
+  }
+
+  // F5: Compact regression card shown inside the Overview card-grid.
+  // Returns empty string when there's no regression — opt-in by data.
+  // - Shows the worst regressed metric as the headline (icon + delta %).
+  // - Secondary metric count appears as "+1 more" when both metrics
+  //   regressed.
+  // - Probable cause (cache drop / opus shift) or generic hint is
+  //   embedded as a title attribute (hover tooltip) and the card
+  //   navigates to that sub-page on click.
+  function renderRegressionCard(usage) {
+    const report = computeRegression(usage, Date.now());
+    if (!report.anyRegressed) return '';
+    const fmtMs = (ms) => ms >= 60000 ? (ms / 60000).toFixed(1) + t('unitMin')
+      : ms >= 1000 ? (ms / 1000).toFixed(1) + 's'
+      : Math.round(ms) + 'ms';
+    const fmtPct = (frac) => Math.round(frac * 100) + '%';
+
+    // Pick the "worst" metric (highest deltaPct) as the headline.
+    const candidates = [];
+    if (report.latency && report.latency.regressed) {
+      candidates.push({
+        metric: 'latency',
+        icon: '🐢',
+        label: t('regressionLatency'),
+        delta: report.latency.deltaPct,
+        detail: fmtMs(report.latency.previous) + ' → ' + fmtMs(report.latency.current),
+      });
+    }
+    if (report.tokensPerTurn && report.tokensPerTurn.regressed) {
+      candidates.push({
+        metric: 'tokensPerTurn',
+        icon: '📈',
+        label: t('regressionTokens'),
+        delta: report.tokensPerTurn.deltaPct,
+        detail: fmtCompact(Math.round(report.tokensPerTurn.previous)) + ' → ' + fmtCompact(Math.round(report.tokensPerTurn.current)),
+      });
+    }
+    candidates.sort((a, b) => b.delta - a.delta);
+    const worst = candidates[0];
+    const moreCount = candidates.length - 1;
+
+    // Determine the most actionable insight + navigation target.
+    // Priority: data-driven causes > generic per-metric hints.
+    let insightText = '';
+    let linkView = 'tokens-prompt';
+    let linkLabel = t('regressionCheckLatency');
+    if (report.causes && report.causes.cacheDrop) {
+      const c = report.causes.cacheDrop;
+      insightText = t('regressionCauseCacheDrop', fmtPct(c.prev), fmtPct(c.cur));
+      linkView = 'tokens-prompt';
+      linkLabel = t('regressionCheckCache');
+    } else if (report.causes && report.causes.opusShift) {
+      const c = report.causes.opusShift;
+      insightText = t('regressionCauseOpusShift', fmtPct(c.prev), fmtPct(c.cur));
+      linkView = 'tokens';
+      linkLabel = t('regressionCheckModels');
+    } else if (worst.metric === 'latency') {
+      insightText = t('regressionGenericLatency');
+      linkView = 'tokens-prompt';
+      linkLabel = t('regressionCheckLatency');
+    } else {
+      insightText = t('regressionGenericTokens');
+      linkView = 'tokens-session';
+      linkLabel = t('regressionCheckSessions');
+    }
+
+    const moreBadge = moreCount > 0
+      ? '<span class="regression-card-more">+' + moreCount + ' ' + t('regressionMore') + '</span>'
+      : '';
+
+    // Build the comparison period text using explicit dates so there's
+    // no confusion with the sidebar's period filter (7d/30d/all). The
+    // regression check is ALWAYS today-anchored, independent of filter.
+    const fmtShortDate = (ms) => {
+      const d = new Date(ms);
+      return String(d.getMonth() + 1).padStart(2, '0') + '.' + String(d.getDate()).padStart(2, '0');
+    };
+    // current window is [start, end) — show [start, end-1day] as inclusive
+    const curStartStr = fmtShortDate(report.currentWindow.startMs);
+    const curEndStr = fmtShortDate(report.currentWindow.endMs - 1);
+    const prevStartStr = fmtShortDate(report.previousWindow.startMs);
+    const prevEndStr = fmtShortDate(report.previousWindow.endMs - 1);
+    const periodHtml = '<div class="regression-card-period-bars">'
+      +   '<div class="regression-card-period-bar prev"></div>'
+      +   '<div class="regression-card-period-bar cur"></div>'
+      + '</div>'
+      + '<div class="regression-card-period-cols">'
+      +   '<div class="regression-card-period-col">'
+      +     '<span class="regression-card-period-col-label">' + t('regressionPrev7d') + '</span> '
+      +     '<span class="regression-card-period-col-dates">' + prevStartStr + '~' + prevEndStr + '</span>'
+      +   '</div>'
+      +   '<div class="regression-card-period-col">'
+      +     '<span class="regression-card-period-col-label cur">' + t('regressionLast7d') + '</span> '
+      +     '<span class="regression-card-period-col-dates">' + curStartStr + '~' + curEndStr + '</span>'
+      +   '</div>'
+      + '</div>';
+
+    return '<div class="stat-card regression-card" '
+      + 'data-action="nav-view" data-view="' + linkView + '" '
+      + 'title="' + escapeHtml(insightText + ' — ' + linkLabel) + '">'
+      + '<div class="stat-label"><span class="regression-card-warn">⚠️</span> ' + t('regressionTitle') + '</div>'
+      + '<div class="regression-card-period">' + periodHtml + '</div>'
+      + '<div class="stat-value regression-card-value">'
+      +   '<span class="regression-card-icon">' + worst.icon + '</span>'
+      +   '<span class="regression-card-delta">+' + worst.delta.toFixed(1) + '%</span>'
+      + '</div>'
+      + '<div class="stat-change regression-card-sub">'
+      +   '<span class="regression-card-metric-label">' + escapeHtml(worst.label) + '</span>'
+      +   '<span class="regression-card-detail">' + escapeHtml(worst.detail) + '</span>'
+      +   moreBadge
+      + '</div>'
+      + '<div class="regression-card-link">' + escapeHtml(linkLabel) + ' →</div>'
+      + '</div>';
+  }
+
+  // F2: Efficiency section for a skill or agent detail page
+  function renderEfficiencyBlock(contextType, name) {
+    const { map, totalCost } = computeEfficiencyMap(contextType);
+    const row = map[name];
+    if (!row || row.callCount === 0) return '';
+    const avgTokens = (row.totalInput + row.totalOutput + row.totalCache) / row.callCount;
+    const avgOutput = row.totalOutput / row.callCount;
+    const sharePct = totalCost > 0 ? Math.round((row.totalCost / totalCost) * 100) : 0;
+    return '<div class="section">'
+      + '<div class="section-title">⚡ ' + t('efficiencyTitle')
+      + ' <span class="section-title-sub">' + t('efficiencyDesc') + '</span></div>'
+      + '<div class="card-grid">'
+      + statCard(t('effCalls'), fmtCompact(row.callCount), null)
+      + statCard(t('effAvgTokens'), fmtCompact(Math.round(avgTokens)), null, { badge: fmtCompact(Math.round(avgOutput)) + ' out' })
+      + statCard(t('effTotalCost'), fmtCost(row.totalCost), null, { raw: true, badge: sharePct + '% ' + t('effShare') })
+      + statCard(t('effAvgCost'), fmtCost(row.totalCost / row.callCount), null, { raw: true })
+      + '</div></div>';
+  }
+
   // ── Content action binding ──
   function bindContentActions() {
     content.querySelectorAll('[data-action="goto-detail"]').forEach((el) => {
@@ -5748,6 +6062,21 @@
         currentSessionId = el.dataset.sessionId;
         currentDetail = null;
         expandedCategories._tokens = true;
+        pushState(true);
+        render();
+      });
+    });
+    // F5: Regression banner insight → navigate to sub-page
+    content.querySelectorAll('[data-action="nav-view"]').forEach((el) => {
+      el.addEventListener('click', (e) => {
+        e.preventDefault();
+        const view = el.dataset.view;
+        if (!view) return;
+        currentView = view;
+        currentDetail = null;
+        if (view === 'tokens-cost' || view === 'tokens-prompt' || view === 'tokens-session' || view === 'tokens') {
+          expandedCategories._tokens = true;
+        }
         pushState(true);
         render();
       });

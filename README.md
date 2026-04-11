@@ -12,6 +12,8 @@ Parses your entire Claude Code configuration and usage data, then generates an i
 - **Harness overview** — skills, agents, plugins, hooks, memory, MCP servers, rules, principles, commands, teams, plans
 - **Context budget** — estimated token distribution between visible and invisible contexts (startup, tools, user messages)
 - **Token analytics** — usage by model, daily trends, cache efficiency, prompt statistics, response latency
+- **Month-end cost projection** — trailing 7-day average extrapolated to month end, compared against your monthly budget
+- **Skill & agent efficiency** — per-item call count, avg tokens/call, total cost, and category cost share. Sidebar marks the top 3 cost contributors with a 🔥 badge so optimization targets are obvious
 - **Context Window Explorer** — replay any past session turn-by-turn to see exactly how the context window filled up
 - **Activity heatmaps** — daily usage patterns across skills, agents, and commands
 - **Task categories** — auto-classified token usage by work type (code editing, docs, planning, etc.)

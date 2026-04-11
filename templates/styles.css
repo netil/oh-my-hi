@@ -437,6 +437,292 @@ body.dark .sidebar-period-range {
   margin-right: 8px;
   flex-shrink: 0;
 }
+.nav-child .cost-hot {
+  flex-shrink: 0;
+  margin-left: 6px;
+  font-size: 11px;
+  line-height: 1;
+  filter: drop-shadow(0 0 2px rgba(255, 120, 0, 0.4));
+}
+
+/* F6: Overview hero row — regression card (narrow) + usage bar card
+   (flexible, fills remaining width). Uses CONTAINER queries so the
+   layout responds to the content area width, not the viewport — so
+   the split works regardless of sidebar state. */
+.overview-hero {
+  container-type: inline-size;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+  margin-bottom: 28px;
+}
+.overview-hero > .regression-card {
+  flex: 0 1 280px;
+  min-width: 220px;
+}
+.overview-hero > .usage-bar-card {
+  flex: 1 1 420px;
+  min-width: 320px;
+}
+.overview-hero.solo > .usage-bar-card {
+  flex: 1 1 100%;
+  max-width: 100%;
+}
+/* Narrow container: stack both cards full-width. */
+@container (max-width: 720px) {
+  .overview-hero > .regression-card,
+  .overview-hero > .usage-bar-card {
+    flex: 1 1 100%;
+    min-width: 0;
+    max-width: none;
+  }
+}
+
+/* F6: Usage bar card — single card replacing 4 stat cards */
+.usage-bar-card {
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 20px 22px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+.usage-bar-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+.usage-bar-head-label {
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--text-primary);
+  letter-spacing: 0;
+  padding-top: 2px;
+}
+.usage-bar-scale-notice {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 2px;
+  margin-bottom: 10px;
+  font-size: 10px;
+  line-height: 1.3;
+}
+.usage-bar-scale-badge {
+  flex-shrink: 0;
+  display: inline-block;
+  padding: 2px 8px;
+  font-size: 10px;
+  font-weight: 600;
+  color: #4263eb;
+  background: rgba(66, 99, 235, 0.14);
+  border-radius: 10px;
+  letter-spacing: 0.2px;
+}
+.usage-bar-scale-desc {
+  flex: 1;
+  color: var(--text-secondary);
+}
+.usage-bar-head-right {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 2px;
+}
+.usage-bar-head-sub {
+  font-size: 10px;
+  color: var(--text-secondary);
+  opacity: 0.75;
+  line-height: 1.2;
+  text-align: right;
+}
+.usage-bar-head-value {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+}
+.usage-bar-total {
+  font-size: 28px;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+.usage-bar-change {
+  font-size: 12px;
+  font-weight: 600;
+  font-family: monospace;
+}
+.usage-bar-change.positive { color: #27ae60; }
+.usage-bar-change.negative { color: #e74c3c; }
+.usage-bar-change.neutral  { color: var(--text-secondary); }
+.usage-bar-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.usage-bar-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 12px;
+  min-width: 0;
+}
+.usage-bar-row-label {
+  flex: 0 0 auto;
+  min-width: 70px;
+  color: var(--text-primary);
+  font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.usage-bar-row-track {
+  flex: 1 1 auto;
+  position: relative;
+  height: 10px;
+  min-width: 40px;
+  background: var(--border);
+  border-radius: 5px;
+  overflow: hidden;
+}
+.usage-bar-row-fill {
+  position: absolute;
+  top: 0;
+  left: 0;
+  height: 100%;
+  border-radius: 5px;
+  transition: width 0.3s ease;
+}
+.usage-bar-row-value {
+  flex: 0 0 56px;
+  text-align: right;
+  font-weight: 600;
+  font-family: monospace;
+  color: var(--text-primary);
+  font-variant-numeric: tabular-nums;
+}
+.usage-bar-row-pct {
+  flex: 0 0 44px;
+  text-align: right;
+  font-family: monospace;
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+.usage-bar-row-change {
+  flex: 0 0 64px;
+  text-align: right;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+/* F5: Compact regression card (slots into card-grid like a stat card) */
+.regression-card {
+  cursor: pointer;
+  background: linear-gradient(135deg, rgba(231, 76, 60, 0.08), rgba(231, 76, 60, 0.02));
+  border-left: 4px solid #e74c3c;
+  position: relative;
+  transition: transform 0.12s ease, box-shadow 0.12s ease;
+}
+.regression-card:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(231, 76, 60, 0.15);
+}
+.regression-card .stat-label {
+  color: #c0392b;
+  font-weight: 600;
+}
+.regression-card-period {
+  margin-top: 4px;
+  margin-bottom: 14px;
+}
+.regression-card-period-bars {
+  display: flex;
+  gap: 3px;
+}
+.regression-card-period-bar {
+  flex: 1;
+  height: 4px;
+  border-radius: 2px;
+}
+.regression-card-period-bar.prev {
+  background: rgba(150, 150, 150, 0.35);
+}
+.regression-card-period-bar.cur {
+  background: rgba(231, 76, 60, 0.65);
+}
+.regression-card-period-cols {
+  display: flex;
+  gap: 3px;
+  margin-top: 3px;
+}
+.regression-card-period-col {
+  flex: 1;
+  font-size: 9.5px;
+  line-height: 1.3;
+}
+.regression-card-period-col-label {
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+.regression-card-period-col-label.cur {
+  color: #c0392b;
+}
+.regression-card-period-col-dates {
+  font-family: monospace;
+  opacity: 0.75;
+}
+.regression-card-warn {
+  font-size: 13px;
+  margin-right: 2px;
+}
+.regression-card-value {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.regression-card-icon {
+  font-size: 18px;
+  line-height: 1;
+}
+.regression-card-delta {
+  color: #e74c3c;
+  font-weight: 700;
+  font-family: monospace;
+}
+.regression-card-sub {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+.regression-card-metric-label {
+  font-weight: 500;
+  color: var(--text-primary);
+}
+.regression-card-detail {
+  font-family: monospace;
+  opacity: 0.85;
+}
+.regression-card-more {
+  display: inline-block;
+  padding: 1px 6px;
+  font-size: 10px;
+  font-weight: 600;
+  color: #c0392b;
+  background: rgba(231, 76, 60, 0.12);
+  border-radius: 8px;
+}
+.regression-card-link {
+  margin-top: 6px;
+  font-size: 11px;
+  font-weight: 600;
+  color: #c0392b;
+  opacity: 0.85;
+}
 
 /* ── Main Content ── */
 .content {
@@ -464,20 +750,10 @@ body.dark .sidebar-period-range {
 }
 
 .page-header .page-desc {
-  display: inline-block;
   margin-top: 8px;
   font-size: 12px;
   color: var(--text-secondary);
   line-height: 1.6;
-  padding: 6px 12px;
-  background: #f0f4ff;
-  border: 1px solid #d8e0f0;
-  border-radius: 20px;
-}
-
-body.dark .page-header .page-desc {
-  background: #1e2235;
-  border-color: #2e3450;
 }
 
 /* ── Period Filter ── */
@@ -1949,6 +2225,74 @@ body.dark .bb-tooltip .value {
   color: var(--text-secondary);
   margin-top: 2px;
 }
+.budget-projection {
+  margin-top: 16px;
+  padding: 14px 16px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+.budget-projection-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin-bottom: 4px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.budget-projection-badge {
+  display: inline-block;
+  padding: 2px 8px;
+  font-size: 10px;
+  font-weight: 500;
+  border-radius: 10px;
+  background: rgba(255, 193, 7, 0.15);
+  color: #b88600;
+}
+.budget-projection-desc {
+  font-size: 11px;
+  color: var(--text-secondary);
+  margin-bottom: 10px;
+}
+.budget-projection-empty {
+  font-size: 12px;
+  color: var(--text-secondary);
+  padding: 6px 0 2px;
+}
+.budget-projection-row {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
+  gap: 12px;
+  margin-bottom: 8px;
+}
+.budget-projection-metric {
+  display: flex;
+  flex-direction: column;
+}
+.budget-projection-label {
+  font-size: 10px;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  margin-bottom: 2px;
+}
+.budget-projection-value {
+  font-size: 18px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+.budget-projection-value.over { color: #e74c3c; }
+.budget-projection-value.under { color: #27ae60; }
+.budget-projection-footer {
+  font-size: 11px;
+  color: var(--text-secondary);
+  font-family: monospace;
+  padding-top: 8px;
+  border-top: 1px dashed var(--border);
+}
+.budget-projection-diff.over { color: #e74c3c; font-weight: 600; }
+.budget-projection-diff.under { color: #27ae60; font-weight: 600; }
 .budget-grid-line line {
   stroke: #4263eb !important;
   stroke-dasharray: 6 3;

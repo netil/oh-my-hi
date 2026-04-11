@@ -1,6 +1,32 @@
 # Changelog
 
-## [0.7.0] - 2026-04-10
+## [0.8.0] - 2026-04-11
+
+### Added
+- **Response performance regression detection** — compares the trailing 7 days against the previous 7 days for average response latency and average tokens per turn. When any metric degrades by ≥15% a compact warning card appears in the Harness Overview hero row. The card shows a dual time-period bar (직전 7일 / 최근 7일) with concrete dates, the worst regressed metric, and a click-through link to the most actionable sub-page.
+- **Probable-cause detection for regressions** — `detectCauses()` inspects cache hit rate and Opus share across the two windows. If the cache hit rate dropped ≥10pp or Opus share grew ≥10pp the banner swaps the generic hint for a data-driven one ("캐시 히트율이 {A}에서 {B}로 하락" / "Opus 비중이 {A}에서 {B}로 증가") plus a check link to the relevant page.
+- **Month-end cost projection** on `#tokens-cost` — trailing 7-day daily average extrapolated to month end, with over/under budget comparison (needs ≥3 active days in the window, `confidence: low` if 3–4, `high` otherwise). Projection card sits inside the existing budget section.
+- **Skill & agent efficiency cards** — `#skills/{name}` and `#agents/{name}` detail pages show total calls, average tokens per call, total cost contribution, average cost per call, and the item's share of its category cost. The top 3 cost contributors in each category get a 🔥 badge in the sidebar (restricted to the user's own item list so built-in Claude contexts don't crowd out real skills).
+- **Usage bar card** (`renderBarCard`) — replaces the four stat cards on Harness Overview (Total / Skills / Agents / Commands) and Token Overview (Total / Input / Output / Cache) with a single card. The total anchors the 100% baseline and each sub-metric is rendered as a proportional horizontal bar with label, raw value, linear %, and % change vs. the previous period. All numbers go through `fmtCompact` per the number-formatting principle.
+- **Automatic log-scale bars** — when the largest row value is more than 100× the smallest (common on the Tokens page where cache dwarfs input/output), bar widths switch to a logarithmic scale so small items stay visible at 8% minimum width. A "로그 스케일" notice above the rows explains the switch. The % column always shows the real linear share.
+- **Overview hero row** — new 2-column flex layout (`container-type: inline-size`) that pairs the regression card (left, fixed 280px) with the usage bar card (right, flexible). Wraps to a single column below 720px container width.
+- **Pure helpers in `canvas-bars.mjs`** — `computeBarScale()` and `computeBarWidth()` extracted from `renderBarCard()` so the log-threshold decision and width computation can be unit-tested without a DOM.
+- **New test files** — `test/regression.test.mjs` (31 tests covering window math, cache/model-mix detection, end-to-end regression computation) and `test/cost-projection.test.mjs` (18 tests for `projectMonthEnd()`). `test/canvas-bars.test.mjs` expanded with 13 new tests for the bar-scale helpers.
+- **#help page — new "Insights & Optimization" section** with entries for regression detection, the usage bar card, log-scale bars, cost projection, and efficiency scoring. Ten new locale keys in `en`/`ko`.
+
+### Changed
+- **Left sidebar "Tokens" group always expanded** — removed the collapse/toggle chevron. The three sub-items (Cost / Prompt / Session) are visible from first render; clicking the Tokens header still navigates to `#tokens`.
+- **Drum bar layout math moved to `canvas-bars.mjs`** — `drawStackedBar()` and the Context Window Explorer session bar (`renderBarSegments`) now delegate geometry to `layoutStackedBar()` / `layoutSessionBar()`. Hover/alpha state still lives in the closure.
+- **`page-desc` visual style simplified** — removed the rounded pill background/border from the Token Overview description so it reads as plain inline text under the title.
+- **Usage-bar card title size** — bumped from 12px uppercase caption to 18px primary-colored title so it reads as a proper section header.
+
+### Tests
+- **288 → 301** (+13 canvas-bars tests for `computeBarScale` + `computeBarWidth`)
+- Total new tests written this release across all files: **60+**
+- All regression metrics (latency, tokens/turn, cache-drop cause, opus-shift cause) covered by 19 dedicated regression tests.
+
+### Fixed
+- **Cleaned up unused locale keys** from the earlier full-size regression banner prototype (`regressionInsightsTitle`).
 
 ### Added
 - **Context Budget section** on Overview page — estimates token distribution across hidden (startup), brief (tool output), and full (user-visible) contexts. Canvas-based stacked bar + top-8 ranked table. Hidden token cost is multiplied by session count in the selected period for accurate estimation. Subtitle explicitly labels the data as "estimated."

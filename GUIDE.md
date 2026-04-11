@@ -47,7 +47,8 @@ The landing page showing a high-level summary of your harness activity.
 
 | Section | Description |
 |---------|-------------|
-| **Stat Cards** | Total usage, skill calls, agent calls, and command invocations for the selected period. Each card shows the change percentage vs. the previous period. |
+| **Response Performance Regression** *(conditional)* | When last-7-days avg response latency or avg tokens per turn degrades by ≥15% vs. the previous 7 days, a compact warning card appears in the hero row. Shows the worst-regressed metric, a dual time-period bar (직전 7일 / 최근 7일) with explicit dates, probable cause (cache hit rate drop, Opus share increase) or a generic hint, and a click-through link to the most actionable sub-page. |
+| **Usage Bar Card** | Replaces the old 4 stat cards. Shows total usage as a headline number with its period-over-period change, then proportional horizontal bars for skill calls / agent calls / commands. Each bar row shows the raw count, linear %, and % change. Values go through `fmtCompact`. |
 | **Category Distribution** | Donut chart showing the proportion of skills, agents, and commands. |
 | **Daily Trend** | Line chart of daily activity (skills + agents + commands combined). |
 | **Popular Skills** | Top 5 most-used skills ranked by call count. |
@@ -64,7 +65,7 @@ Token usage analytics across all Claude Code sessions.
 
 | Section | Description |
 |---------|-------------|
-| **Stat Cards** | Total tokens, input tokens, output tokens, cache tokens — each with period-over-period change. In compare mode, previous period values are also shown. |
+| **Token Bar Card** | Replaces the old 4 stat cards. Shows total tokens headline with period-over-period change, then proportional bars for input / output / cache tokens. When the max/min ratio exceeds 100× (common when cache dominates), the bars automatically switch to a **log scale** with a notice above the rows. The `%` column always shows the real linear share. |
 | **Model Distribution** | Donut chart of token usage by model. |
 | **Daily Token Usage** | Area chart of daily token consumption trend. In compare mode, previous period is overlaid as a gray line. |
 | **Token Activity** | Calendar heatmap of daily token usage intensity. |
@@ -83,6 +84,7 @@ Cost analysis and budget tracking.
 |---------|-------------|
 | **Stat Cards** | Total cost, daily average cost, and per-model cost cards. Based on Anthropic API token pricing (not actual CLI subscription billing). |
 | **Cost Budget** | Configurable daily/weekly/monthly spending thresholds. Set values and click Save — stored in browser localStorage. Progress bars show current spending vs. budget, with warnings at 80% and exceeded amount + percentage at 100%+. |
+| **Month-End Projection** | Extrapolates the trailing 7-day daily average to the end of the current month and compares it against the monthly budget. Shows projected amount, month-to-date, 7-day average, and days remaining. When a monthly budget is set, a pill shows `+$N over budget` (red) or `−$N under budget` (green). Requires at least 3 active days in the trailing 7 to display; low-confidence (3–4 active days) is flagged with a badge. |
 | **Cost Trend Charts** | Three area gradient charts (daily in orange, weekly in purple, monthly in green). When a budget is set, a blue dashed grid line marks the threshold. |
 | **Cost Calculation** | Expandable section with the pricing formula, collapsible model pricing table (per 1M tokens), and a link to [anthropic.com/pricing](https://www.anthropic.com/pricing). |
 
@@ -192,6 +194,7 @@ Click any individual item (skill, agent, plugin, etc.) to see its detail page.
 |---------|-------------|
 | **Header** | Item name, type badge, file path, and description (from frontmatter). |
 | **Metadata** | Parsed frontmatter fields displayed in a formatted card. |
+| **Efficiency** *(skills/agents only)* | Total calls, average tokens per call, total cost contribution, and average cost per call. A badge next to the total cost shows the item's share of its category cost. The top 3 cost contributors in each category also get a 🔥 badge in the sidebar. |
 | **Content Preview** | Full content of the item's definition file (markdown rendered). |
 | **Usage Stats** | Call count and activity heatmap for this specific item (for skills, agents, commands). |
 | **Related Items** | For plugins: list of skills provided by the plugin. For skills: parent plugin link if applicable. |

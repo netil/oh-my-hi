@@ -35,6 +35,9 @@ oh-my-hi/
 │   ├── app.js                   # Frontend JS (ES6+) — see TOC at top of file
 │   ├── session-events.mjs       # Pure Context Explorer session helpers (testable)
 │   ├── context-example.mjs      # EXAMPLE_EVENTS, EXAMPLE_GATES, KIND_META constants
+│   ├── cost-projection.mjs      # Month-end cost projection (projectMonthEnd, testable)
+│   ├── canvas-bars.mjs          # Stacked/session bar layout + log-scale helpers (testable)
+│   ├── regression.mjs           # Week-over-week regression detection (testable)
 │   ├── work-types.json          # Task category schema (25 types)
 │   └── locales/
 │       ├── en.json              # English locale (base)
@@ -199,3 +202,6 @@ configFiles, skills, agents, plugins, hooks, memory, mcpServers, rules, principl
 5. **Persistent category mapping**: `task-categories.json` auto-generated at every build from `work-types.json` schema.
 6. **Auto-update check**: `/omh` queries npm registry asynchronously (3s timeout, 24h cache). Notifies when new version is available.
 7. **AppleScript tab reuse**: macOS-only optimization. Searches all browser windows/tabs for URL match.
+8. **Pure modules prepended to `app.js`**: `session-events.mjs`, `context-example.mjs`, `cost-projection.mjs`, `canvas-bars.mjs`, and `regression.mjs` are authored as ESM for unit-testability. The generator strips `export` keywords and prepends them to `app.js` so symbols land in the same script scope. Source of truth lives in the `.mjs` files — never edit the inlined copies.
+9. **Week-over-week regression anchored to today**: regression detection (F5) always uses `Date.now()` as the anchor, independent of the sidebar period filter. The card shows explicit dates (`직전 7일 03.28~04.04 / 최근 7일 04.04~04.11`) to avoid confusion with the filter.
+10. **Auto log-scale for wide-range data**: `computeBarScale()` switches bar widths from linear to logarithmic when `max/min > 100` so small rows stay visible (applies to `#tokens` where cache dwarfs input/output). The `%` column always shows the real linear share.
