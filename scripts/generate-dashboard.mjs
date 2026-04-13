@@ -424,7 +424,8 @@ async function main() {
     openOrRefreshBrowser(indexPath);
   }
 
-  console.log('oh-my-hi: ✅ done');
+  const dashboardUrl = 'file://' + indexPath.replace(/ /g, '%20');
+  console.log(`oh-my-hi: ✅ done → ${dashboardUrl}`);
 
   // Auto-refresh status notice
   const settings = readSettings();
@@ -894,8 +895,11 @@ function openOrRefreshBrowser(filePath) {
   } catch { /* Safari not available */ }
 
   // No existing tab found — open with system default browser
-  try { execSync(`open "${filePath}"`); } catch {
-    console.log('Please open manually in your browser:', filePath);
+  try {
+    execSync(`open "${fileUrl}"`);
+  } catch {
+    console.log('oh-my-hi: ⚠️ Could not open browser automatically.');
+    console.log('  → Open manually:', fileUrl);
   }
 }
 
