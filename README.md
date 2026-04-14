@@ -5,7 +5,7 @@
 
 Parses your entire Claude Code configuration and usage data, then generates an interactive single-file HTML dashboard you can open locally.
 
-<img src="./assets/dashboard.png?v=2" alt="Dashboard preview" width="800">
+<img src="./assets/dashboard.png?v=3" alt="Dashboard preview" width="800">
 
 ## What it shows
 
