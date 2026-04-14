@@ -12,6 +12,7 @@ Parses your entire Claude Code configuration and usage data, then generates an i
 - **Harness overview** — skills, agents, plugins, hooks, memory, MCP servers, rules, principles, commands, teams, plans
 - **Context budget** — estimated token distribution between visible and invisible contexts (startup, tools, user messages)
 - **Token analytics** — usage by model, daily trends, cache efficiency, prompt statistics, response latency
+- **Cache TTL Impact** — detects cost waste from short cache TTL. Shows best/worst 7-day rolling efficiency, estimated waste cost, and a daily hit-rate trend chart with reference lines
 - **Month-end cost projection** — trailing 7-day average extrapolated to month end, compared against your monthly budget
 - **Skill & agent efficiency** — per-item call count, avg tokens/call, total cost, and category cost share. Sidebar marks the top 3 cost contributors with a 🔥 badge so optimization targets are obvious
 - **Context Window Explorer** — replay any past session turn-by-turn to see exactly how the context window filled up
@@ -21,6 +22,12 @@ Parses your entire Claude Code configuration and usage data, then generates an i
 
 <img src="./assets/token-overview.png?v=1" alt="Tokens" width="800">
 <img src="./assets/insights.png" alt="Insights" width="800">
+
+### Cache TTL Impact
+
+Tracks how much the [cache TTL regression](https://github.com/anthropics/claude-code/issues/46829) (5 min vs 1 hr) may be costing you. Compares 7-day rolling cache hit rates to estimate excess re-creation cost — drops in the trend chart indicate periods when caches expired before being reused.
+
+<img src="./assets/cache-ttl-impact.png" alt="Cache TTL Impact" width="800">
 
 ### Context Window Explorer
 
