@@ -330,6 +330,9 @@
 
   // ── History / Hash ──
   function getHash() {
+    if (currentView === 'compare' && _compareSessionA && _compareSessionB) {
+      return '#compare/' + encodeURIComponent(_compareSessionA) + '/' + encodeURIComponent(_compareSessionB);
+    }
     if (currentView === 'session' && currentSessionId) {
       return '#session/' + encodeURIComponent(currentSessionId);
     }
@@ -352,11 +355,22 @@
     }
   }
 
+  // Compare state — holds two session IDs for the compare view
+  var _compareSessionA = null;
+  var _compareSessionB = null;
+
   function applyHash() {
     const hash = window.location.hash.replace(/^#/, '');
     if (!hash) return;
     let parts = hash.split('/');
     let view = parts[0];
+    if (view === 'compare' && parts.length >= 3) {
+      currentView = 'compare';
+      _compareSessionA = decodeURIComponent(parts[1]);
+      _compareSessionB = decodeURIComponent(parts.slice(2).join('/'));
+      currentDetail = null;
+      return;
+    }
     if (view === 'context') {
       currentView = 'context';
       currentDetail = null;
@@ -961,6 +975,8 @@
       renderStructure();
     } else if (currentView === 'context') {
       renderContextExplorer();
+    } else if (currentView === 'compare') {
+      renderCompareView();
     } else if (currentView === 'help') {
       renderHelp();
     } else {
@@ -1257,10 +1273,11 @@
           titleKey: 'totalTokens',
           total: totalAll,
           totalChange: changeAll,
+          labelWidth: 60,
           rows: [
-            { label: t('inputTokens'),  value: totalInput,  change: changeInput,  color: '#4263eb' },
-            { label: t('outputTokens'), value: totalOutput, change: changeOutput, color: '#0ca678' },
-            { label: t('cacheTokens'),  value: totalCache,  change: changeCache,  color: '#e8590c' },
+            { label: t('labelInput'),  value: totalInput,  change: changeInput,  color: '#4263eb' },
+            { label: t('labelOutput'), value: totalOutput, change: changeOutput, color: '#0ca678' },
+            { label: t('labelCache'),  value: totalCache,  change: changeCache,  color: '#e8590c' },
           ],
         })
       + '</div>';
@@ -1386,35 +1403,44 @@
       allTokenEntries.forEach((e) => { const d = new Date(e.timestamp); if (d >= prevStart && d < curStart) prevCost += calcEntryCost(e); });
     }
 
-    let totalCost = 0;
+    let totalCost = 0, inputCost = 0, outputCost = 0, cacheCost = 0;
     const costDailyMap = {};
-    const modelCostMap = {};
     tokenEntries.forEach((e) => {
+      const key = resolvePricingKey(e.model);
       const cost = calcEntryCost(e);
       totalCost += cost;
+      if (key) {
+        const p = MODEL_PRICING[key];
+        inputCost += (e.rawInput || 0) * p.input / 1e6;
+        outputCost += (e.outputTokens || 0) * p.output / 1e6;
+        cacheCost += ((e.cacheRead || 0) * p.cacheRead + (e.cacheCreation || 0) * p.cacheCreation) / 1e6;
+      }
       const d = typeof e.timestamp === 'number' ? new Date(e.timestamp) : new Date(e.timestamp);
       const dk = d.toISOString().substring(0, 10);
       if (dk) costDailyMap[dk] = (costDailyMap[dk] || 0) + cost;
-      const short = (e.model || 'unknown').replace(/^claude-/, '').replace(/-\d{8,}$/, '');
-      modelCostMap[short] = (modelCostMap[short] || 0) + cost;
     });
-    const changeCost = calcTokenChange(allTokenEntries, days, (e) => calcEntryCost(e));
-    const costDays = Object.keys(costDailyMap).length;
-    const dailyAvgCost = costDays > 0 ? totalCost / costDays : 0;
-    const modelsByCost = Object.entries(modelCostMap).sort((a, b) => b[1] - a[1]);
+    const changeCost       = calcTokenChange(allTokenEntries, days, (e) => calcEntryCost(e));
+    const changeInputCost  = calcTokenChange(allTokenEntries, days, (e) => { const k = resolvePricingKey(e.model); return k ? (e.rawInput || 0) * MODEL_PRICING[k].input / 1e6 : 0; });
+    const changeOutputCost = calcTokenChange(allTokenEntries, days, (e) => { const k = resolvePricingKey(e.model); return k ? (e.outputTokens || 0) * MODEL_PRICING[k].output / 1e6 : 0; });
+    const changeCacheCost  = calcTokenChange(allTokenEntries, days, (e) => { const k = resolvePricingKey(e.model); return k ? ((e.cacheRead || 0) * MODEL_PRICING[k].cacheRead + (e.cacheCreation || 0) * MODEL_PRICING[k].cacheCreation) / 1e6 : 0; });
 
     let html = '<div class="page-header"><h1>💰 ' + t('tokensCost') + '</h1></div>'
       + renderPeriodFilter()
-      + '<div class="card-grid">'
-      + statCard(t('totalCost'), fmtCost(totalCost), changeCost, canCompare ? { raw: true, compare: { label: t('comparePrev'), value: fmtCost(prevCost) } } : { raw: true })
-      + statCard(t('dailyAvgCost'), fmtCost(dailyAvgCost), null, { raw: true, badge: t('activeDaysBadge', costDays) });
-    modelsByCost.slice(0, 3).forEach((entry) => {
-      if (entry[1] > 0) {
-        const pct = totalCost > 0 ? Math.round((entry[1] / totalCost) * 100) : 0;
-        html += statCard(entry[0], fmtCost(entry[1]), null, { raw: true, badge: pct + '%' });
-      }
-    });
-    html += '</div>';
+      + '<div class="overview-hero solo">'
+      + renderBarCard({
+          titleKey: 'totalCost',
+          total: totalCost,
+          totalChange: changeCost,
+          totalFmt: fmtCost,
+          valueFmt: fmtCost,
+          labelWidth: 60,
+          rows: [
+            { label: t('labelInput'),  value: inputCost,  change: changeInputCost,  color: '#4263eb' },
+            { label: t('labelOutput'), value: outputCost, change: changeOutputCost, color: '#0ca678' },
+            { label: t('labelCache'),  value: cacheCost,  change: changeCacheCost,  color: '#e8590c' },
+          ],
+        })
+      + '</div>';
 
     // Budget
     html += renderBudgetSection(costDailyMap);
@@ -1459,28 +1485,38 @@
   function renderTokensPrompt() {
     const usage = getUsage();
     const days = customDateRange ? 0 : currentPeriod;
+    const allPromptEntries = usage.promptStats || [];
     const tokenEntries = filterByPeriod(usage.tokenEntries || [], 'timestamp', days);
-    const promptEntries = filterByPeriod(usage.promptStats || [], 'timestamp', days);
+    const promptEntries = filterByPeriod(allPromptEntries, 'timestamp', days);
 
-    let html = '<div class="page-header"><h1>💬 ' + t('tokensPrompt') + '</h1></div>';
+    let html = '<div class="page-header"><h1>💬 ' + t('tokensPrompt') + '</h1></div>'
+      + renderPeriodFilter();
 
     // Prompt statistics
     if (promptEntries.length > 0) {
       const totalPrompts = promptEntries.length;
-      const totalChars = promptEntries.reduce((sum, p) => sum + p.charLen, 0);
-      const avgLen = Math.round(totalChars / totalPrompts);
       const shortCount = promptEntries.filter((p) => p.charLen <= 100).length;
       const longCount = promptEntries.filter((p) => p.charLen >= 500).length;
-      const shortPct = Math.round((shortCount / totalPrompts) * 100);
-      const longPct = Math.round((longCount / totalPrompts) * 100);
+      const mediumCount = totalPrompts - shortCount - longCount;
+      const changeShort  = calcTokenChange(allPromptEntries, days, (p) => p.charLen <= 100 ? 1 : 0);
+      const changeMedium = calcTokenChange(allPromptEntries, days, (p) => p.charLen > 100 && p.charLen < 500 ? 1 : 0);
+      const changeLong   = calcTokenChange(allPromptEntries, days, (p) => p.charLen >= 500 ? 1 : 0);
 
-      html += '<div class="section"><div class="section-title">' + t('promptStats') + ' <span class="section-title-sub">' + t('promptStatsDesc') + '</span></div>'
-        + '<div class="card-grid">'
-        + statCard(t('totalPrompts'), totalPrompts, null, { si: true })
-        + statCard(t('avgPromptLen'), fmtNum(avgLen) + t('unitChars'), null)
-        + statCard(t('shortPrompts'), fmtNum(shortCount), null, { badge: shortPct + '%', badgeColor: 'teal' })
-        + statCard(t('longPrompts'), fmtNum(longCount), null, { badge: longPct + '%', badgeColor: 'teal' })
-        + '</div></div>';
+      html += '<div class="overview-hero solo">'
+        + renderBarCard({
+            titleKey: 'totalPrompts',
+            total: totalPrompts,
+            labelWidth: 56,
+            summaryHtml: '<span><span class="usage-bar-summary-dot" style="background:#4263eb"></span>' + t('shortPrompts') + '</span>'
+              + '<span><span class="usage-bar-summary-dot" style="background:#0ca678"></span>' + t('mediumPrompts') + '</span>'
+              + '<span><span class="usage-bar-summary-dot" style="background:#e8590c"></span>' + t('longPrompts') + '</span>',
+            rows: [
+              { label: t('labelShort'),  value: shortCount,  change: changeShort,  color: '#4263eb' },
+              { label: t('labelMedium'), value: mediumCount, change: changeMedium, color: '#0ca678' },
+              { label: t('labelLong'),   value: longCount,   change: changeLong,   color: '#e8590c' },
+            ],
+          })
+        + '</div>';
     }
 
     // Response latency
@@ -1551,6 +1587,11 @@
   }
 
   // ── Tokens: Session sub-page ──
+  // Bookmark state — shared across session pages
+  var _bmFilter = 'all'; // 'all' | 'starred' | tag name
+  function _loadBm() { return loadBookmarks(localStorage.getItem('harness-bookmarks')); }
+  function _saveBm(map) { localStorage.setItem('harness-bookmarks', saveBookmarks(map)); }
+
   function renderTokensSession() {
     const usage = getUsage();
     const days = customDateRange ? 0 : currentPeriod;
@@ -1572,33 +1613,86 @@
     });
     const sessions = Object.values(sessionMap).filter((s) => s.count > 1);
     const fmtDur = (ms) => ms >= 3600000 ? (ms / 3600000).toFixed(1) + t('unitHour') : ms >= 60000 ? (ms / 60000).toFixed(0) + t('unitMin') : (ms / 1000).toFixed(0) + 's';
+    const bmMap = _loadBm();
 
-    let html = '<div class="page-header"><h1>📋 ' + t('tokensSession') + '</h1></div>';
+    let html = '<div class="page-header"><h1>📋 ' + t('tokensSession') + '</h1></div>'
+      + renderPeriodFilter();
 
     if (sessions.length > 0) {
-      const durations = sessions.map((s) => s.maxTs - s.minTs).filter((d) => d > 0);
       const totalSessions = sessions.length;
-      const avgMsg = Math.round(sessions.reduce((s, v) => s + v.count, 0) / totalSessions);
-      const avgDur = durations.length > 0 ? Math.round(durations.reduce((s, v) => s + v, 0) / durations.length) : 0;
-      const maxDur = durations.length > 0 ? Math.max(...durations) : 0;
+      const shortSessions = sessions.filter((s) => s.count < 10).length;
+      const longSessions = sessions.filter((s) => s.count > 30).length;
+      const mediumSessions = totalSessions - shortSessions - longSessions;
 
-      html += '<div class="section"><div class="section-title">' + t('sessionAnalysis') + ' <span class="section-title-sub">' + t('sessionAnalysisDesc') + '</span></div>'
-        + '<div class="card-grid">'
-        + statCard(t('totalSessions'), totalSessions, null, { si: true })
-        + statCard(t('avgMsgPerSession'), avgMsg, null)
-        + statCard(t('avgSessionDuration'), fmtDur(avgDur), null)
-        + statCard(t('longestSession'), fmtDur(maxDur), null)
+      // Per-category change vs previous period
+      function calcSessionCatChange(catFn) {
+        if ((days === 0 && !customDateRange) || customDateRange) return null;
+        const allEntries = usage.tokenEntries || [];
+        const now = new Date();
+        const curStart = new Date(now); curStart.setDate(curStart.getDate() - (days - 1)); curStart.setHours(0, 0, 0, 0);
+        const prevStart = new Date(curStart); prevStart.setDate(prevStart.getDate() - days);
+        const buildMap = (entries) => {
+          const m = {};
+          entries.forEach((e) => { const sid = e.sessionId || '_u'; if (!m[sid]) m[sid] = 0; m[sid]++; });
+          return m;
+        };
+        const curMap  = buildMap(allEntries.filter((e) => new Date(e.timestamp) >= curStart));
+        const prevMap = buildMap(allEntries.filter((e) => { const d = new Date(e.timestamp); return d >= prevStart && d < curStart; }));
+        const cur  = Object.values(curMap).filter(catFn).length;
+        const prev = Object.values(prevMap).filter(catFn).length;
+        if (prev === 0) return cur > 0 ? 100 : 0;
+        return Math.round(((cur - prev) / prev) * 100);
+      }
+      const changeShortSessions  = calcSessionCatChange((c) => c < 10);
+      const changeMediumSessions = calcSessionCatChange((c) => c >= 10 && c <= 30);
+      const changeLongSessions   = calcSessionCatChange((c) => c > 30);
+
+      html += '<div class="overview-hero solo">'
+        + renderBarCard({
+            titleKey: 'totalSessions',
+            total: totalSessions,
+            labelWidth: 56,
+            summaryHtml: '<span><span class="usage-bar-summary-dot" style="background:#4263eb"></span>' + t('shortSessions') + '</span>'
+              + '<span><span class="usage-bar-summary-dot" style="background:#0ca678"></span>' + t('mediumSessions') + '</span>'
+              + '<span><span class="usage-bar-summary-dot" style="background:#e8590c"></span>' + t('longSessions') + '</span>',
+            rows: [
+              { label: t('labelShort'),  value: shortSessions,  change: changeShortSessions,  color: '#4263eb' },
+              { label: t('labelMedium'), value: mediumSessions, change: changeMediumSessions, color: '#0ca678' },
+              { label: t('labelLong'),   value: longSessions,   change: changeLongSessions,   color: '#e8590c' },
+            ],
+          })
         + '</div>';
 
-      const topSessions = Object.entries(sessionMap)
+      // Bookmark filter bar
+      var bmTags = allTags(bmMap);
+      html += '<div class="bookmark-filter-bar" style="margin-top:12px">'
+        + '<button class="bookmark-filter-btn' + (_bmFilter === 'all' ? ' active' : '') + '" data-action="filter-bookmarks" data-filter="all">' + t('bmFilterAll') + '</button>'
+        + '<button class="bookmark-filter-btn' + (_bmFilter === 'starred' ? ' active' : '') + '" data-action="filter-bookmarks" data-filter="starred">' + t('bmFilterStarred') + '</button>';
+      for (var ti = 0; ti < bmTags.length; ti++) {
+        html += '<button class="bookmark-filter-btn' + (_bmFilter === bmTags[ti] ? ' active' : '') + '" data-action="filter-bookmarks" data-filter="' + escapeHtml(bmTags[ti]) + '">'
+          + '<span class="bookmark-tag" style="border:0;background:none;padding:0">' + escapeHtml(bmTags[ti]) + '</span></button>';
+      }
+      html += '</div>';
+
+      var allTopSessions = Object.entries(sessionMap)
         .filter((e) => e[0] !== '_unknown' && e[1].count > 1)
         .sort((a, b) => b[1].totalTokens - a[1].totalTokens)
-        .slice(0, 20);
+        .slice(0, 50);
+      // Apply bookmark filter
+      if (_bmFilter === 'starred') {
+        allTopSessions = filterSessions(allTopSessions.map(function(e) { return { id: e[0], _e: e }; }), bmMap, { starredOnly: true })
+          .map(function(s) { return s._e; });
+      } else if (_bmFilter !== 'all') {
+        allTopSessions = filterSessions(allTopSessions.map(function(e) { return { id: e[0], _e: e }; }), bmMap, { tagFilter: _bmFilter })
+          .map(function(s) { return s._e; });
+      }
+      var topSessions = allTopSessions.slice(0, 20);
       if (topSessions.length > 0) {
         html += '<div class="card" style="padding:16px;margin-top:12px;overflow-x:auto">'
           + '<div style="font-size:13px;font-weight:600;margin-bottom:4px">' + t('sessionTopList') + '</div>'
           + '<div style="font-size:11px;color:var(--text-secondary);margin-bottom:8px">' + t('sessionTopListHint') + '</div>'
           + '<table class="session-timeline"><thead><tr>'
+          + '<th style="width:30px"></th>'
           + '<th>' + t('sessionDate') + '</th>'
           + '<th style="text-align:right">' + t('totalTokens') + '</th>'
           + '<th style="text-align:right">' + t('estimatedCost') + '</th>'
@@ -1607,12 +1701,15 @@
           + '</tr></thead><tbody>';
         topSessions.forEach((entry) => {
           const s = entry[1];
+          const sid = entry[0];
           const dur = s.maxTs - s.minTs;
           const modelNames = Object.keys(s.models).join(', ');
           const sessionDate = new Date(s.minTs);
           const dowNames = t('dayNames').split(',');
           const dow = dowNames[sessionDate.getDay()] || '';
-          html += '<tr class="session-row" data-session-id="' + escapeHtml(entry[0]) + '" style="cursor:pointer">'
+          const isStarred = bmMap[sid] && bmMap[sid].starred;
+          html += '<tr class="session-row" data-session-id="' + escapeHtml(sid) + '" style="cursor:pointer">'
+            + '<td><span class="bookmark-star' + (isStarred ? ' active' : '') + '" data-action="toggle-bookmark" data-session-id="' + escapeHtml(sid) + '" title="' + (isStarred ? t('bmUnstar') : t('bmStar')) + '">★</span></td>'
             + '<td>' + formatDate(sessionDate.toISOString()) + ' (' + dow + ')</td>'
             + '<td style="text-align:right">' + fmtCompact(s.totalTokens) + '</td>'
             + '<td style="text-align:right">' + fmtCost(s.cost) + '</td>'
@@ -1621,6 +1718,8 @@
             + '</tr>';
         });
         html += '</tbody></table></div>';
+      } else if (_bmFilter !== 'all') {
+        html += '<div class="card" style="padding:16px;text-align:center;color:var(--text-secondary)">' + t('bmNoBookmarks') + '</div>';
       }
       html += '</div>';
     }
@@ -1658,9 +1757,23 @@
     });
     const duration = maxTs - minTs;
 
+    // Bookmark UI for session detail
+    const bmMap = _loadBm();
+    const isStarred = bmMap[currentSessionId] && bmMap[currentSessionId].starred;
+    const bmEntry = bmMap[currentSessionId] || { starred: false, tags: [] };
+    const bmTagsStr = (bmEntry.tags || []).join(', ');
+
     let html = '<button class="session-back-btn" id="session-back">← ' + t('sessionBackToSession') + '</button>'
-      + '<div class="page-header"><h1>📋 ' + t('sessionDetail') + '</h1>'
+      + '<div class="page-header">'
+      + '<div style="display:flex;align-items:center;gap:12px">'
+      + '<h1>📋 ' + t('sessionDetail') + '</h1>'
+      + '<span class="bookmark-star' + (isStarred ? ' active' : '') + '" data-action="toggle-bookmark" data-session-id="' + escapeHtml(currentSessionId) + '" style="font-size:22px" title="' + (isStarred ? t('bmUnstar') : t('bmStar')) + '">★</span>'
+      + '</div>'
       + '<div class="page-desc">' + formatDateTime(new Date(minTs).toISOString()) + '</div>'
+      + '<div style="margin-top:8px;display:flex;align-items:center;gap:8px">'
+      + '<span style="font-size:12px;color:var(--text-secondary)">' + t('bmTags') + ':</span>'
+      + '<input class="bookmark-tag-input" data-action="set-tags" data-session-id="' + escapeHtml(currentSessionId) + '" value="' + escapeHtml(bmTagsStr) + '" placeholder="' + t('bmTagPlaceholder') + '">'
+      + '</div>'
       + '</div>';
 
     // Stat cards
@@ -1724,6 +1837,13 @@
     });
     html += '</tbody></table></div></div>';
 
+    // Compare button — pick another session to compare side-by-side
+    html += '<div class="section" style="text-align:center">'
+      + '<button class="bookmark-filter-btn" id="session-compare-btn" style="padding:8px 20px;font-size:13px">⚖️ ' + t('cmpBtn') + '</button>'
+      + '<div style="font-size:12px;color:var(--text-secondary);margin-top:4px">' + t('cmpPickSecond') + '</div>'
+      + '<div id="compare-session-picker" style="display:none;margin-top:12px"></div>'
+      + '</div>';
+
     content.innerHTML = html;
     bindContentActions();
 
@@ -1735,6 +1855,53 @@
         currentSessionId = null;
         pushState(true);
         render();
+      });
+    }
+
+    // Compare button — show session picker
+    const compareBtn = document.getElementById('session-compare-btn');
+    if (compareBtn) {
+      compareBtn.addEventListener('click', function() {
+        const picker = document.getElementById('compare-session-picker');
+        if (!picker) return;
+        if (picker.style.display !== 'none') { picker.style.display = 'none'; return; }
+        // Build a list of sessions to pick from
+        const allEntries = usage.tokenEntries || [];
+        var sMap = {};
+        allEntries.forEach(function(e) {
+          var sid = e.sessionId || '_unknown';
+          if (sid === currentSessionId) return; // exclude current
+          if (!sMap[sid]) sMap[sid] = { count: 0, minTs: Infinity, totalTokens: 0 };
+          sMap[sid].count += 1;
+          var ts = typeof e.timestamp === 'number' ? e.timestamp : new Date(e.timestamp).getTime();
+          if (ts < sMap[sid].minTs) sMap[sid].minTs = ts;
+          sMap[sid].totalTokens += (e.rawInput || 0) + (e.outputTokens || 0);
+        });
+        var candidates = Object.entries(sMap).filter(function(e) { return e[1].count > 1 && e[0] !== '_unknown'; })
+          .sort(function(a, b) { return b[1].minTs - a[1].minTs; }).slice(0, 20);
+        var pHtml = '<div style="max-height:250px;overflow-y:auto;text-align:left">';
+        candidates.forEach(function(c) {
+          pHtml += '<div class="session-row" style="padding:8px 12px;cursor:pointer;border-bottom:1px solid var(--border)" data-action="start-compare" data-compare-sid="' + escapeHtml(c[0]) + '">'
+            + '<span style="font-size:12px">' + formatDate(new Date(c[1].minTs).toISOString()) + '</span>'
+            + '<span style="font-size:12px;color:var(--text-secondary);margin-left:8px">' + fmtCompact(c[1].totalTokens) + ' tokens · ' + c[1].count + ' turns</span>'
+            + '</div>';
+        });
+        pHtml += '</div>';
+        picker.innerHTML = pHtml;
+        picker.style.display = 'block';
+        // Bind compare session clicks
+        picker.querySelectorAll('[data-action="start-compare"]').forEach(function(el) {
+          el.addEventListener('click', function() {
+            var sid = el.dataset.compareSid;
+            if (!sid) return;
+            _compareSessionA = currentSessionId;
+            _compareSessionB = sid;
+            currentView = 'compare';
+            currentDetail = null;
+            pushState(true);
+            render();
+          });
+        });
       });
     }
   }
@@ -2551,8 +2718,20 @@
       + '<div class="file-path" style="margin-top:8px"><span class="file-path-label">' + t('configPathLabel') + '</span> ' + escapeHtml(scopePath) + '</div>'
       + '</div>'
       + renderPeriodFilter()
-      + '<div class="overview-hero' + (regressionHtml ? '' : ' solo') + '">'
+    // Health Score card
+    var healthData = computeHealthScore({
+      tokenEntries: filterByPeriod(usage.tokenEntries || [], 'timestamp', days),
+      contextStats: sd.contextStats,
+      skills: sd.skills || [], agents: sd.agents || [],
+      mcpServers: sd.mcpServers || [],
+      usage: { skills: usage.skills || [], agents: usage.agents || [], mcpCalls: usage.mcpCalls || [] },
+      calcEntryCostFn: calcEntryCost,
+    });
+    var healthHtml = renderHealthScoreCard(healthData);
+
+    html += '<div class="overview-hero' + (regressionHtml ? '' : ' solo') + '">'
       +   regressionHtml
+      +   healthHtml
       +   usageBarHtml
       + '</div>';
 
@@ -2701,6 +2880,9 @@
       html += '</div></div>';
     }
 
+    // Optimizer suggestions
+    html += renderOptimizerSection(usage, days, sd);
+
     html += '<div class="generated-at">' + t('generatedAt') + ' ' + formatDateTime(DATA.generatedAt) + ' · ' + (DATA.configDir || '') + '</div>';
 
     content.innerHTML = html;
@@ -2708,6 +2890,7 @@
     bindPeriodFilter();
 
     // Draw charts with billboard.js
+    drawHealthGauge(healthData.total);
     drawTrendChart(usage, days);
     drawDonutChart();
     // Draw canvas stacked bar for context budget
@@ -5786,6 +5969,271 @@
       + '</div>';
   }
 
+  // ── Health Score card ──
+  // billboard.js gauge (left) + factor details (right), always visible.
+
+  function drawHealthGauge(score) {
+    bb.generate({
+      bindto: '#health-gauge-chart',
+      data: {
+        columns: [['score', score]],
+        type: 'gauge',
+      },
+      gauge: {
+        label: { show: false },
+        title: String(score),
+        width: 18,
+        max: 100,
+        min: 0,
+      },
+      color: {
+        pattern: ['#ef4444', '#f97316', '#eab308', '#22c55e'],
+        threshold: { values: [40, 60, 80, 100] },
+      },
+      size: { height: 60 },
+      legend: { show: false },
+      tooltip: {
+        format: {
+          value: function(value) { return value + ' / 100'; },
+        },
+      },
+    });
+  }
+
+  function renderHealthScoreCard(healthData) {
+    var gradeLabel = { A: t('healthGradeA'), B: t('healthGradeB'), C: t('healthGradeC'), D: t('healthGradeD'), F: t('healthGradeF') };
+    var gradeColor = healthData.total >= 80 ? '#22c55e' : healthData.total >= 60 ? '#eab308' : healthData.total >= 40 ? '#f97316' : '#ef4444';
+    var factorNames = {
+      contextEfficiency: t('healthFactorContext'),
+      costTrend: t('healthFactorCostTrend'),
+      unusedItems: t('healthFactorUnused'),
+      cacheEfficiency: t('healthFactorCache'),
+      coverage: t('healthFactorCoverage'),
+    };
+    var html = '<div class="health-score-card card">'
+      + '<div class="health-score-top">'
+      + '<span class="health-score-title">' + t('healthScoreTitle') + '</span>'
+      + '<span class="health-grade" style="color:' + gradeColor + '">' + (gradeLabel[healthData.grade] || healthData.grade) + '</span>'
+      + '</div>'
+      + '<div class="health-score-inner">'
+      + '<div class="health-score-header">'
+      + '<div id="health-gauge-chart"></div>'
+      + '</div>'
+      + '<div class="usage-bar-rows">';
+    for (var i = 0; i < healthData.factors.length; i++) {
+      var f = healthData.factors[i];
+      var barColor = f.score >= 80 ? '#22c55e' : f.score >= 60 ? '#eab308' : f.score >= 40 ? '#f97316' : '#ef4444';
+      html += '<div class="usage-bar-row">'
+        + '<div class="usage-bar-row-label">' + (factorNames[f.name] || f.name) + '</div>'
+        + '<div class="usage-bar-row-track"><div class="usage-bar-row-fill" style="width:' + f.score + '%;background:' + barColor + '"></div></div>'
+        + '<div class="usage-bar-row-value">' + f.score + '</div>'
+        + '<div class="usage-bar-row-pct">' + Math.round(f.weight * 100) + '%</div>'
+        + '</div>';
+    }
+    html += '</div></div></div>';
+    return html;
+  }
+
+  // ── Session Compare View ──
+  // Side-by-side session comparison page (#compare/{id1}/{id2}).
+  function renderCompareView() {
+    const usage = getUsage();
+    const entries = usage.tokenEntries || [];
+
+    function sessionStats(sid) {
+      const se = entries.filter(function(e) { return e.sessionId === sid; });
+      if (se.length === 0) return null;
+      var totalTokens = 0, totalCost = 0, minTs = Infinity, maxTs = 0, peakInput = 0;
+      var models = {};
+      var totalInput = 0, totalOutput = 0, totalCacheRead = 0, totalCacheCreation = 0;
+      for (var i = 0; i < se.length; i++) {
+        var e = se[i];
+        totalTokens += (e.rawInput || 0) + (e.outputTokens || 0) + (e.cacheRead || 0) + (e.cacheCreation || 0);
+        totalCost += calcEntryCost(e);
+        var ts = typeof e.timestamp === 'number' ? e.timestamp : new Date(e.timestamp).getTime();
+        if (ts < minTs) minTs = ts;
+        if (ts > maxTs) maxTs = ts;
+        if ((e.inputTokens || 0) > peakInput) peakInput = e.inputTokens || 0;
+        var m = (e.model || 'unknown').replace(/^claude-/, '').replace(/-\d{8,}$/, '');
+        models[m] = (models[m] || 0) + 1;
+        totalInput += (e.rawInput || 0);
+        totalOutput += (e.outputTokens || 0);
+        totalCacheRead += (e.cacheRead || 0);
+        totalCacheCreation += (e.cacheCreation || 0);
+      }
+      return {
+        sid: sid, turnCount: se.length, totalTokens: totalTokens, totalCost: totalCost,
+        minTs: minTs, maxTs: maxTs, duration: maxTs - minTs,
+        peakInput: peakInput, models: models,
+        totalInput: totalInput, totalOutput: totalOutput,
+        totalCacheRead: totalCacheRead, totalCacheCreation: totalCacheCreation,
+      };
+    }
+
+    var sA = sessionStats(_compareSessionA);
+    var sB = sessionStats(_compareSessionB);
+    var fmtDur = function(ms) { return ms >= 3600000 ? (ms / 3600000).toFixed(1) + t('unitHour') : ms >= 60000 ? (ms / 60000).toFixed(0) + t('unitMin') : (ms / 1000).toFixed(0) + 's'; };
+
+    var html = '<div class="page-header">'
+      + '<h1>⚖️ ' + t('cmpTitle') + '</h1>'
+      + '<button class="session-back-btn" id="compare-back">← ' + t('cmpBack') + '</button>'
+      + '</div>';
+
+    if (!sA || !sB) {
+      html += '<div class="card" style="padding:24px;text-align:center;color:var(--text-secondary)">Session data not found.</div>';
+      content.innerHTML = html;
+      bindContentActions();
+      document.getElementById('compare-back').addEventListener('click', function() {
+        currentView = 'context'; pushState(true); render();
+      });
+      return;
+    }
+
+    // Diff cards
+    function diffArrow(valA, valB) {
+      if (valA === valB) return '';
+      return '<span class="compare-diff-arrow ' + (valA > valB ? 'up' : 'down') + '">' + (valA > valB ? '▲' : '▼') + '</span>';
+    }
+    function diffCard(label, valA, valB, formatter) {
+      var diff = Math.abs(valA - valB);
+      return '<div class="card compare-diff-card">'
+        + '<div class="compare-diff-label">' + label + '</div>'
+        + '<div class="compare-diff-value">' + formatter(diff) + diffArrow(valA, valB) + '</div>'
+        + '</div>';
+    }
+
+    html += '<div class="compare-summary">'
+      + diffCard(t('cmpTokenDiff'), sA.totalTokens, sB.totalTokens, fmtCompact)
+      + diffCard(t('cmpTurnDiff'), sA.turnCount, sB.turnCount, fmtCompact)
+      + diffCard(t('cmpPeakDiff'), sA.peakInput, sB.peakInput, fmtCompact)
+      + diffCard(t('cmpCostDiff'), sA.totalCost, sB.totalCost, fmtCost)
+      + '</div>';
+
+    // Tab bar for mobile
+    html += '<div class="compare-tab-bar">'
+      + '<button class="compare-tab active" data-action="compare-tab" data-tab="a">' + t('cmpSessionA') + '</button>'
+      + '<button class="compare-tab" data-action="compare-tab" data-tab="b">' + t('cmpSessionB') + '</button>'
+      + '</div>';
+
+    // Two columns
+    function renderColumn(s, label) {
+      var cacheHitRate = (s.totalCacheRead + s.totalCacheCreation) > 0
+        ? Math.round(s.totalCacheRead / (s.totalCacheRead + s.totalCacheCreation) * 100) : 0;
+      var modelList = Object.entries(s.models).sort(function(a, b) { return b[1] - a[1]; });
+      var col = '<div class="compare-column-header">' + label + ' — ' + formatDateTime(new Date(s.minTs).toISOString()) + '</div>'
+        + '<div class="card-grid">'
+        + statCard(t('totalTokens'), fmtCompact(s.totalTokens), null)
+        + statCard(t('estimatedCost'), fmtCost(s.totalCost), null, { raw: true })
+        + statCard(t('sessionDuration'), fmtDur(s.duration), null)
+        + statCard(t('cwe_sessionTurns'), fmtCompact(s.turnCount), null)
+        + '</div>'
+        + '<div class="card" style="padding:12px;margin-top:12px">'
+        + '<div style="font-size:12px;color:var(--text-secondary);margin-bottom:8px">' + t('tokenBreakdown') + '</div>'
+        + renderBarCard({
+            titleKey: null,
+            total: s.totalTokens,
+            totalChange: null,
+            rows: [
+              { label: 'Input', value: s.totalInput, change: null, color: '#4263eb' },
+              { label: 'Output', value: s.totalOutput, change: null, color: '#22c55e' },
+              { label: 'Cache Read', value: s.totalCacheRead, change: null, color: '#0891b2' },
+              { label: 'Cache Create', value: s.totalCacheCreation, change: null, color: '#f97316' },
+            ]
+          })
+        + '</div>'
+        + '<div style="margin-top:8px;font-size:12px;color:var(--text-secondary)">Cache hit: ' + cacheHitRate + '%</div>'
+        + '<div style="margin-top:8px">';
+      modelList.forEach(function(pair) {
+        col += '<span class="model-badge">' + escapeHtml(pair[0]) + ' (' + pair[1] + ')</span> ';
+      });
+      col += '</div>'
+        + '<div style="margin-top:12px">'
+        + '<a href="#context/' + encodeURIComponent(s.sid) + '" style="font-size:13px;color:var(--accent)">' + t('contextExplorer') + ' →</a>'
+        + ' · <a href="#session/' + encodeURIComponent(s.sid) + '" style="font-size:13px;color:var(--accent)">' + t('sessionDetail') + ' →</a>'
+        + '</div>';
+      return col;
+    }
+
+    html += '<div class="compare-container">'
+      + '<div class="compare-column" id="compare-col-a">' + renderColumn(sA, t('cmpSessionA')) + '</div>'
+      + '<div class="compare-column" id="compare-col-b">' + renderColumn(sB, t('cmpSessionB')) + '</div>'
+      + '</div>';
+
+    content.innerHTML = html;
+    bindContentActions();
+
+    // Back button
+    document.getElementById('compare-back').addEventListener('click', function() {
+      currentView = 'context'; pushState(true); render();
+    });
+
+    // Mobile tab switching
+    content.querySelectorAll('[data-action="compare-tab"]').forEach(function(btn) {
+      btn.addEventListener('click', function() {
+        var tab = btn.dataset.tab;
+        content.querySelectorAll('.compare-tab').forEach(function(b) { b.classList.remove('active'); });
+        btn.classList.add('active');
+        var colA = document.getElementById('compare-col-a');
+        var colB = document.getElementById('compare-col-b');
+        if (colA) colA.classList.toggle('hidden', tab !== 'a');
+        if (colB) colB.classList.toggle('hidden', tab !== 'b');
+      });
+    });
+  }
+
+  // ── Optimizer section ──
+  // Rule-based suggestions for #overview, powered by context-optimizer.mjs.
+
+  function renderOptimizerSection(usage, days, sd) {
+    var suggestions = computeSuggestions({
+      tokenEntries: filterByPeriod(usage.tokenEntries || [], 'timestamp', days),
+      contextStats: sd.contextStats,
+      skills: sd.skills || [], agents: sd.agents || [],
+      mcpServers: sd.mcpServers || [],
+      memory: sd.memory || [],
+      usage: { skills: usage.skills || [], agents: usage.agents || [], mcpCalls: usage.mcpCalls || [] },
+      dismissed: [],
+      calcEntryCostFn: calcEntryCost,
+    });
+
+    if (suggestions.length === 0) return '';
+
+    var html = '<div class="section optimizer-section">'
+      + '<div class="section-title">' + t('optTitle') + ' <span class="section-title-sub">' + t('optDesc') + '</span></div>';
+
+    if (suggestions.length === 0) {
+      html += '<div class="card" style="padding:16px;text-align:center;color:var(--text-secondary)">' + t('optEmpty') + '</div>';
+    } else {
+      html += '<div class="optimizer-grid">';
+      for (var i = 0; i < suggestions.length; i++) {
+        var s = suggestions[i];
+        var desc = t(s.descKey);
+        for (var j = 0; j < s.descArgs.length; j++) {
+          desc = desc.replace('{' + j + '}', escapeHtml(s.descArgs[j]));
+        }
+        html += '<div class="card optimizer-card" data-severity="' + s.severity + '">'
+          + '<div class="optimizer-card-header">'
+          + '<span class="optimizer-card-title">' + t(s.titleKey) + '</span>'
+          + '<span class="optimizer-severity" data-sev="' + s.severity + '">' + s.severity + '</span>'
+          + '</div>'
+          + '<div class="optimizer-card-desc">' + desc + '</div>';
+        if (s.savingsTokens > 0) {
+          html += '<div class="optimizer-savings">'
+            + t('optSavingsTokens', fmtCompact(s.savingsTokens));
+          if (s.savingsCost > 0.001) {
+            html += ' · ' + t('optSavingsCost', fmtCost(s.savingsCost));
+          }
+          html += '</div>';
+        }
+        html += '</div>';
+      }
+      html += '</div>';
+    }
+
+    html += '</div>';
+    return html;
+  }
+
   // ── Detail-page helpers ──
   // These extract the repeated blocks used by renderSkillDetail,
   // renderAgentDetail, renderMemoryDetail, etc. Each helper renders nothing
@@ -5837,6 +6285,9 @@
   function renderBarCard(opts) {
     const total = opts.total || 0;
     const rows = opts.rows || [];
+    const valueFmt = opts.valueFmt || fmtCompact;
+    const totalFmt = opts.totalFmt || fmtCompact;
+    const labelStyle = opts.labelWidth ? ' style="flex:0 0 ' + opts.labelWidth + 'px;width:' + opts.labelWidth + 'px;min-width:0"' : '';
     const changeBadge = (change) => {
       if (change === null || change === undefined) return '';
       const cls = change > 0 ? 'positive' : change < 0 ? 'negative' : 'neutral';
@@ -5863,7 +6314,7 @@
       +   '<div class="usage-bar-head-label">' + t(opts.titleKey) + '</div>'
       +   '<div class="usage-bar-head-right">'
       +     '<div class="usage-bar-head-value">'
-      +       '<span class="usage-bar-total">' + fmtCompact(total) + '</span>'
+      +       '<span class="usage-bar-total">' + totalFmt(total) + '</span>'
       +       changeBadge(opts.totalChange)
       +     '</div>'
       +     '<div class="usage-bar-head-sub">' + t('vsPrevPeriodCaption') + '</div>'
@@ -5875,16 +6326,19 @@
         +   '<span class="usage-bar-scale-desc">' + t('barScaleLogDesc') + '</span>'
         + '</div>';
     }
+    if (opts.summaryHtml) {
+      html += '<div class="usage-bar-summary">' + opts.summaryHtml + '</div>';
+    }
     html += '<div class="usage-bar-rows">';
     for (const r of rows) {
       const linearPct = total > 0 ? (r.value / total) * 100 : 0;
       const barWidth = computeBarWidth(r.value, total, scale);
       html += '<div class="usage-bar-row">'
-        + '<div class="usage-bar-row-label">' + escapeHtml(String(r.label)) + '</div>'
+        + '<div class="usage-bar-row-label"' + labelStyle + '>' + (r.labelHtml || escapeHtml(String(r.label))) + '</div>'
         + '<div class="usage-bar-row-track">'
         +   '<div class="usage-bar-row-fill" style="width:' + barWidth.toFixed(1) + '%;background:' + r.color + '"></div>'
         + '</div>'
-        + '<div class="usage-bar-row-value">' + fmtCompact(r.value) + '</div>'
+        + '<div class="usage-bar-row-value">' + valueFmt(r.value) + '</div>'
         + '<div class="usage-bar-row-pct">' + (linearPct < 1 && linearPct > 0 ? '<1' : Math.round(linearPct)) + '%</div>'
         + '<div class="usage-bar-row-change">' + changeBadge(r.change) + '</div>'
         + '</div>';
@@ -6079,6 +6533,43 @@
         }
         pushState(true);
         render();
+      });
+    });
+    // Bookmark toggle
+    content.querySelectorAll('[data-action="toggle-bookmark"]').forEach((el) => {
+      el.addEventListener('click', (e) => {
+        e.stopPropagation();
+        var sid = el.dataset.sessionId;
+        if (!sid) return;
+        var map = _loadBm();
+        map = toggleStar(map, sid);
+        _saveBm(map);
+        var starred = map[sid] && map[sid].starred;
+        el.classList.toggle('active', starred);
+        el.title = starred ? t('bmUnstar') : t('bmStar');
+      });
+    });
+    // Bookmark tag input
+    content.querySelectorAll('[data-action="set-tags"]').forEach((el) => {
+      var handler = function() {
+        var sid = el.dataset.sessionId;
+        if (!sid) return;
+        var tags = el.value.split(',').map(function(s) { return s.trim(); }).filter(Boolean);
+        var map = _loadBm();
+        map = setTags(map, sid, tags);
+        _saveBm(map);
+      };
+      el.addEventListener('blur', handler);
+      el.addEventListener('keydown', function(e) { if (e.key === 'Enter') { e.preventDefault(); handler(); } });
+    });
+    // Bookmark filter
+    content.querySelectorAll('[data-action="filter-bookmarks"]').forEach((el) => {
+      el.addEventListener('click', () => {
+        var filter = el.dataset.filter;
+        _bmFilter = filter || 'all';
+        skipScrollReset = true;
+        renderContent();
+        skipScrollReset = false;
       });
     });
     // Team member toggle

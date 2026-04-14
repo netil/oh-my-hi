@@ -451,30 +451,40 @@ body.dark .sidebar-period-range {
    the split works regardless of sidebar state. */
 .overview-hero {
   container-type: inline-size;
-  display: flex;
-  flex-wrap: wrap;
+  display: grid;
+  grid-template-columns: 280px 280px 1fr;
   gap: 16px;
   margin-bottom: 28px;
 }
-.overview-hero > .regression-card {
-  flex: 0 1 280px;
-  min-width: 220px;
-}
+.overview-hero > .regression-card,
+.overview-hero > .health-score-card,
 .overview-hero > .usage-bar-card {
-  flex: 1 1 420px;
-  min-width: 320px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  min-height: 0;
+  padding: 16px 18px;
 }
-.overview-hero.solo > .usage-bar-card {
-  flex: 1 1 100%;
-  max-width: 100%;
+/* No regression → health-score + usage-bar (2 children) */
+.overview-hero.solo {
+  grid-template-columns: 280px 1fr;
 }
-/* Narrow container: stack both cards full-width. */
+/* Single child (e.g. tokens page) → full width */
+.overview-hero.solo > :only-child {
+  grid-column: 1 / -1;
+}
+/* Narrow container: stack all cards full-width, one per row. */
 @container (max-width: 720px) {
-  .overview-hero > .regression-card,
-  .overview-hero > .usage-bar-card {
-    flex: 1 1 100%;
-    min-width: 0;
-    max-width: none;
+  .overview-hero,
+  .overview-hero.solo {
+    grid-template-columns: 1fr;
+  }
+}
+/* Viewport fallback for browsers / layouts where container query doesn't trigger. */
+@media (max-width: 1024px) {
+  .overview-hero,
+  .overview-hero.solo {
+    grid-template-columns: 1fr;
   }
 }
 
@@ -561,6 +571,25 @@ body.dark .sidebar-period-range {
   flex-direction: column;
   gap: 10px;
 }
+.usage-bar-summary {
+  display: flex;
+  gap: 16px;
+  font-size: 12px;
+  color: var(--text-secondary);
+  margin-bottom: 4px;
+}
+.usage-bar-summary strong {
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+.usage-bar-summary-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  margin-right: 4px;
+  vertical-align: middle;
+}
 .usage-bar-row {
   display: flex;
   align-items: center;
@@ -576,6 +605,7 @@ body.dark .sidebar-period-range {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  text-align: right;
 }
 .usage-bar-row-track {
   flex: 1 1 auto;
@@ -2480,4 +2510,286 @@ body.dark .bb-tooltip .value {
   .chart-section-small {
     flex: 1;
   }
+}
+
+/* ── Health Score card ── */
+.health-score-card {
+  container-type: inline-size;
+  overflow: hidden;
+}
+.health-score-top {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+.health-score-title {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text);
+}
+.health-grade {
+  font-size: 12px;
+  font-weight: 700;
+}
+/* Narrow (3-col): gauge top, bars bottom */
+.health-score-inner {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: 100%;
+}
+.health-score-header {
+  display: flex;
+  justify-content: center;
+}
+#health-gauge-chart {
+  width: 100%;
+}
+#health-gauge-chart .bb {
+  margin-top: -12px;
+  margin-bottom: -24px;
+}
+#health-gauge-chart .bb-chart-arcs-gauge-min,
+#health-gauge-chart .bb-chart-arcs-gauge-max {
+  display: none;
+}
+#health-gauge-chart .bb-chart-arcs-title,
+#health-gauge-chart text.bb-chart-arcs-gauge-title {
+  font-size: 18px !important;
+  font-weight: 700 !important;
+  fill: var(--text) !important;
+}
+.health-score-card .usage-bar-rows {
+  gap: 3px;
+  min-width: 0;
+}
+.health-score-card .usage-bar-row {
+  gap: 3px;
+  font-size: 11px;
+}
+.health-score-card .usage-bar-row-label {
+  flex: 0 0 76px;
+  width: 76px;
+  min-width: unset;
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.health-score-card .usage-bar-row-track {
+  flex: 1 1 auto;
+  height: 7px;
+}
+.health-score-card .usage-bar-row-value {
+  flex: 0 0 24px;
+  font-size: 11px;
+}
+.health-score-card .usage-bar-row-pct {
+  flex: 0 0 28px;
+  font-size: 11px;
+}
+.health-score-card .usage-bar-row-change {
+  display: none;
+}
+/* Wide (1-col stacked): gauge left, bars right */
+@container (min-width: 380px) {
+  .health-score-inner {
+    flex-direction: row;
+    align-items: center;
+    gap: 12px;
+    max-width: none;
+    margin: 0;
+  }
+  .health-score-header {
+    flex-shrink: 0;
+    width: 150px;
+  }
+  .health-score-card .usage-bar-rows {
+    flex: 1;
+  }
+}
+
+/* ── Optimizer section ── */
+.optimizer-section { margin-top: 20px; }
+.optimizer-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  gap: 12px;
+}
+.optimizer-card {
+  padding: 16px;
+  border-left: 4px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.optimizer-card[data-severity="high"] { border-left-color: #ef4444; }
+.optimizer-card[data-severity="medium"] { border-left-color: #f97316; }
+.optimizer-card[data-severity="low"] { border-left-color: #3b82f6; }
+.optimizer-card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.optimizer-card-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text);
+}
+.optimizer-severity {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  padding: 2px 6px;
+  border-radius: var(--radius-sm);
+  color: #fff;
+}
+.optimizer-severity[data-sev="high"] { background: #ef4444; }
+.optimizer-severity[data-sev="medium"] { background: #f97316; }
+.optimizer-severity[data-sev="low"] { background: #3b82f6; }
+.optimizer-card-desc {
+  font-size: 13px;
+  color: var(--text-secondary);
+  line-height: 1.5;
+}
+.optimizer-savings {
+  font-size: 12px;
+  color: var(--text-secondary);
+  background: var(--bg);
+  padding: 4px 8px;
+  border-radius: var(--radius-sm);
+  display: inline-block;
+}
+
+/* ── Session Bookmark & Tag ── */
+.bookmark-star {
+  cursor: pointer;
+  font-size: 16px;
+  line-height: 1;
+  transition: transform var(--transition);
+  user-select: none;
+}
+.bookmark-star:hover { transform: scale(1.2); }
+.bookmark-star.active { color: #eab308; }
+.bookmark-star:not(.active) { color: var(--text-secondary); opacity: 0.4; }
+.bookmark-filter-bar {
+  display: flex;
+  gap: 4px;
+  margin-bottom: 12px;
+}
+.bookmark-filter-btn {
+  font-size: 12px;
+  padding: 4px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--card-bg);
+  cursor: pointer;
+  color: var(--text-secondary);
+  transition: background var(--transition), color var(--transition);
+}
+.bookmark-filter-btn.active {
+  background: var(--accent);
+  color: #fff;
+  border-color: var(--accent);
+}
+.bookmark-tag-pills {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+.bookmark-tag {
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 10px;
+  background: var(--bg);
+  color: var(--text-secondary);
+  border: 1px solid var(--border);
+}
+.bookmark-tag-input {
+  font-size: 12px;
+  padding: 4px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--card-bg);
+  color: var(--text);
+  width: 200px;
+  outline: none;
+}
+.bookmark-tag-input:focus {
+  border-color: var(--accent);
+}
+
+/* ── Session Compare ── */
+.compare-container {
+  display: flex;
+  gap: 20px;
+  min-height: 400px;
+}
+.compare-column {
+  flex: 1;
+  min-width: 0;
+}
+.compare-column-header {
+  font-size: 14px;
+  font-weight: 600;
+  margin-bottom: 12px;
+  padding: 8px 12px;
+  background: var(--bg);
+  border-radius: var(--radius-sm);
+  color: var(--text);
+}
+.compare-summary {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+  gap: 12px;
+  margin-bottom: 20px;
+}
+.compare-diff-card {
+  padding: 12px;
+  text-align: center;
+}
+.compare-diff-label {
+  font-size: 12px;
+  color: var(--text-secondary);
+  margin-bottom: 4px;
+}
+.compare-diff-value {
+  font-size: 20px;
+  font-weight: 700;
+  color: var(--text);
+}
+.compare-diff-arrow {
+  font-size: 12px;
+  margin-left: 4px;
+}
+.compare-diff-arrow.up { color: #ef4444; }
+.compare-diff-arrow.down { color: #22c55e; }
+.compare-tab-bar {
+  display: none;
+  gap: 4px;
+  margin-bottom: 12px;
+}
+.compare-tab {
+  flex: 1;
+  padding: 8px;
+  text-align: center;
+  font-size: 13px;
+  font-weight: 600;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--card-bg);
+  cursor: pointer;
+  color: var(--text-secondary);
+}
+.compare-tab.active {
+  background: var(--accent);
+  color: #fff;
+  border-color: var(--accent);
+}
+@media (max-width: 768px) {
+  .compare-container { flex-direction: column; }
+  .compare-tab-bar { display: flex; }
+  .compare-column.hidden { display: none; }
 }

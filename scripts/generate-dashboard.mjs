@@ -761,6 +761,9 @@ function writeHtml(indexPath, systemLocale) {
     'cost-projection.mjs',
     'canvas-bars.mjs',
     'regression.mjs',
+    'health-score.mjs',
+    'context-optimizer.mjs',
+    'session-bookmarks.mjs',
   ].map(f => stripExports(fs.readFileSync(path.join(TEMPLATES, f), 'utf-8'))).join('\n');
 
   const rawAppJs = (INLINED_MODULES + '\n' + fs.readFileSync(path.join(TEMPLATES, 'app.js'), 'utf-8'))
@@ -809,7 +812,7 @@ function needsHtmlRebuild(indexPath) {
     if (!html.includes(pkg.version)) return true;
     // Rebuild if any template file is newer than the output
     const outMtime = fs.statSync(indexPath).mtimeMs;
-    const templateFiles = ['app.js', 'styles.css', 'dashboard.html', 'session-events.mjs', 'context-example.mjs', 'cost-projection.mjs', 'canvas-bars.mjs', 'regression.mjs'].map(f => path.join(TEMPLATES, f));
+    const templateFiles = ['app.js', 'styles.css', 'dashboard.html', 'session-events.mjs', 'context-example.mjs', 'cost-projection.mjs', 'canvas-bars.mjs', 'regression.mjs', 'health-score.mjs', 'context-optimizer.mjs', 'session-bookmarks.mjs'].map(f => path.join(TEMPLATES, f));
     return templateFiles.some(f => fs.existsSync(f) && fs.statSync(f).mtimeMs > outMtime);
   } catch { return true; }
 }
