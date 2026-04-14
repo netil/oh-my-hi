@@ -1,5 +1,26 @@
 # Changelog
 
+## [0.9.0] - 2026-04-14
+
+### Added
+- **Harness Health Score** (`#overview`) — billboard.js gauge (0–100) with 5 weighted factors: Context Efficiency (30%), Cost Trend (25%), Unused Items (20%), Cache Efficiency (15%), Skill Coverage (10%). Grade A–F. Cost Trend shows N/A when no previous-period data is available and is excluded from the weighted total.
+- **Context Optimizer** — 8 rule-based suggestion cards on `#overview`: unused MCP, unused skills, unused memory, large CLAUDE.md, low cache hit rate, high-cost skill, Opus overuse, context bloat. Dismiss removed — cards always show current state.
+- **Session Bookmark & Tag** (`#tokens-session`) — star toggle and free-text tags per session, persisted in localStorage. Filter bar: All / Starred / tag.
+- **Session Compare** (`#compare/{id1}/{id2}`) — side-by-side diff of two sessions: tokens, turns, peak context, cost. Mobile tab-switch layout.
+- **Cache TTL Impact** (`#tokens`) — detects cost waste from short cache TTL. Shows best/worst 7-day rolling efficiency stat cards, estimated waste cost (red), and a daily cache efficiency area chart with best/worst reference lines.
+- **`cache-ttl.mjs`** — pure module for cache TTL math: `buildDailyCacheMap`, `computeRollingEfficiency`, `computeWasteCost`, `computeRollingEfficiencySeries`. 15 unit tests.
+- **Bar card sub-pages** — Token/Cost/Prompt/Session sub-pages now use `renderBarCard` (overview-hero solo) with per-row change badges. Labels shortened (Input/Output/Cache, Short/Medium/Long). Summary range line above prompt/session bars.
+- **Scroll position preserved** on date range / period change — page no longer jumps to top when switching periods.
+
+### Changed
+- **Health Score Cost Trend** shows N/A (excluded from weighted sum) when `days === 0` or no previous-period data exists. Help icon (?) with custom tooltip explains the logic.
+- **`renderBarCard`** gains `labelWidth`, `summaryHtml`, `valueFmt`, `totalFmt` options. Labels right-aligned.
+- **Optimizer memory card** shows filename instead of Korean `name` field.
+- **Health Score labels** abbreviated for English: `Ctx Eff.`, `Unused`, `Cache Eff.`, `Coverage`.
+
+### Tests
+- **346 → 364** (+18): `cache-ttl.test.mjs` (15), `health-score.test.mjs` +3 (N/A cost trend, weight exclusion)
+
 ## [0.8.0] - 2026-04-11
 
 ### Added

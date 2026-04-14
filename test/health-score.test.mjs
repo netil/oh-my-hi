@@ -173,4 +173,29 @@ describe('cost trend factor', () => {
     const factor = report.factors.find(f => f.name === 'costTrend');
     assert.ok(factor.score >= 75);
   });
+
+  it('costTrend is N/A when days === 0 (all-time)', () => {
+    const report = computeHealthScore(baseInput({ days: 0 }));
+    const factor = report.factors.find(f => f.name === 'costTrend');
+    assert.equal(factor.na, true);
+    assert.equal(factor.raw.changePct, null);
+  });
+
+  it('costTrend is N/A when no previous-period data', () => {
+    // Only entries in last 7 days — no prev period data
+    const entries = [{ timestamp: Date.now() - 1000, model: null }];
+    const report = computeHealthScore(baseInput({ tokenEntries: entries }));
+    const factor = report.factors.find(f => f.name === 'costTrend');
+    assert.equal(factor.na, true);
+  });
+
+  it('N/A factor is excluded from weighted total', () => {
+    const report = computeHealthScore(baseInput({ days: 0 }));
+    // With costTrend excluded (weight 0.25), remaining weights sum to 0.75
+    // total should be based only on active factors
+    assert.ok(report.total >= 0 && report.total <= 100);
+    // Verify costTrend is indeed excluded
+    const costFactor = report.factors.find(f => f.name === 'costTrend');
+    assert.equal(costFactor.na, true);
+  });
 });

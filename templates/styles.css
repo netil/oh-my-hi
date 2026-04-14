@@ -965,6 +965,12 @@ body.dark .period-btn.active[data-tooltip]:hover::after {
   color: var(--text-secondary);
 }
 
+.stat-note {
+  font-size: 11px;
+  color: var(--text-secondary);
+  margin-top: 4px;
+  line-height: 1.4;
+}
 .stat-badge {
   font-size: 12px;
   font-weight: 600;
@@ -2323,6 +2329,26 @@ body.dark .bb-tooltip .value {
 }
 .budget-projection-diff.over { color: #e74c3c; font-weight: 600; }
 .budget-projection-diff.under { color: #27ae60; font-weight: 600; }
+.cache-best-line line {
+  stroke: #22c55e !important;
+  stroke-dasharray: 6 3;
+  stroke-width: 1.5;
+}
+.cache-best-line text {
+  fill: #22c55e !important;
+  font-size: 11px;
+  font-weight: 600;
+}
+.cache-worst-line line {
+  stroke: #ef4444 !important;
+  stroke-dasharray: 6 3;
+  stroke-width: 1.5;
+}
+.cache-worst-line text {
+  fill: #ef4444 !important;
+  font-size: 11px;
+  font-weight: 600;
+}
 .budget-grid-line line {
   stroke: #4263eb !important;
   stroke-dasharray: 6 3;
@@ -2513,6 +2539,42 @@ body.dark .bb-tooltip .value {
 }
 
 /* ── Health Score card ── */
+.health-factor-tooltip {
+  position: fixed;
+  background: var(--text);
+  color: #fff;
+  font-size: 11px;
+  padding: 6px 10px;
+  border-radius: 4px;
+  white-space: normal;
+  width: 220px;
+  line-height: 1.5;
+  z-index: 2000;
+  pointer-events: none;
+}
+body.dark .health-factor-tooltip {
+  color: #1a1b1e;
+}
+.health-factor-help {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 13px;
+  height: 13px;
+  border-radius: 50%;
+  background: var(--border);
+  color: var(--text-secondary);
+  font-size: 9px;
+  font-weight: 700;
+  cursor: help;
+  margin-left: 3px;
+  vertical-align: middle;
+  flex-shrink: 0;
+}
+.health-factor-help:hover {
+  background: var(--accent);
+  color: #fff;
+}
 .health-score-card {
   container-type: inline-size;
   overflow: hidden;

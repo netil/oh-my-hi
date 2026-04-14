@@ -1065,14 +1065,22 @@
           compareMode = !compareMode;
           localStorage.setItem('harness-compare', String(compareMode));
           renderSidebarPeriod();
+          const scrollPos1 = content.scrollTop;
+          skipScrollReset = true;
           renderContent();
+          skipScrollReset = false;
+          requestAnimationFrame(() => { content.scrollTop = scrollPos1; });
           return;
         }
         customDateRange = null;
         currentPeriod = parseInt(val);
         localStorage.setItem('harness-period', String(currentPeriod));
         renderSidebarPeriod();
+        const scrollPos2 = content.scrollTop;
+        skipScrollReset = true;
         renderContent();
+        skipScrollReset = false;
+        requestAnimationFrame(() => { content.scrollTop = scrollPos2; });
       });
     });
   }
@@ -1208,7 +1216,11 @@
         localStorage.setItem('harness-period', String(currentPeriod));
         overlay.remove();
         renderSidebarPeriod();
+        const scrollPosCal = content.scrollTop;
+        skipScrollReset = true;
         renderContent();
+        skipScrollReset = false;
+        requestAnimationFrame(() => { content.scrollTop = scrollPosCal; });
         return;
       }
     });
@@ -1580,10 +1592,35 @@
       html += '</div>';
     }
 
+    // Cache TTL Impact
+    const { dailyCacheMap, sortedDates } = buildDailyCacheMap(tokenEntries);
+    if (sortedDates.length >= 3) {
+      const { bestEff, worstEff, bestEffPct, worstEffPct } = computeRollingEfficiency(dailyCacheMap, sortedDates);
+      const { wasteCost } = computeWasteCost(
+        { totalCacheRead, totalCacheCreation, bestEff },
+        tokenEntries, MODEL_PRICING, resolvePricingKey
+      );
+
+      if (wasteCost > 0.001 || bestEff > 0) {
+        html += '<div class="section"><div class="section-title">' + t('cacheTtlImpact')
+          + ' <span class="section-title-sub">' + t('cacheTtlImpactDesc') + '</span></div>'
+          + '<div class="card-grid">'
+          + statCard(t('cacheBestEfficiency'), bestEffPct + '%', null, { raw: true, badge: t('cacheHitRate'), note: t('cacheBestEfficiencyNote') })
+          + statCard(t('cacheWorstEfficiency'), worstEffPct + '%', null, { raw: true, valueColor: '#ef4444', badge: t('cacheHitRate'), note: t('cacheWorstEfficiencyNote') })
+          + statCard(t('cacheWasteCost'), fmtCost(wasteCost), null, { raw: true, valueColor: '#ef4444', note: t('cacheWasteCostNote') })
+          + '</div>'
+          + '<div class="section-title" style="margin-top:16px">' + t('cacheEfficiencyTrend')
+          + ' <span class="section-title-sub">' + t('cacheEfficiencyTrendDesc') + '</span></div>'
+          + '<div class="card chart-card"><div id="cache-efficiency-chart"></div></div>'
+          + '</div>';
+      }
+    }
+
     html += '<div class="generated-at">' + t('generatedAt') + ' ' + formatDateTime(DATA.generatedAt) + ' · ' + (DATA.configDir || '') + '</div>';
     content.innerHTML = html;
     bindContentActions();
     drawHourlyDistChart(tokenEntries);
+    drawCacheEfficiencyChart(dailyCacheMap, sortedDates);
   }
 
   // ── Tokens: Session sub-page ──
@@ -1935,6 +1972,64 @@
     }
 
     return tips;
+  }
+
+  function drawCacheEfficiencyChart(dailyCacheMap, sortedDates) {
+    const el = document.getElementById('cache-efficiency-chart');
+    if (!el || !sortedDates || sortedDates.length < 2) return;
+
+    // 7-day rolling efficiency
+    const rollingEff = computeRollingEfficiencySeries(dailyCacheMap, sortedDates);
+
+    const dailyEff = sortedDates.map((dk) => {
+      const v = dailyCacheMap[dk];
+      return (v.read + v.creation) > 0 ? Math.round((v.read / (v.read + v.creation)) * 100) : 0;
+    });
+
+    const bestEff = Math.max(...rollingEff.filter((v) => v > 0));
+    const minEff = Math.min(...rollingEff.filter((v) => v > 0));
+    const yMin = Math.max(0, Math.floor((minEff - 10) / 10) * 10); // round down to nearest 10, floor at 0
+
+    bb.generate({
+      bindto: '#cache-efficiency-chart',
+      data: {
+        x: 'x',
+        columns: [
+          ['x', ...sortedDates.map((d) => new Date(d))],
+          [t('cacheEfficiencyUnit'), ...dailyEff],
+          ['7d avg', ...rollingEff],
+        ],
+        types: { [t('cacheEfficiencyUnit')]: 'area', '7d avg': 'line' },
+        colors: { [t('cacheEfficiencyUnit')]: '#4263eb', '7d avg': '#e8590c' },
+      },
+      axis: {
+        x: { type: 'timeseries', tick: { format: '%m-%d', count: 8, outer: false } },
+        y: {
+          min: yMin, max: 100,
+          padding: { bottom: 0, top: 0 },
+          tick: { count: 5, format: (v) => +v.toFixed(2) + '%' },
+        },
+      },
+      grid: {
+        y: { lines: [
+          { value: bestEff, text: t('cacheBestEfficiency') + ' ' + bestEff + '%', class: 'cache-best-line',  position: 'start' },
+          { value: minEff,  text: t('cacheWorstEfficiency') + ' ' + minEff + '%',  class: 'cache-worst-line', position: 'start' },
+        ] },
+      },
+      point: { show: false },
+      legend: { show: true },
+      area: { linearGradient: true },
+      size: { height: 180 },
+      clipPath: false,
+      tooltip: { format: { title: fmtChartTooltipTitle, value: (v) => v + '%' } },
+      onrendered() {
+        const gridLines = el.querySelector('.bb-grid.bb-grid-lines');
+        if (gridLines) gridLines.removeAttribute('clip-path');
+        el.querySelectorAll('.bb-ygrid-line > text').forEach((node) => {
+          node.setAttribute('dy', '12');
+        });
+      },
+    });
   }
 
   function drawHourlyDistChart(tokenEntries) {
@@ -2726,6 +2821,7 @@
       mcpServers: sd.mcpServers || [],
       usage: { skills: usage.skills || [], agents: usage.agents || [], mcpCalls: usage.mcpCalls || [] },
       calcEntryCostFn: calcEntryCost,
+      days: days,
     });
     var healthHtml = renderHealthScoreCard(healthData);
 
@@ -3338,11 +3434,13 @@
         + '<span class="stat-compare-value">' + opts.compare.value + '</span>'
         + '</div>';
     }
+    const valueStyle = (opts && opts.valueColor) ? ' style="color:' + opts.valueColor + '"' : '';
+    const noteHtml = (opts && opts.note) ? '<div class="stat-note">' + opts.note + '</div>' : '';
     return '<div class="stat-card">'
       + '<div class="stat-label">' + label + '</div>'
-      + '<div class="stat-value">' + displayValue + '</div>'
+      + '<div class="stat-value"' + valueStyle + '>' + displayValue + '</div>'
       + rawHtml
-      + changeHtml + badgeHtml + compareHtml + '</div>';
+      + changeHtml + badgeHtml + compareHtml + noteHtml + '</div>';
   }
 
   function buildActivityMap(items, valueFn) {
@@ -6005,7 +6103,8 @@
     var gradeColor = healthData.total >= 80 ? '#22c55e' : healthData.total >= 60 ? '#eab308' : healthData.total >= 40 ? '#f97316' : '#ef4444';
     var factorNames = {
       contextEfficiency: t('healthFactorContext'),
-      costTrend: t('healthFactorCostTrend'),
+      costTrend: t('healthFactorCostTrend')
+        + '<span class="health-factor-help" data-tooltip="' + escapeHtml(t('healthCostTrendHelp')) + '">?</span>',
       unusedItems: t('healthFactorUnused'),
       cacheEfficiency: t('healthFactorCache'),
       coverage: t('healthFactorCoverage'),
@@ -6023,10 +6122,13 @@
     for (var i = 0; i < healthData.factors.length; i++) {
       var f = healthData.factors[i];
       var barColor = f.score >= 80 ? '#22c55e' : f.score >= 60 ? '#eab308' : f.score >= 40 ? '#f97316' : '#ef4444';
+      var isNa = f.na === true;
       html += '<div class="usage-bar-row">'
         + '<div class="usage-bar-row-label">' + (factorNames[f.name] || f.name) + '</div>'
-        + '<div class="usage-bar-row-track"><div class="usage-bar-row-fill" style="width:' + f.score + '%;background:' + barColor + '"></div></div>'
-        + '<div class="usage-bar-row-value">' + f.score + '</div>'
+        + '<div class="usage-bar-row-track">'
+        + (isNa ? '' : '<div class="usage-bar-row-fill" style="width:' + f.score + '%;background:' + barColor + '"></div>')
+        + '</div>'
+        + '<div class="usage-bar-row-value">' + (isNa ? t('healthNa') : f.score) + '</div>'
         + '<div class="usage-bar-row-pct">' + Math.round(f.weight * 100) + '%</div>'
         + '</div>';
     }
@@ -6570,6 +6672,28 @@
         skipScrollReset = true;
         renderContent();
         skipScrollReset = false;
+      });
+    });
+    // Health factor help tooltip
+    content.querySelectorAll('.health-factor-help[data-tooltip]').forEach((el) => {
+      let tipEl = null;
+      el.addEventListener('mouseenter', () => {
+        tipEl = document.createElement('div');
+        tipEl.className = 'health-factor-tooltip';
+        tipEl.textContent = el.dataset.tooltip;
+        document.body.appendChild(tipEl);
+        const r = el.getBoundingClientRect();
+        const tw = tipEl.offsetWidth, th = tipEl.offsetHeight;
+        let left = r.left + (r.width - tw) / 2;
+        let top = r.top - th - 6;
+        if (left < 4) left = 4;
+        if (left + tw > window.innerWidth - 4) left = window.innerWidth - 4 - tw;
+        if (top < 4) top = r.bottom + 6;
+        tipEl.style.left = left + 'px';
+        tipEl.style.top = top + 'px';
+      });
+      el.addEventListener('mouseleave', () => {
+        if (tipEl) { tipEl.remove(); tipEl = null; }
       });
     });
     // Team member toggle

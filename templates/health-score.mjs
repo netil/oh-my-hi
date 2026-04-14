@@ -8,7 +8,7 @@
 
 /**
  * @typedef {{ name: string, score: number, weight: number,
- *   raw: any, suggestionKey: string }} HealthFactor
+ *   raw: any, suggestionKey: string, na?: boolean }} HealthFactor
  */
 
 /**
@@ -30,7 +30,8 @@
  *   usage: { skills?: Array<{ name: string, timestamp: number|string }>,
  *     agents?: Array<{ name: string, timestamp: number|string }>,
  *     mcpCalls?: Array<{ name: string, timestamp: number|string }> },
- *   calcEntryCostFn?: (entry: any) => number
+ *   calcEntryCostFn?: (entry: any) => number,
+ *   days?: number
  * }} HealthInput
  */
 
@@ -103,7 +104,15 @@ function scoreContextEfficiency(data) {
  * @param {HealthInput} data
  * @returns {HealthFactor}
  */
+/** @returns {HealthFactor} */
+function naCostTrend() {
+  return { name: 'costTrend', score: 0, weight: WEIGHTS.costTrend,
+    na: true, raw: { currentCost: 0, prevCost: 0, changePct: null }, suggestionKey: 'healthSugCostTrend' };
+}
+
 function scoreCostTrend(data) {
+  // No comparison baseline available — exclude from scoring
+  if (data.days === 0) return naCostTrend();
   const entries = data.tokenEntries || [];
   const costFn = data.calcEntryCostFn || (() => 0);
   const now = Date.now();
@@ -123,10 +132,7 @@ function scoreCostTrend(data) {
       prevCount++;
     }
   }
-  if (prevCount === 0) {
-    return { name: 'costTrend', score: 75, weight: WEIGHTS.costTrend,
-      raw: { currentCost, prevCost, changePct: 0 }, suggestionKey: 'healthSugCostTrend' };
-  }
+  if (prevCount === 0) return naCostTrend();
   const currentAvg = currentCost / 7;
   const prevAvg = prevCost / 7;
   const changePct = prevAvg === 0 ? 0 : ((currentAvg - prevAvg) / prevAvg * 100);
@@ -262,10 +268,12 @@ export function computeHealthScore(data) {
     scoreCacheEfficiency(data),
     scoreCoverage(data),
   ];
-  let total = 0;
+  let weightedSum = 0, activeWeight = 0;
   for (let i = 0; i < factors.length; i++) {
-    total += factors[i].score * factors[i].weight;
+    if (factors[i].na) continue;
+    weightedSum += factors[i].score * factors[i].weight;
+    activeWeight += factors[i].weight;
   }
-  total = Math.round(clamp100(total));
+  const total = activeWeight > 0 ? Math.round(clamp100(weightedSum / activeWeight)) : 0;
   return { total, grade: toGrade(total), factors };
 }
