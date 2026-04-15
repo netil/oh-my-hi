@@ -381,6 +381,21 @@ body.dark .sidebar-period-range {
   background: var(--border);
   margin: 8px 16px;
 }
+.help-breadcrumb {
+  font-size: 11px;
+  font-weight: 400;
+  color: var(--text-secondary);
+  margin-right: 4px;
+}
+.nav-section-label {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-secondary);
+  padding: 10px 16px 4px;
+  opacity: 0.7;
+}
 
 .nav-children {
   display: none;
@@ -552,6 +567,31 @@ body.dark .sidebar-period-range {
   display: flex;
   align-items: baseline;
   gap: 10px;
+}
+.usage-bar-head-subtitle {
+  font-size: 11px;
+  color: var(--text-secondary);
+  font-weight: 400;
+  margin-top: 4px;
+  line-height: 1.4;
+  max-width: 300px;
+}
+.usage-bar-value-label {
+  font-size: 11px;
+  color: var(--text-secondary);
+  font-weight: 400;
+  white-space: nowrap;
+}
+.usage-bar-footer {
+  margin-top: 10px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+  font-size: 11px;
+  color: var(--text-secondary);
+  line-height: 1.5;
+}
+.usage-bar-card--fill {
+  flex: 1;
 }
 .usage-bar-total {
   font-size: 28px;

@@ -331,6 +331,98 @@ describe('Web UI — Templates', () => {
       assert.ok(js.includes('helpCweBar'), 'helpCweBar key used');
       assert.ok(js.includes('helpCweTimeline'), 'helpCweTimeline key used');
     });
+
+    // ── F8 Token Breakdown ────────────────────────────────────────────────
+    it('should define renderBreakdown function', () => {
+      assert.ok(js.includes('function renderBreakdown'));
+    });
+
+    it('should include breakdown in applyHash routing', () => {
+      assert.ok(js.includes("'breakdown'"), 'breakdown route literal');
+      // breakdown should expand _tokens area
+      const applyHashIdx = js.indexOf('function applyHash');
+      const snippet = js.slice(applyHashIdx, applyHashIdx + 1500);
+      assert.ok(snippet.includes("'breakdown'"), 'breakdown in applyHash');
+      assert.ok(snippet.includes('_tokens'), 'breakdown expands tokens group');
+    });
+
+    it('should dispatch breakdown in renderContent', () => {
+      assert.ok(js.includes("currentView === 'breakdown'"), 'breakdown dispatch');
+      assert.ok(js.includes('renderBreakdown()'), 'renderBreakdown called');
+    });
+
+    it('should include breakdown in sidebar isTokensArea check', () => {
+      assert.ok(js.includes("currentView === 'breakdown'"), 'breakdown in isTokensArea');
+    });
+
+    it('should have breakdownExpandedTypes Set with localStorage persistence', () => {
+      assert.ok(js.includes('breakdownExpandedTypes'), 'state variable defined');
+      assert.ok(js.includes('new Set()'), 'initialized as Set');
+      assert.ok(js.includes("'harness-bd-expanded'"), 'localStorage key');
+    });
+
+    it('should aggregate tokens by type and contextName in renderBreakdown', () => {
+      const fnIdx = js.indexOf('function renderBreakdown');
+      const snippet = js.slice(fnIdx, fnIdx + 2000);
+      assert.ok(snippet.includes('typeMap'), 'typeMap aggregation');
+      assert.ok(snippet.includes("e.context || 'general'"), 'context field used');
+      assert.ok(snippet.includes("e.contextName || 'conversation'"), 'contextName used');
+    });
+
+    it('should include startup context section in renderBreakdown', () => {
+      const fnIdx = js.indexOf('function renderBreakdown');
+      const snippet = js.slice(fnIdx, fnIdx + 5000);
+      assert.ok(snippet.includes('contextStats'), 'contextStats read');
+      assert.ok(snippet.includes('globalClaudeTokens'), 'global CLAUDE.md item');
+      assert.ok(snippet.includes('skillsDescTokens'), 'skills desc item');
+      assert.ok(snippet.includes('startupTotalChange'), 'startup change calculated');
+    });
+
+    it('should compute startup change only when period is selected', () => {
+      assert.ok(js.includes('!customDateRange && days > 0 && sessionCount > 0'),
+        'change guarded by customDateRange + days + sessionCount');
+    });
+
+    it('should use calcTokenChange for type bar chart rows', () => {
+      const fnIdx = js.indexOf('function renderBreakdown');
+      const snippet = js.slice(fnIdx, fnIdx + 8000);
+      assert.ok(snippet.includes('calcTokenChange'), 'calcTokenChange used for row changes');
+    });
+
+    it('should have renderBarCard extended options', () => {
+      assert.ok(js.includes('opts.titleHtml'), 'titleHtml option');
+      assert.ok(js.includes('opts.subtitleHtml'), 'subtitleHtml option');
+      assert.ok(js.includes('opts.valueLabelHtml'), 'valueLabelHtml option');
+      assert.ok(js.includes('opts.fillHeight'), 'fillHeight option');
+      assert.ok(js.includes('opts.footerHtml'), 'footerHtml option');
+    });
+
+    it('should apply usage-bar-card--fill class when fillHeight is true', () => {
+      assert.ok(js.includes("'usage-bar-card--fill'") || js.includes('"usage-bar-card--fill"') ||
+                js.includes('usage-bar-card--fill'), 'fill class applied');
+    });
+
+    it('should render valueLabelHtml above total (separate line)', () => {
+      // valueLabel goes as its own child of usage-bar-head-right, NOT inside usage-bar-head-value
+      const rcIdx = js.indexOf('function renderBarCard');
+      const snippet = js.slice(rcIdx, rcIdx + 2200);
+      const valLabelIdx = snippet.indexOf('usage-bar-value-label');
+      const headValueIdx = snippet.indexOf('usage-bar-head-value');
+      assert.ok(valLabelIdx !== -1, 'usage-bar-value-label present');
+      assert.ok(headValueIdx !== -1, 'usage-bar-head-value present');
+      // value-label div must come BEFORE head-value div (above the number)
+      assert.ok(valLabelIdx < headValueIdx, 'value label rendered before total');
+    });
+
+    it('should render changeBadge before total (% then number order)', () => {
+      const rcIdx = js.indexOf('function renderBarCard');
+      const snippet = js.slice(rcIdx, rcIdx + 2200);
+      const changeIdx = snippet.indexOf('changeBadge(opts.totalChange)');
+      const totalIdx = snippet.indexOf('usage-bar-total');
+      assert.ok(changeIdx !== -1, 'changeBadge call present');
+      assert.ok(totalIdx !== -1, 'usage-bar-total present');
+      assert.ok(changeIdx < totalIdx, 'change badge before total value');
+    });
   });
 
   describe('styles.css', () => {
@@ -392,6 +484,18 @@ describe('Web UI — Templates', () => {
       assert.ok(css.includes('@media'));
       assert.ok(css.includes('max-width: 768px'));
     });
+
+    it('should have breakdown-related renderBarCard extension classes', () => {
+      assert.ok(css.includes('.usage-bar-card--fill'), 'fill height class');
+      assert.ok(css.includes('.usage-bar-head-subtitle'), 'head subtitle class');
+      assert.ok(css.includes('.usage-bar-value-label'), 'value label class');
+      assert.ok(css.includes('.usage-bar-footer'), 'footer class');
+    });
+
+    it('should have breakdown accordion styles via bd-accordion-header', () => {
+      assert.ok(css.includes('.usage-bar-card--fill') ||
+                js.includes('bd-accordion-header'), 'accordion header class used');
+    });
   });
 
   describe('Locales', () => {
@@ -437,6 +541,15 @@ describe('Web UI — Templates', () => {
         'visHeatmapTitle', 'visHeatmapDesc', 'visHidden', 'visBrief', 'visFull',
         'visTokens', 'visName', 'visVisibility',
         'visGlobalClaude', 'visProjectClaude', 'visAutoMemory', 'visSkillsDesc', 'visMcpTools', 'visPrinciples',
+        // F8 Token Breakdown
+        'tokenBreakdown', 'bdTitle', 'bdDesc',
+        'bdByTypeTitle', 'bdTop5Title', 'bdTop5All', 'bdDetailTitle',
+        'bdColType', 'bdColItem', 'bdColCalls', 'bdColAvg', 'bdColShare',
+        'bdTypeTools', 'bdTypeConversation', 'bdItems',
+        'bdStartupTitle', 'bdStartupDesc', 'bdStartupCumulative',
+        'bdStartupPerSession', 'bdStartupSessions', 'bdStartupNote',
+        'bdStartupClaudeMd', 'bdStartupSkills', 'bdStartupPrinciples',
+        'bdStartupMcp', 'bdStartupMemory',
       ];
       for (const key of requiredKeys) {
         assert.ok(en[key], `missing en key: ${key}`);

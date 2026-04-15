@@ -10,6 +10,9 @@ const ROOT = path.resolve(__dirname, '..');
 const OUTPUT = path.join(ROOT, 'output');
 
 describe('Build', () => {
+  // Snapshot data.json immediately after the build so concurrent test runs
+  // (e.g. cache.test.mjs with OMH_BUILD_MODE=plugin) cannot overwrite it.
+  let buildSnapshot;
   before(() => {
     // Run full build
     execSync('node scripts/generate-dashboard.mjs --data-only', {
@@ -17,6 +20,7 @@ describe('Build', () => {
       encoding: 'utf-8',
       timeout: 30000,
     });
+    buildSnapshot = JSON.parse(fs.readFileSync(path.join(OUTPUT, 'data.json'), 'utf-8'));
   });
 
   it('should generate output/index.html', () => {
@@ -35,7 +39,9 @@ describe('Build', () => {
     let data;
 
     before(() => {
-      data = JSON.parse(fs.readFileSync(path.join(OUTPUT, 'data.json'), 'utf-8'));
+      // Use the snapshot captured right after the build, not a fresh read
+      // (guards against concurrent cache.test.mjs overwriting data.json)
+      data = buildSnapshot;
     });
 
     it('should have scopes array', () => {

@@ -21,7 +21,7 @@
 import { fileURLToPath } from 'url';
 import path from 'path';
 import fs from 'fs';
-import { execSync } from 'child_process';
+import { execSync, spawn } from 'child_process';
 
 // Auto-install dependencies if missing
 const __boot_dir = path.dirname(fileURLToPath(import.meta.url));
@@ -65,12 +65,22 @@ const OUTPUT = path.join(ROOT, 'output');
 //                templates haven't changed.
 // Detection: check the script's own repo root, not process.cwd(), so
 // invoking the binary from any directory still picks the right mode.
+// IS_DEV_BUILD: controls HTML rebuild skipping and plugin-mode behaviour.
+// OMH_BUILD_MODE=plugin forces false so tests can exercise the plugin code path.
 const IS_DEV_BUILD = (() => {
-  // Explicit override for tests and special-case runs that want to exercise
-  // the plugin-mode code path even when the script happens to live in the
-  // source checkout.
   if (process.env.OMH_BUILD_MODE === 'plugin') return false;
   if (process.env.OMH_BUILD_MODE === 'dev') return true;
+  try {
+    if (!fs.existsSync(path.join(ROOT, '.git'))) return false;
+    const pkg = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf-8'));
+    return pkg.name === 'oh-my-hi';
+  } catch { return false; }
+})();
+
+// IS_ACTUAL_DEV_REPO: true when the script is running from the real source
+// checkout (not a plugin install). Used only for the _devBuild badge so that
+// OMH_BUILD_MODE=plugin tests don't strip the badge from shared output files.
+const IS_ACTUAL_DEV_REPO = (() => {
   try {
     if (!fs.existsSync(path.join(ROOT, '.git'))) return false;
     const pkg = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf-8'));
@@ -95,6 +105,94 @@ Usage:
   oh-my-hi <path> [path...]   Include specified projects only
   oh-my-hi --help             Show help`);
   process.exit(0);
+}
+
+// ── Internal: background cache refresh (spawned as detached child) ──
+if (args.includes('--_update-cache')) {
+  _runUpdateCacheRefresh().then(() => process.exit(0)).catch(() => process.exit(0));
+}
+
+/** Read .update-check cache and print a one-line notice if a newer version exists.
+ *  Purely synchronous (file read only) — adds ~0ms to startup. */
+function notifyUpdateIfAvailable() {
+  const UPDATE_CHECK_FILE = path.join(OUTPUT, 'cache', '.update-check');
+  try {
+    if (!fs.existsSync(UPDATE_CHECK_FILE)) return;
+    const pkg = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf-8'));
+    const cached = JSON.parse(fs.readFileSync(UPDATE_CHECK_FILE, 'utf-8'));
+    if (!semverGt(cached.latest, pkg.version)) return;
+    const locale = detectSystemLocale();
+    if (locale === 'ko') {
+      console.log(`oh-my-hi: 🆕 최신 버전 v${cached.latest} 이 있습니다 — /omh --update`);
+    } else {
+      console.log(`oh-my-hi: 🆕 v${cached.latest} available — /omh --update to upgrade`);
+    }
+  } catch { /* best effort */ }
+}
+
+/** Spawn a detached child process to refresh the update cache in the background.
+ *  Only spawns when cache is missing or older than 12 hours.
+ *  The child is unref'd so the parent exits immediately. */
+function scheduleUpdateCacheRefresh() {
+  const UPDATE_CHECK_FILE = path.join(OUTPUT, 'cache', '.update-check');
+  const TWELVE_HOURS = 12 * 60 * 60 * 1000;
+  try {
+    if (fs.existsSync(UPDATE_CHECK_FILE)) {
+      const cached = JSON.parse(fs.readFileSync(UPDATE_CHECK_FILE, 'utf-8'));
+      if (Date.now() - (cached.timestamp || 0) < TWELVE_HOURS) return; // fresh, skip
+    }
+    const child = spawn(process.execPath, [__filename, '--_update-cache'], {
+      detached: true, stdio: 'ignore',
+      env: { ...process.env, CLAUDE_CONFIG_DIR, OMH_OUTPUT: OUTPUT },
+    });
+    child.unref();
+  } catch { /* best effort */ }
+}
+
+/** Fetches the latest version tag and writes it to .update-check cache. */
+async function _runUpdateCacheRefresh() {
+  const outputDir = process.env.OMH_OUTPUT || OUTPUT;
+  const UPDATE_CHECK_FILE = path.join(outputDir, 'cache', '.update-check');
+  try {
+    const pkg = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf-8'));
+    const repoUrl = pkg.repository?.url || '';
+    const ghMatch = repoUrl.match(/github\.com[/:]([^/]+\/[^/.]+)/);
+    let latest = null;
+
+    if (ghMatch) {
+      const ctrl = new AbortController();
+      const t = setTimeout(() => ctrl.abort(), 6000);
+      try {
+        const res = await fetch(`https://api.github.com/repos/${ghMatch[1]}/tags`,
+          { signal: ctrl.signal, headers: { Accept: 'application/vnd.github+json' } });
+        clearTimeout(t);
+        if (res.ok) {
+          const tags = await res.json();
+          for (const tag of tags) {
+            const v = tag.name.replace(/^v/, '');
+            if (/^\d+\.\d+\.\d+$/.test(v) && (!latest || semverGt(v, latest))) latest = v;
+          }
+        }
+      } catch { /* timeout or network error */ }
+    }
+
+    if (!latest) {
+      const ctrl = new AbortController();
+      const t = setTimeout(() => ctrl.abort(), 6000);
+      try {
+        const res = await fetch(`https://registry.npmjs.org/${pkg.name}/latest`,
+          { signal: ctrl.signal, headers: { Accept: 'application/json' } });
+        clearTimeout(t);
+        if (res.ok) { const d = await res.json(); latest = d.version; }
+      } catch { /* timeout or network error */ }
+    }
+
+    if (latest) {
+      fs.mkdirSync(path.dirname(UPDATE_CHECK_FILE), { recursive: true });
+      fs.writeFileSync(UPDATE_CHECK_FILE,
+        JSON.stringify({ timestamp: Date.now(), current: pkg.version, latest }), 'utf8');
+    }
+  } catch { /* best effort */ }
 }
 
 // ── Update ──
@@ -369,6 +467,17 @@ async function main() {
     savePending(CACHE_PATH, cache);
     saveMtimeIndex(CACHE_PATH, cache);
 
+    // Ensure _devBuild flag is set when running from the real dev repo
+    if (IS_ACTUAL_DEV_REPO && fs.existsSync(dataPath)) {
+      try {
+        const d = JSON.parse(fs.readFileSync(dataPath, 'utf-8'));
+        if (!d._devBuild) {
+          d._devBuild = true;
+          writeDataJs(d, dataPath);
+        }
+      } catch { /* best effort */ }
+    }
+
     // Build index.html if missing or version changed
     if (needsHtmlRebuild(indexPath)) {
       writeHtml(indexPath, detectSystemLocale());
@@ -379,6 +488,7 @@ async function main() {
   }
 
   // ── Full mode (user-initiated /omh) ──
+  notifyUpdateIfAvailable(); // instant: reads cache only, no network
   const scopes = detectScopes(CLAUDE_CONFIG_DIR, extraPaths);
   const systemLocale = detectSystemLocale();
 
@@ -436,75 +546,10 @@ async function main() {
     console.log('  → Manual refresh:                     /omh --data-only');
   }
 
-  // Async update check (non-blocking, result awaited at end)
-  await checkForUpdate();
+  // Schedule background cache refresh (detached child, non-blocking)
+  scheduleUpdateCacheRefresh();
 }
 
-/** Check GitHub tags for newer version (non-blocking, cached for 24h) */
-async function checkForUpdate() {
-  const UPDATE_CHECK_FILE = path.join(OUTPUT, 'cache', '.update-check');
-  try {
-    // Skip if checked within last 24 hours
-    if (fs.existsSync(UPDATE_CHECK_FILE)) {
-      const lastCheck = JSON.parse(fs.readFileSync(UPDATE_CHECK_FILE, 'utf8'));
-      if (Date.now() - lastCheck.timestamp < 24 * 60 * 60 * 1000) {
-        if (lastCheck.latest && semverGt(lastCheck.latest, lastCheck.current)) {
-          console.log(`\noh-my-hi: ✨ v${lastCheck.latest} available (current: v${lastCheck.current})`);
-          console.log('  → Update: /omh --update');
-        }
-        return;
-      }
-    }
-
-    const pkg = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf-8'));
-    const current = pkg.version;
-    let latest = null;
-
-    // Check GitHub tags first (primary distribution channel)
-    const repoUrl = pkg.repository?.url || '';
-    const ghMatch = repoUrl.match(/github\.com[/:]([^/]+\/[^/.]+)/);
-    if (ghMatch) {
-      const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), 3000);
-      const res = await fetch(`https://api.github.com/repos/${ghMatch[1]}/tags`, {
-        signal: controller.signal, headers: { 'Accept': 'application/vnd.github+json' },
-      });
-      clearTimeout(timeout);
-      if (res.ok) {
-        const tags = await res.json();
-        for (const tag of tags) {
-          const v = tag.name.replace(/^v/, '');
-          if (/^\d+\.\d+\.\d+$/.test(v) && (!latest || semverGt(v, latest))) latest = v;
-        }
-      }
-    }
-
-    // Fallback to npm registry
-    if (!latest) {
-      const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), 3000);
-      const res = await fetch(`https://registry.npmjs.org/${pkg.name}/latest`, {
-        signal: controller.signal, headers: { 'Accept': 'application/json' },
-      });
-      clearTimeout(timeout);
-      if (res.ok) {
-        const data = await res.json();
-        latest = data.version;
-      }
-    }
-
-    if (!latest) return;
-
-    // Cache the result
-    fs.mkdirSync(path.dirname(UPDATE_CHECK_FILE), { recursive: true });
-    fs.writeFileSync(UPDATE_CHECK_FILE, JSON.stringify({ timestamp: Date.now(), current, latest }), 'utf8');
-
-    if (semverGt(latest, current)) {
-      console.log(`\noh-my-hi: ✨ v${latest} available (current: v${current})`);
-      console.log('  → Update: /omh --update');
-    }
-  } catch { /* offline or error — silently skip */ }
-}
 
 /** Detect system locale */
 function detectSystemLocale() {
@@ -636,7 +681,7 @@ function buildDataObject(scopes, scopeData, systemLocale, extra = {}) {
     systemLocale,
     // Uses the canonical IS_DEV_BUILD flag defined at the top of the file
     // (checks .git + package.json name, honors OMH_BUILD_MODE override).
-    _devBuild: IS_DEV_BUILD || undefined,
+    _devBuild: IS_ACTUAL_DEV_REPO || undefined,
     ...extra,
   };
 }

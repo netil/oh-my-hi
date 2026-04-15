@@ -12,6 +12,7 @@ Parses your entire Claude Code configuration and usage data, then generates an i
 - **Harness overview** — skills, agents, plugins, hooks, memory, MCP servers, rules, principles, commands, teams, plans
 - **Context budget** — estimated token distribution between visible and invisible contexts (startup, tools, user messages)
 - **Token analytics** — usage by model, daily trends, cache efficiency, prompt statistics, response latency
+- **Token Breakdown** — per-item token attribution by context type (skill / agent / MCP / built-in tool). Shows startup context cost estimate (CLAUDE.md, skill descriptions, principles, MCP tool listings) multiplied by session count, plus a Top 5 per type and an expandable drill-down by type
 - **Cache TTL Impact** — detects cost waste from short cache TTL. Shows best/worst 7-day rolling efficiency, estimated waste cost, and a daily hit-rate trend chart with reference lines
 - **Month-end cost projection** — trailing 7-day average extrapolated to month end, compared against your monthly budget
 - **Skill & agent efficiency** — per-item call count, avg tokens/call, total cost, and category cost share. Sidebar marks the top 3 cost contributors with a 🔥 badge so optimization targets are obvious
@@ -22,6 +23,14 @@ Parses your entire Claude Code configuration and usage data, then generates an i
 
 <img src="./assets/token-overview.png?v=1" alt="Tokens" width="800">
 <img src="./assets/insights.png" alt="Insights" width="800">
+
+### Token Breakdown
+
+Breaks down token usage by context type and individual item. Shows which skills, agents, MCP servers, and built-in tools are consuming the most tokens — and how much of that cost comes from startup context that loads on every session.
+
+<img src="./assets/token-breakdown.png" alt="Token Breakdown" width="800">
+
+**Startup context cost** estimates the cumulative token cost of items that load automatically before every session (CLAUDE.md, skill descriptions, principles, MCP tool listings). Multiplied by session count for the selected period, it gives you a concrete number to act on — trim a large CLAUDE.md or remove unused skills to reduce your baseline cost per session.
 
 ### Cache TTL Impact
 

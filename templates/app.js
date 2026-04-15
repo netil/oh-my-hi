@@ -170,6 +170,7 @@
   // the URL on the initial render.
   let contextSubPath = '';
   let compareMode = localStorage.getItem('harness-compare') === 'true';
+  const breakdownExpandedTypes = new Set();
 
   // ── DOM refs ──
   const scopeSelect = document.getElementById('scope-select');
@@ -390,10 +391,10 @@
       currentSessionId = decodeURIComponent(parts.slice(1).join('/'));
       currentDetail = null;
       expandedCategories._tokens = true;
-    } else if (view === 'overview' || view === 'structure' || view === 'context' || view === 'tokens' || view === 'tokens-cost' || view === 'tokens-prompt' || view === 'tokens-session' || view === 'tokens-analysis' || view === 'help') {
+    } else if (view === 'overview' || view === 'structure' || view === 'context' || view === 'tokens' || view === 'tokens-cost' || view === 'tokens-prompt' || view === 'tokens-session' || view === 'tokens-analysis' || view === 'breakdown' || view === 'help') {
       currentView = view === 'tokens-analysis' ? 'tokens-prompt' : view;
       currentDetail = null;
-      if (view.startsWith('tokens')) expandedCategories._tokens = true;
+      if (view.startsWith('tokens') || view === 'breakdown') expandedCategories._tokens = true;
     } else {
       // Check if it's a category key
       const isCat = CATEGORIES.some((c) => { return c.key === view; });
@@ -831,18 +832,20 @@
     let html = '';
 
     html += navItem('overview', '📊', t('overview'), null, currentView === 'overview' && !currentDetail);
-    const isTokensArea = currentView === 'tokens' || currentView === 'tokens-cost' || currentView === 'tokens-prompt' || currentView === 'tokens-session' || currentView === 'session';
+    const isTokensArea = currentView === 'tokens' || currentView === 'tokens-cost' || currentView === 'breakdown';
     // Tokens group is always expanded — no collapse toggle, sub-items
     // visible from first render. Clicking the header still navigates
     // to the Tokens overview.
     html += navItem('tokens', '🪙', t('tokens'), null, currentView === 'tokens');
     html += '<div class="nav-sub">'
       + navItem('tokens-cost', '💰', t('tokensCost'), null, currentView === 'tokens-cost')
-      + navItem('tokens-prompt', '💬', t('tokensPrompt'), null, currentView === 'tokens-prompt')
-      + navItem('tokens-session', '📋', t('tokensSession'), null, currentView === 'tokens-session' || currentView === 'session')
+      + navItem('breakdown', '📊', t('bdTitle'), null, currentView === 'breakdown')
       + '</div>';
-    html += navItem('structure', '🗂️', t('structure'), null, currentView === 'structure' && !currentDetail);
+    html += '<div class="nav-section-label">' + t('usageAnalysis') + '</div>';
     html += navItem('context', '🪟', t('contextExplorer'), null, currentView === 'context' && !currentDetail);
+    html += navItem('tokens-prompt', '💬', t('tokensPrompt'), null, currentView === 'tokens-prompt');
+    html += navItem('tokens-session', '📋', t('tokensSession'), null, currentView === 'tokens-session' || currentView === 'session');
+    html += navItem('structure', '🗂️', t('structure'), null, currentView === 'structure' && !currentDetail);
     html += '<div class="nav-separator"></div>';
 
     // F2: top 3 cost contributors for 🔥 badges on sidebar.
@@ -969,6 +972,8 @@
       renderTokensPrompt();
     } else if (currentView === 'tokens-session') {
       renderTokensSession();
+    } else if (currentView === 'breakdown') {
+      renderBreakdown();
     } else if (currentView === 'session') {
       renderSessionDetail();
     } else if (currentView === 'structure') {
@@ -2753,6 +2758,319 @@
     }
   }
 
+  // ── Breakdown page ──
+  function renderBreakdown() {
+    const usage = getUsage();
+    const days = customDateRange ? 0 : currentPeriod;
+    const allEntries = usage.tokenEntries || [];
+    const tokenEntries = filterByPeriod(allEntries, 'timestamp', days);
+
+    // Aggregate: typeMap[type] = { tokens, count, items: { name: { tokens, count } } }
+    const typeMap = {};
+    tokenEntries.forEach((e) => {
+      const type = e.context || 'general';
+      const item = e.contextName || 'conversation';
+      const tokens = (e.rawInput || 0) + (e.outputTokens || 0) + (e.cacheRead || 0) + (e.cacheCreation || 0);
+      if (!typeMap[type]) typeMap[type] = { tokens: 0, count: 0, items: {} };
+      typeMap[type].tokens += tokens;
+      typeMap[type].count += 1;
+      if (!typeMap[type].items[item]) typeMap[type].items[item] = { tokens: 0, count: 0 };
+      typeMap[type].items[item].tokens += tokens;
+      typeMap[type].items[item].count += 1;
+    });
+
+    const totalTokens = Object.values(typeMap).reduce((s, v) => s + v.tokens, 0);
+    const sumTokens = (e) => (e.rawInput || 0) + (e.outputTokens || 0) + (e.cacheRead || 0) + (e.cacheCreation || 0);
+    const totalChange = calcTokenChange(allEntries, days, sumTokens);
+
+    const typeInfo = {
+      skill:   { icon: '🧠', label: t('catSkills'),          color: '#e8590c' },
+      agent:   { icon: '🤖', label: t('catAgents'),          color: '#0ca678' },
+      mcp:     { icon: '🔌', label: 'MCP',                   color: '#7c3aed' },
+      tool:    { icon: '🔧', label: t('bdTypeTools'),        color: '#4263eb' },
+      general: { icon: '💬', label: t('bdTypeConversation'), color: '#6b7280' }
+    };
+    const typeEntries = Object.entries(typeMap).sort((a, b) => b[1].tokens - a[1].tokens);
+
+    // Sync accordion state from localStorage (each render reads fresh)
+    const LS_KEY = 'harness-bd-expanded';
+    breakdownExpandedTypes.clear();
+    try {
+      const saved = JSON.parse(localStorage.getItem(LS_KEY) || '[]');
+      saved.forEach((v) => breakdownExpandedTypes.add(v));
+    } catch (e) { /* ignore */ }
+
+    let html = '<div class="page-header">'
+      + '<h1>📊 ' + t('bdTitle') + '</h1>'
+      + '<div class="page-desc">' + t('bdDesc') + '</div>'
+      + '</div>'
+      + renderPeriodFilter();
+
+    if (tokenEntries.length === 0) {
+      html += '<div class="empty-state">' + t('noUsageData') + '</div>';
+      content.innerHTML = html;
+      bindContentActions();
+      bindPeriodFilter();
+      return;
+    }
+
+    // ── 0. Startup + Type charts side-by-side ──
+    const cs = getScopeData().contextStats || {};
+    const startupItems = [
+      { key: 'globalClaudeTokens',   icon: '📄', labelKey: 'bdStartupClaudeMd',   color: '#4263eb' },
+      { key: 'projectClaudeTokens',  icon: '📄', labelKey: 'bdStartupProjectMd',  color: '#0891b2' },
+      { key: 'skillsDescTokens',     icon: '🧠', labelKey: 'bdStartupSkills',     color: '#e8590c' },
+      { key: 'principlesTokens',     icon: '📐', labelKey: 'bdStartupPrinciples', color: '#7c3aed' },
+      { key: 'mcpToolsTokens',       icon: '🔌', labelKey: 'bdStartupMcp',        color: '#dc2626' },
+      { key: 'autoMemoryTokens',     icon: '🧠', labelKey: 'bdStartupMemory',     color: '#0ca678' },
+    ].filter((item) => (cs[item.key] || 0) > 0);
+
+    const sessionIds = new Set(tokenEntries.map((e) => e.sessionId).filter(Boolean));
+    const sessionCount = sessionIds.size;
+    const perSessionTokens = startupItems.reduce((s, item) => s + (cs[item.key] || 0), 0);
+    const cumulativeTokens = perSessionTokens * sessionCount;
+
+    // Average input cost per token from actual session data (for startup cost estimate)
+    let avgInputCostPerToken = 0;
+    if (tokenEntries.length > 0) {
+      let totalCost = 0, totalInput = 0;
+      tokenEntries.forEach((e) => { totalCost += calcEntryCost(e); totalInput += (e.rawInput || 0); });
+      if (totalInput > 0) avgInputCostPerToken = totalCost / totalInput;
+    }
+    const startupCost = cumulativeTokens * avgInputCostPerToken;
+
+    // Startup period-over-period change (session count comparison)
+    let startupTotalChange = null;
+    if (!customDateRange && days > 0 && sessionCount > 0) {
+      const now = new Date();
+      const curStart = new Date(now); curStart.setDate(curStart.getDate() - (days - 1)); curStart.setHours(0, 0, 0, 0);
+      const prevStart = new Date(curStart); prevStart.setDate(prevStart.getDate() - days);
+      const prevSessions = new Set(
+        allEntries.filter((e) => { const d = new Date(e.timestamp); return d >= prevStart && d < curStart; })
+          .map((e) => e.sessionId).filter(Boolean)
+      ).size;
+      startupTotalChange = prevSessions === 0
+        ? 100
+        : Math.round((sessionCount - prevSessions) / prevSessions * 100);
+    }
+
+    // One-row flex container for startup + type charts
+    html += '<div class="chart-row">';
+
+    if (startupItems.length > 0) {
+      html += '<div class="section chart-section">'
+        + renderBarCard({
+            titleHtml: t('bdStartupTitle'),
+            subtitleHtml: t('bdStartupDesc'),
+            valueLabelHtml: t('bdStartupCumulative'),
+            total: cumulativeTokens,
+            totalChange: startupTotalChange,
+            labelWidth: 150,
+            fillHeight: true,
+            summaryHtml: '<span style="font-size:12px;color:var(--text-secondary)">'
+              + t('bdStartupPerSession') + ' <strong>' + fmtCompact(perSessionTokens) + '</strong>'
+              + ' &nbsp;·&nbsp; ' + fmtNum(sessionCount) + ' ' + t('bdStartupSessions')
+              + ' &nbsp;·&nbsp; ' + t('estimatedCost') + ' <strong>' + fmtCost(startupCost) + '</strong>'
+              + '</span>',
+            rows: startupItems.map((item) => ({
+              labelHtml: item.icon + ' ' + t(item.labelKey),
+              value: (cs[item.key] || 0) * sessionCount,
+              change: startupTotalChange,
+              color: item.color
+            })),
+            footerHtml: t('bdStartupNote')
+          })
+        + '</div>';
+    }
+
+    // ── 1. Type bar chart (renderBarCard style) ──
+    html += '<div class="section chart-section">'
+      + renderBarCard({
+          titleHtml: t('bdByTypeTitle'),
+          valueLabelHtml: t('totalTokens'),
+          total: totalTokens,
+          totalChange: totalChange,
+          labelWidth: 110,
+          fillHeight: true,
+          rows: typeEntries.map(([type, data]) => {
+            const info = typeInfo[type] || { icon: '📦', label: type, color: '#6b7280' };
+            const typeAllEntries = allEntries.filter((e) => (e.context || 'general') === type);
+            const rowChange = calcTokenChange(typeAllEntries, days, sumTokens);
+            return {
+              labelHtml: info.icon + ' ' + escapeHtml(info.label),
+              value: data.tokens,
+              change: rowChange,
+              color: info.color
+            };
+          })
+        })
+      + '</div>';
+
+    html += '</div>'; // chart-row
+
+    // ── 2. Top 5 per type cards (general 제외) + 전체 Top 5 ──
+    const renderTop5Card = (headerHtml, items, baseTokens) => {
+      let card = '<div class="card" style="padding:14px">'
+        + '<div style="font-size:13px;font-weight:700;margin-bottom:10px;display:flex;align-items:center;gap:6px">'
+        + headerHtml + '</div>';
+      items.slice(0, 5).forEach(([item, d], idx) => {
+        const pct = baseTokens > 0 ? Math.round(d.tokens / baseTokens * 100) : 0;
+        const barW = Math.max(2, pct);
+        card += '<div style="margin-bottom:7px">'
+          + '<div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:2px">'
+          + '<span class="bd-tip-trigger" data-bd-tip="' + escapeHtml(item) + '" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:130px;cursor:default">'
+          + '<span style="color:var(--text-secondary);margin-right:4px">' + (idx + 1) + '.</span>'
+          + escapeHtml(item) + '</span>'
+          + '<span style="color:var(--text-secondary);flex-shrink:0;margin-left:4px">' + pct + '%</span>'
+          + '</div>'
+          + '<div style="height:4px;background:var(--border);border-radius:2px">'
+          + '<div style="height:4px;width:' + barW + '%;background:' + (d.color || 'var(--accent)') + ';border-radius:2px;opacity:0.75"></div>'
+          + '</div>'
+          + '</div>';
+      });
+      return card + '</div>';
+    };
+
+    html += '<div class="section"><div class="section-title">' + t('bdTop5Title') + '</div>'
+      + '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:12px;margin-top:8px">';
+
+    // 전체 Top 5 (유형 구분 없음)
+    const allItemsMap = {};
+    typeEntries.forEach(([type, data]) => {
+      Object.entries(data.items).forEach(([item, d]) => {
+        if (!allItemsMap[item]) allItemsMap[item] = { tokens: 0, count: 0, color: (typeInfo[type] || {}).color || '#6b7280' };
+        allItemsMap[item].tokens += d.tokens;
+        allItemsMap[item].count += d.count;
+      });
+    });
+    const allItemsSorted = Object.entries(allItemsMap).sort((a, b) => b[1].tokens - a[1].tokens);
+    html += renderTop5Card(
+      '🏆 ' + t('bdTop5All') + '<span style="margin-left:auto;font-size:11px;font-weight:400;color:var(--text-secondary)">전체</span>',
+      allItemsSorted,
+      totalTokens
+    );
+
+    // 유형별 Top 5
+    typeEntries.filter(([type]) => type !== 'general').forEach(([type, data]) => {
+      const info = typeInfo[type] || { icon: '📦', label: type };
+      const items = Object.entries(data.items).sort((a, b) => b[1].tokens - a[1].tokens);
+      html += renderTop5Card(
+        info.icon + ' ' + escapeHtml(info.label)
+        + '<span style="margin-left:auto;font-size:11px;font-weight:400;color:var(--text-secondary)">'
+        + (totalTokens > 0 ? Math.round(data.tokens / totalTokens * 100) + '%' : '') + '</span>',
+        items,
+        data.tokens
+      );
+    });
+    html += '</div></div>';
+
+    // ── 3. Accordion: type rows → expandable item list ──
+    html += '<div class="section"><div class="section-title">' + t('bdDetailTitle') + '</div>'
+      + '<div class="card" style="overflow:hidden">';
+
+    typeEntries.forEach(([type, data], tIdx) => {
+      const info = typeInfo[type] || { icon: '📦', label: type };
+      const pct = totalTokens > 0 ? (data.tokens / totalTokens * 100).toFixed(1) : '0.0';
+      const avg = data.count > 0 ? Math.round(data.tokens / data.count) : 0;
+      const isOpen = breakdownExpandedTypes.has(type);
+      const borderTop = tIdx > 0 ? 'border-top:1px solid var(--border);' : '';
+      const itemsSorted = Object.entries(data.items).sort((a, b) => b[1].tokens - a[1].tokens);
+
+      // Header row
+      html += '<div class="bd-accordion-header" data-bd-type="' + escapeHtml(type) + '" '
+        + 'style="' + borderTop + 'display:flex;align-items:center;gap:12px;padding:12px 16px;cursor:pointer;'
+        + 'transition:background 0.15s" '
+        + 'onmouseenter="this.style.background=\'rgba(66,99,235,0.05)\'" '
+        + 'onmouseleave="this.style.background=\'\'">'
+        + '<span style="font-size:16px">' + info.icon + '</span>'
+        + '<span style="font-weight:600;font-size:14px;flex:1">' + escapeHtml(info.label) + '</span>'
+        + '<span style="font-size:13px;color:var(--text-secondary);margin-right:8px">' + fmtNum(itemsSorted.length) + ' ' + t('bdItems') + '</span>'
+        + '<span style="font-size:13px;min-width:60px;text-align:right">' + fmtCompact(data.tokens) + '</span>'
+        + '<span style="font-size:12px;color:var(--text-secondary);min-width:40px;text-align:right">' + pct + '%</span>'
+        + '<span style="font-size:11px;color:var(--accent);margin-left:8px;transition:transform 0.2s'
+        + (isOpen ? ';transform:rotate(90deg)' : '') + '"  class="bd-chevron">▶</span>'
+        + '</div>';
+
+      // Expanded item table
+      html += '<div class="bd-accordion-body" data-bd-body="' + escapeHtml(type) + '" '
+        + 'style="' + (isOpen ? '' : 'display:none;') + 'background:var(--sidebar-bg,rgba(0,0,0,0.02));border-top:1px solid var(--border)">'
+        + '<table class="config-table" style="width:100%;margin:0"><thead><tr style="background:transparent">'
+        + '<th style="padding-left:24px">' + t('bdColItem') + '</th>'
+        + '<th style="text-align:right">' + t('totalTokens') + '</th>'
+        + '<th style="text-align:right">' + t('bdColCalls') + '</th>'
+        + '<th style="text-align:right">' + t('bdColAvg') + '</th>'
+        + '<th style="text-align:right">' + t('bdColShare') + '</th>'
+        + '</tr></thead><tbody>';
+      itemsSorted.forEach(([item, d]) => {
+        const iPct = data.tokens > 0 ? (d.tokens / data.tokens * 100).toFixed(1) : '0.0';
+        const iAvg = d.count > 0 ? Math.round(d.tokens / d.count) : 0;
+        html += '<tr>'
+          + '<td style="padding-left:24px">' + escapeHtml(item) + '</td>'
+          + '<td style="text-align:right">' + fmtCompact(d.tokens) + '</td>'
+          + '<td style="text-align:right">' + fmtNum(d.count) + '</td>'
+          + '<td style="text-align:right">' + fmtCompact(iAvg) + '</td>'
+          + '<td style="text-align:right">' + iPct + '%</td>'
+          + '</tr>';
+      });
+      html += '</tbody></table></div>';
+    });
+
+    html += '</div></div>'; // card + section
+
+    html += '<div class="generated-at">' + t('generatedAt') + ' ' + formatDateTime(DATA.generatedAt) + ' · ' + (DATA.configDir || '') + '</div>';
+
+    content.innerHTML = html;
+    bindContentActions();
+    bindPeriodFilter();
+
+    // Accordion toggle
+    const saveExpanded = () => {
+      try { localStorage.setItem('harness-bd-expanded', JSON.stringify([...breakdownExpandedTypes])); } catch (e) { /* ignore */ }
+    };
+    content.querySelectorAll('.bd-accordion-header').forEach((hdr) => {
+      hdr.addEventListener('click', () => {
+        const type = hdr.dataset.bdType;
+        const body = content.querySelector('[data-bd-body="' + type + '"]');
+        const chevron = hdr.querySelector('.bd-chevron');
+        if (breakdownExpandedTypes.has(type)) {
+          breakdownExpandedTypes.delete(type);
+          if (body) body.style.display = 'none';
+          if (chevron) chevron.style.transform = '';
+        } else {
+          breakdownExpandedTypes.add(type);
+          if (body) body.style.display = '';
+          if (chevron) chevron.style.transform = 'rotate(90deg)';
+        }
+        saveExpanded();
+      });
+    });
+
+    // Custom tooltip for truncated top-5 item names
+    let _bdTip = null;
+    content.querySelectorAll('.bd-tip-trigger').forEach((el) => {
+      el.addEventListener('mouseenter', () => {
+        if (el.scrollWidth <= el.clientWidth) return; // not truncated
+        _bdTip = document.createElement('div');
+        _bdTip.className = 'period-tooltip';
+        _bdTip.style.position = 'fixed';
+        _bdTip.textContent = el.dataset.bdTip;
+        document.body.appendChild(_bdTip);
+        const r = el.getBoundingClientRect();
+        let left = r.left;
+        let top = r.top - _bdTip.offsetHeight - 6;
+        if (left + _bdTip.offsetWidth > window.innerWidth - 4) left = window.innerWidth - 4 - _bdTip.offsetWidth;
+        if (top < 4) top = r.bottom + 6;
+        _bdTip.style.left = left + 'px';
+        _bdTip.style.top = top + 'px';
+      });
+      el.addEventListener('mouseleave', () => {
+        if (_bdTip) { _bdTip.remove(); _bdTip = null; }
+      });
+    });
+
+    // bar chart is rendered inline via renderBarCard — no deferred draw needed
+  }
+
   // ── Overview page ──
   function renderOverview() {
     let scope = DATA.scopes.find((s) => { return s.id === currentScope; });
@@ -3554,17 +3872,50 @@
       + '</tbody></table>'
       + '</div></div>';
 
-    // Context Budget
+    // Breadcrumb helper: "부모 › 아이콘 라벨"
+    function breadcrumb(parent, icon, label) {
+      return '<span class="help-breadcrumb">' + parent + ' ›</span> ' + icon + ' ' + label;
+    }
+
+    // 🪙 토큰
     html += '<div class="section">'
-      + '<div class="section-title">📊 ' + t('visHeatmapTitle') + '</div>'
+      + '<div class="section-title">🪙 ' + t('tokens') + '</div>'
       + '<div class="card help-list">'
+      + helpRow('helpTokens', 'helpTokensDesc', '🪙')
+      + helpRow('helpActivity', 'helpActivityDesc', '📊')
+      + helpRow('helpCommands', 'helpCommandsDesc', '⌨️')
       + helpRow('helpBudgetBar', 'helpBudgetBarDesc', '▬')
       + helpRow('helpBudgetTable', 'helpBudgetTableDesc', '📋')
       + '</div></div>';
 
-    // Context Explorer
+    // 🪙 토큰 > 💰 비용
     html += '<div class="section">'
-      + '<div class="section-title">🪟 ' + t('helpContextExplorer') + '</div>'
+      + '<div class="section-title">' + breadcrumb('🪙 ' + t('tokens'), '💰', t('tokensCost')) + '</div>'
+      + '<div class="card help-list">'
+      + helpRow('helpUsageBar', 'helpUsageBarDesc', '▭')
+      + helpRow('helpLogScale', 'helpLogScaleDesc', '📐')
+      + helpRow('helpCostProjection', 'helpCostProjectionDesc', '💰')
+      + '</div></div>';
+
+    // 🪙 토큰 > 📊 항목별 분석
+    html += '<div class="section">'
+      + '<div class="section-title">' + breadcrumb('🪙 ' + t('tokens'), '📊', t('bdTitle')) + '</div>'
+      + '<div class="card" style="padding:16px 20px">'
+      + '<p style="margin:0 0 12px;font-size:14px;color:var(--text-secondary);line-height:1.6">' + t('helpBreakdownDesc') + '</p>'
+      + '<div class="help-list" style="border:none;padding:0;margin:0">'
+      + helpRow('helpBreakdownStartup', 'helpBreakdownStartupDesc', '⚡')
+      + helpRow('helpBreakdownType', 'helpBreakdownTypeDesc', '📊')
+      + helpRow('helpBreakdownTop5', 'helpBreakdownTop5Desc', '🏆')
+      + helpRow('helpBreakdownAccordion', 'helpBreakdownAccordionDesc', '▶')
+      + '</div>'
+      + '<div style="margin-top:14px;padding-top:12px;border-top:1px solid var(--border)">'
+      + '<a href="#breakdown" style="font-size:13px;font-weight:600;color:var(--accent);text-decoration:none">→ ' + t('bdTitle') + '</a>'
+      + '</div>'
+      + '</div></div>';
+
+    // 사용 분석 > 🪟 컨텍스트 익스플로러
+    html += '<div class="section">'
+      + '<div class="section-title">' + breadcrumb(t('usageAnalysis'), '🪟', t('helpContextExplorer')) + '</div>'
       + '<div class="card" style="padding:16px 20px">'
       + '<p style="margin:0 0 12px;font-size:14px;color:var(--text-secondary);line-height:1.6">' + t('helpContextExplorerDesc') + '</p>'
       + '<div class="help-list" style="border:none;padding:0;margin:0">'
@@ -3579,26 +3930,31 @@
       + '</div>'
       + '</div></div>';
 
-    // v0.8.0: Insights & optimization
+    // 사용 분석 > 💬 프롬프트
     html += '<div class="section">'
-      + '<div class="section-title">💡 ' + t('helpInsightsTitle') + '</div>'
+      + '<div class="section-title">' + breadcrumb(t('usageAnalysis'), '💬', t('tokensPrompt')) + '</div>'
+      + '<div class="card help-list">'
+      + helpRow('helpPromptStats', 'helpPromptStatsDesc', '📝')
+      + helpRow('helpLatency', 'helpLatencyDesc', '⏱️')
+      + '</div></div>';
+
+    // 사용 분석 > 📋 세션
+    html += '<div class="section">'
+      + '<div class="section-title">' + breadcrumb(t('usageAnalysis'), '📋', t('tokensSession')) + '</div>'
       + '<div class="card help-list">'
       + helpRow('helpRegression', 'helpRegressionDesc', '⚠️')
-      + helpRow('helpUsageBar', 'helpUsageBarDesc', '▭')
-      + helpRow('helpLogScale', 'helpLogScaleDesc', '📐')
-      + helpRow('helpCostProjection', 'helpCostProjectionDesc', '💰')
       + helpRow('helpEfficiency', 'helpEfficiencyDesc', '⚡')
       + '</div></div>';
 
-    // Token & usage parsing
+    // 💡 인사이트 & 최적화
     html += '<div class="section">'
-      + '<div class="section-title">🪙 ' + t('tokens') + ' & ' + t('activity') + '</div>'
+      + '<div class="section-title">💡 ' + t('helpInsightsTitle') + '</div>'
       + '<div class="card help-list">'
-      + helpRow('helpTokens', 'helpTokensDesc', '🪙')
-      + helpRow('helpPromptStats', 'helpPromptStatsDesc', '📝')
-      + helpRow('helpLatency', 'helpLatencyDesc', '⏱️')
-      + helpRow('helpActivity', 'helpActivityDesc', '📊')
-      + helpRow('helpCommands', 'helpCommandsDesc', '⌨️')
+      + helpRow('helpUsageBar', 'helpUsageBarDesc', '▭')
+      + helpRow('helpLogScale', 'helpLogScaleDesc', '📐')
+      + helpRow('helpRegression', 'helpRegressionDesc', '⚠️')
+      + helpRow('helpCostProjection', 'helpCostProjectionDesc', '💰')
+      + helpRow('helpEfficiency', 'helpEfficiencyDesc', '⚡')
       + '</div></div>';
 
     // Data parsing reference
@@ -6411,13 +6767,19 @@
     }
     const useLog = scale.useLog;
 
-    let html = '<div class="usage-bar-card">'
+    const headLeftHtml = opts.titleHtml || (opts.titleKey ? t(opts.titleKey) : '');
+    const headSubtitle = opts.subtitleHtml ? '<div class="usage-bar-head-subtitle">' + opts.subtitleHtml + '</div>' : '';
+    const valueLabel = !!opts.valueLabelHtml;
+    const fillClass = opts.fillHeight ? ' usage-bar-card--fill' : '';
+
+    let html = '<div class="usage-bar-card' + fillClass + '">'
       + '<div class="usage-bar-head">'
-      +   '<div class="usage-bar-head-label">' + t(opts.titleKey) + '</div>'
+      +   '<div><div class="usage-bar-head-label">' + headLeftHtml + '</div>' + headSubtitle + '</div>'
       +   '<div class="usage-bar-head-right">'
+      +     (valueLabel ? '<div class="usage-bar-value-label">' + (opts.valueLabelHtml || '') + '</div>' : '')
       +     '<div class="usage-bar-head-value">'
-      +       '<span class="usage-bar-total">' + totalFmt(total) + '</span>'
       +       changeBadge(opts.totalChange)
+      +       '<span class="usage-bar-total">' + totalFmt(total) + '</span>'
       +     '</div>'
       +     '<div class="usage-bar-head-sub">' + t('vsPrevPeriodCaption') + '</div>'
       +   '</div>'
@@ -6431,7 +6793,9 @@
     if (opts.summaryHtml) {
       html += '<div class="usage-bar-summary">' + opts.summaryHtml + '</div>';
     }
-    html += '<div class="usage-bar-rows">';
+    const rowsStyle = opts.fillHeight ? ' style="flex:1"' : '';
+
+    html += '<div class="usage-bar-rows"' + rowsStyle + '>';
     for (const r of rows) {
       const linearPct = total > 0 ? (r.value / total) * 100 : 0;
       const barWidth = computeBarWidth(r.value, total, scale);
@@ -6445,7 +6809,11 @@
         + '<div class="usage-bar-row-change">' + changeBadge(r.change) + '</div>'
         + '</div>';
     }
-    html += '</div></div>';
+    html += '</div>';
+    if (opts.footerHtml) {
+      html += '<div class="usage-bar-footer">' + opts.footerHtml + '</div>';
+    }
+    html += '</div>';
     return html;
   }
 

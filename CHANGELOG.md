@@ -1,5 +1,30 @@
 # Changelog
 
+## [0.10.0] - 2026-04-15
+
+### Added
+- **Token Breakdown page** (`#breakdown`) — new page under Tokens group. Breaks down token usage by context type (skill / agent / MCP / built-in tool) and individual item.
+  - **Startup context cost** — estimates cumulative cost of auto-loaded items (CLAUDE.md, skill descriptions, principles, MCP tool listings) × session count. Shows period-over-period change and estimated cost derived from the session's actual average input cost per token.
+  - **Type bar chart** — `renderBarCard`-style horizontal bar for skill / agent / MCP / tool / conversation with period comparison (% vs previous equal-length period).
+  - **Top 5 per type** — mini cards showing top 5 token consumers for Overall + each type. Custom hover tooltip for truncated names.
+  - **Detail accordion** — expandable rows per type showing all items with token count, call count, avg tokens/call, and share. State persisted to localStorage across refreshes.
+  - **Startup vs usage proportion bar** added and removed (too small a ratio to be meaningful).
+- **`renderBarCard` extended options** — `titleHtml`, `subtitleHtml`, `valueLabelHtml` (rendered above total on right side), `fillHeight` (CSS class for equal-height cards in flex rows), `footerHtml` (inside card, below rows with border-top). Change badge now renders before the total value (% → number order).
+- **Automatic update check** on `/omh` run — `notifyUpdateIfAvailable()` reads `.update-check` cache synchronously (≤1ms, no network); `scheduleUpdateCacheRefresh()` spawns a detached unref'd child process when cache is stale (>12h). Locale-aware messages (ko/en). `--_update-cache` internal flag for the background worker.
+- **README** — Token Breakdown section with `assets/token-breakdown.png` screenshot.
+- **Help page** (`#help`) — reorganized sections to follow sidebar order; section titles show menu breadcrumb (e.g., "토큰 › 💰 비용"); version tag removed from Insights title; Token Breakdown section added.
+- **Test files** — `test/update-check.test.mjs` (22 tests for update-check infrastructure and semverGt), `test/locale-detection.test.mjs` (31 tests for LANG env detection, writeHtml locale creation, locale-aware update messages).
+- **Locale detection tests** — `web-ui.test.mjs` gains 13 new tests for Breakdown feature (routing, state, aggregation, renderBarCard options, CSS classes) and 14 new i18n keys.
+
+### Changed
+- **Sidebar restructured** — Tokens group now only contains 비용 and 항목별 분석. A `nav-section-label` ("사용 분석") separates the flat items: 🪟 컨텍스트 익스플로러, 💬 프롬프트, 📋 세션, 🗂️ 구조. "Token Breakdown" shortened to "Breakdown" (redundant prefix removed).
+- **`IS_ACTUAL_DEV_REPO`** — new constant that ignores `OMH_BUILD_MODE=plugin` override so the dev build badge persists even when `cache.test.mjs` runs plugin-mode builds against the shared output directory.
+- **`--data-only` lightweight path** — always syncs `_devBuild` flag after transcript merge (previously only ran when `parsed > 0`).
+- **`build.test.mjs`** — captures `data.json` snapshot immediately after `execSync` to guard against concurrent test runs overwriting it.
+
+### Tests
+- **364 → 430** (+66): `update-check.test.mjs` (+22), `locale-detection.test.mjs` (+31), `web-ui.test.mjs` (+13)
+
 ## [0.9.0] - 2026-04-14
 
 ### Added

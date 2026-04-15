@@ -178,8 +178,9 @@ Built at build time in `generate-dashboard.mjs`. Persisted in `task-categories.j
 | Harness Overview | `#overview` | Stats cards, category distribution donut, daily trend, popular skills, context budget (canvas stacked bar + top items, estimated), activity heatmap, recent activity, insights, unused items (incl. MCP servers + cleanup tips) |
 | Token Overview | `#tokens` | Token stats, model distribution donut, trend chart, activity heatmap, task category bar, tool context bar, model table, insights |
 | Token: Cost | `#tokens-cost` | Cost cards, budget config + progress bars, cost trend charts (daily/weekly/monthly with budget grid lines), cost formula |
-| Token: Prompt | `#tokens-prompt` | Prompt stats, response latency, hourly distribution, cache efficiency + tips |
-| Token: Session | `#tokens-session` | Session stats, top sessions table (clickable) |
+| Token Breakdown | `#breakdown` | Startup context cost (CLAUDE.md + skills + principles + MCP × session count, period comparison), type bar chart (skill/agent/MCP/tool/conversation), Top 5 per type, expandable accordion per type |
+| Prompt | `#tokens-prompt` | Prompt stats, response latency, hourly distribution, cache efficiency + tips |
+| Session | `#tokens-session` | Session stats, top sessions table (clickable) |
 | Session Detail | `#session/{id}` | Session stat cards, models/skills/agents/MCP badges, activity timeline table |
 | Context Explorer | `#context` | Interactive simulator of what fills the context window during a session. Defaults to Real session mode. Two modes: `Real session` (`#context/{sessionId}` or `#context/session`) — replays actual session token usage with per-turn delta/cumulative, auto-scaling 200K↔1M budget, 3-state terminal visibility eye icons; `Example` — scripted 36-step scenario using real startup measurements. Canvas bar + virtual scroll timeline for performance. |
 | Structure | `#structure` | Component flow SVG, file tree |
