@@ -171,6 +171,8 @@
   let contextSubPath = '';
   let compareMode = localStorage.getItem('harness-compare') === 'true';
   const breakdownExpandedTypes = new Set();
+  let sidebarCollapsed = localStorage.getItem('harness-sidebar-collapsed') === '1';
+  let sidebarAutoCollapsed = false;
 
   // ── DOM refs ──
   const scopeSelect = document.getElementById('scope-select');
@@ -239,12 +241,18 @@
       render();
     });
 
-    // Place theme toggle + help button in sidebar logo
+    // Place theme toggle + help button before sidebar-toggle in sidebar logo
     const logoEl = document.getElementById('sidebar-logo');
     const logoMainEl = logoEl ? logoEl.querySelector('.sidebar-logo-main') : null;
+    const sidebarToggleBtn = document.getElementById('sidebar-toggle');
     if (logoMainEl) {
-      logoMainEl.appendChild(themeBtn);
-      logoMainEl.appendChild(helpBtn);
+      if (sidebarToggleBtn) {
+        logoMainEl.insertBefore(themeBtn, sidebarToggleBtn);
+        logoMainEl.insertBefore(helpBtn, sidebarToggleBtn);
+      } else {
+        logoMainEl.appendChild(themeBtn);
+        logoMainEl.appendChild(helpBtn);
+      }
     }
 
     // Language toggle
@@ -294,6 +302,8 @@
       document.body.appendChild(badge);
     }
 
+    initSidebarCollapse();
+
     // Apply initial hash
     if (window.location.hash) {
       applyHash();
@@ -301,6 +311,64 @@
 
     render();
     pushState(false);
+  }
+
+  // ── Sidebar collapse ──
+  function initSidebarCollapse() {
+    if (sidebarCollapsed) document.body.classList.add('sidebar-collapsed');
+
+    const toggleBtn = document.getElementById('sidebar-toggle');
+    if (toggleBtn) {
+      toggleBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        sidebarAutoCollapsed = false;
+        sidebarCollapsed = !sidebarCollapsed;
+        localStorage.setItem('harness-sidebar-collapsed', sidebarCollapsed ? '1' : '0');
+        document.body.classList.toggle('sidebar-collapsed', sidebarCollapsed);
+        removeNavTooltips();
+      });
+    }
+
+    const mql = window.matchMedia('(max-width: 1100px)');
+    function onBreakpoint(e) {
+      if (e.matches) {
+        sidebarAutoCollapsed = true;
+        document.body.classList.add('sidebar-collapsed');
+      } else {
+        sidebarAutoCollapsed = false;
+        document.body.classList.toggle('sidebar-collapsed', sidebarCollapsed);
+      }
+      removeNavTooltips();
+    }
+    mql.addEventListener('change', onBreakpoint);
+    onBreakpoint(mql);
+  }
+
+  function removeNavTooltips() {
+    document.querySelectorAll('.nav-tooltip').forEach((el) => el.remove());
+  }
+
+  function bindNavTooltips() {
+    sidebarNav.querySelectorAll('.nav-item[data-label]').forEach((item) => {
+      let tipEl = null;
+      item.addEventListener('mouseenter', () => {
+        if (!document.body.classList.contains('sidebar-collapsed')) return;
+        const label = item.dataset.label;
+        if (!label) return;
+        tipEl = document.createElement('div');
+        tipEl.className = 'nav-tooltip';
+        tipEl.textContent = label;
+        document.body.appendChild(tipEl);
+        const rect = item.getBoundingClientRect();
+        const sidebarEl = document.querySelector('.sidebar');
+        const sidebarRight = sidebarEl ? sidebarEl.getBoundingClientRect().right : 52;
+        tipEl.style.left = (sidebarRight + 8) + 'px';
+        tipEl.style.top = (rect.top + rect.height / 2 - tipEl.offsetHeight / 2) + 'px';
+      });
+      item.addEventListener('mouseleave', () => {
+        if (tipEl) { tipEl.remove(); tipEl = null; }
+      });
+    });
   }
 
   function updateSearchPlaceholder() {
@@ -871,7 +939,7 @@
 
       const badgeText = searchQuery ? fmtNum(filteredItems.length) + '/' + fmtNum(items.length) : fmtNum(items.length);
 
-      html += '<div class="nav-item' + (isActive ? ' active' : '') + '" data-action="toggle-category" data-category="' + cat.key + '" title="' + escapeHtml(getCatLabel(cat)) + '">'
+      html += '<div class="nav-item' + (isActive ? ' active' : '') + '" data-action="toggle-category" data-category="' + cat.key + '" title="' + escapeHtml(getCatLabel(cat)) + '" data-label="' + escapeHtml(getCatLabel(cat)) + '">'
         + '<span class="icon">' + cat.icon + '</span>'
         + '<span class="label">' + getCatLabel(cat) + '</span>'
         + '<span class="badge">' + badgeText + '</span>'
@@ -909,6 +977,7 @@
     });
 
     sidebarNav.innerHTML = html;
+    bindNavTooltips();
 
     sidebarNav.onclick = function (e) {
       const navItemEl = e.target.closest('[data-action]');
@@ -945,7 +1014,7 @@
   }
 
   function navItem(view, icon, label, badge, active) {
-    return '<div class="nav-item' + (active ? ' active' : '') + '" data-action="nav" data-view="' + view + '">'
+    return '<div class="nav-item' + (active ? ' active' : '') + '" data-action="nav" data-view="' + view + '" data-label="' + escapeHtml(label) + '">'
       + '<span class="icon">' + icon + '</span>'
       + '<span class="label">' + label + '</span>'
       + (badge !== null ? '<span class="badge">' + badge + '</span>' : '')

@@ -56,6 +56,93 @@ body {
   bottom: 0;
   z-index: 10;
   overflow: visible;
+  transition: width 0.22s ease, min-width 0.22s ease;
+}
+
+/* ── Sidebar collapse toggle button ── */
+.sidebar-toggle {
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 4px 5px;
+  margin-left: auto;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  border-radius: var(--radius-sm);
+  transition: background var(--transition);
+}
+.sidebar-toggle:hover {
+  background: var(--bg);
+}
+.sidebar-toggle span {
+  display: block;
+  width: 15px;
+  height: 2px;
+  background: var(--text-secondary);
+  border-radius: 1px;
+  transition: all 0.22s;
+}
+
+/* ── Collapsed state ── */
+body.sidebar-collapsed {
+  --sidebar-width: 52px;
+}
+body.sidebar-collapsed .content {
+  transition: margin-left 0.22s ease;
+}
+body.sidebar-collapsed .sidebar-logo-text,
+body.sidebar-collapsed .sidebar-logo-tagline,
+body.sidebar-collapsed .sidebar-logo-sub,
+body.sidebar-collapsed .sidebar-period,
+body.sidebar-collapsed .sidebar-header,
+body.sidebar-collapsed .sidebar-search,
+body.sidebar-collapsed .nav-section-label,
+body.sidebar-collapsed .nav-separator,
+body.sidebar-collapsed .nav-item .label,
+body.sidebar-collapsed .nav-item .badge,
+body.sidebar-collapsed .nav-item .chevron,
+body.sidebar-collapsed .nav-children,
+body.sidebar-collapsed .theme-btn {
+  display: none !important;
+}
+body.sidebar-collapsed .sidebar-logo {
+  padding: 10px 6px;
+  align-items: center;
+  gap: 4px;
+}
+body.sidebar-collapsed .sidebar-logo-main {
+  justify-content: center;
+}
+body.sidebar-collapsed .sidebar-toggle {
+  margin-left: 0;
+}
+body.sidebar-collapsed .nav-item {
+  padding: 10px 0;
+  justify-content: center;
+  gap: 0;
+}
+
+/* ── Nav tooltip (collapsed sidebar) ── */
+.nav-tooltip {
+  position: absolute;
+  background: var(--text);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 500;
+  padding: 4px 9px;
+  border-radius: 4px;
+  white-space: nowrap;
+  z-index: 1000;
+  pointer-events: none;
+  box-shadow: 0 2px 6px rgba(0,0,0,0.15);
+}
+body.dark .nav-tooltip {
+  background: #3a3b40;
+  color: var(--text);
+  border: 1px solid var(--border);
+  box-shadow: 0 2px 8px rgba(0,0,0,0.4);
 }
 
 .sidebar-logo {
@@ -800,6 +887,7 @@ body.dark .sidebar-period-range {
   flex: 1;
   padding: 32px;
   min-height: 100vh;
+  transition: margin-left 0.22s ease;
 }
 
 /* ── Page Header ── */
