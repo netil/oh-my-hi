@@ -70,11 +70,11 @@ body.sidebar-collapsed .sidebar-toggle-wrap {
   justify-content: center;
   padding: 4px;
 }
-/* 펼침: logo-main inline 버튼 노출, wrap 내 버튼 숨김 */
-.sidebar-toggle-collapsed { display: none; }
-/* 접힘: inline 숨김, wrap 내 버튼 노출 */
+/* 펼침: toggle-wrap 전체 숨김, inline 버튼 노출 */
+.sidebar-toggle-wrap { display: none; }
+/* 접힘: toggle-wrap 노출, inline 버튼 숨김 */
+body.sidebar-collapsed .sidebar-toggle-wrap { display: flex; }
 body.sidebar-collapsed .sidebar-toggle-inline { display: none !important; }
-body.sidebar-collapsed .sidebar-toggle-collapsed { display: flex; }
 .sidebar-toggle {
   background: none;
   border: none;
