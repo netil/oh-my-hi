@@ -14,6 +14,10 @@
         <div class="sidebar-logo-main">
           <span class="sidebar-logo-icon">👋</span>
           <span class="sidebar-logo-text">oh-my-hi</span>
+          <!-- theme-btn, help-btn appended here by JS, then sidebar-toggle-inline -->
+          <button class="sidebar-toggle sidebar-toggle-inline" id="sidebar-toggle" title="Toggle sidebar" aria-label="Toggle sidebar" onclick="event.stopPropagation()">
+            <span></span><span></span><span></span>
+          </button>
         </div>
         <div class="sidebar-logo-tagline" id="sidebar-logo-tagline">Oh, so that's what Claude's been doing!</div>
         <div class="sidebar-logo-sub">
@@ -25,7 +29,7 @@
         </div>
       </div>
       <div class="sidebar-toggle-wrap">
-        <button class="sidebar-toggle" id="sidebar-toggle" title="Toggle sidebar" aria-label="Toggle sidebar">
+        <button class="sidebar-toggle sidebar-toggle-collapsed" title="Toggle sidebar" aria-label="Toggle sidebar">
           <span></span><span></span><span></span>
         </button>
       </div>

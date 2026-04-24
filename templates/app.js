@@ -241,12 +241,18 @@
       render();
     });
 
-    // Place theme toggle + help button in sidebar logo
+    // Place theme toggle + help button before the inline sidebar-toggle
     const logoEl = document.getElementById('sidebar-logo');
     const logoMainEl = logoEl ? logoEl.querySelector('.sidebar-logo-main') : null;
+    const inlineToggle = document.getElementById('sidebar-toggle');
     if (logoMainEl) {
-      logoMainEl.appendChild(themeBtn);
-      logoMainEl.appendChild(helpBtn);
+      if (inlineToggle) {
+        logoMainEl.insertBefore(themeBtn, inlineToggle);
+        logoMainEl.insertBefore(helpBtn, inlineToggle);
+      } else {
+        logoMainEl.appendChild(themeBtn);
+        logoMainEl.appendChild(helpBtn);
+      }
     }
 
     // Language toggle
@@ -311,17 +317,16 @@
   function initSidebarCollapse() {
     if (sidebarCollapsed) document.body.classList.add('sidebar-collapsed');
 
-    const toggleBtn = document.getElementById('sidebar-toggle');
-    if (toggleBtn) {
-      toggleBtn.addEventListener('click', (e) => {
-        e.stopPropagation();
-        sidebarAutoCollapsed = false;
-        sidebarCollapsed = !sidebarCollapsed;
-        localStorage.setItem('harness-sidebar-collapsed', sidebarCollapsed ? '1' : '0');
-        document.body.classList.toggle('sidebar-collapsed', sidebarCollapsed);
-        removeNavTooltips();
-      });
+    function onToggleClick(e) {
+      e.stopPropagation();
+      sidebarAutoCollapsed = false;
+      sidebarCollapsed = !sidebarCollapsed;
+      localStorage.setItem('harness-sidebar-collapsed', sidebarCollapsed ? '1' : '0');
+      document.body.classList.toggle('sidebar-collapsed', sidebarCollapsed);
+      removeNavTooltips();
     }
+    document.getElementById('sidebar-toggle')?.addEventListener('click', onToggleClick);
+    document.querySelector('.sidebar-toggle-collapsed')?.addEventListener('click', onToggleClick);
 
     const mql = window.matchMedia('(max-width: 1100px)');
     function onBreakpoint(e) {

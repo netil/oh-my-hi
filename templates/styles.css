@@ -70,6 +70,11 @@ body.sidebar-collapsed .sidebar-toggle-wrap {
   justify-content: center;
   padding: 4px;
 }
+/* 펼침: logo-main inline 버튼 노출, wrap 내 버튼 숨김 */
+.sidebar-toggle-collapsed { display: none; }
+/* 접힘: inline 숨김, wrap 내 버튼 노출 */
+body.sidebar-collapsed .sidebar-toggle-inline { display: none !important; }
+body.sidebar-collapsed .sidebar-toggle-collapsed { display: flex; }
 .sidebar-toggle {
   background: none;
   border: none;
