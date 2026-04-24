@@ -241,18 +241,12 @@
       render();
     });
 
-    // Place theme toggle + help button before sidebar-toggle in sidebar logo
+    // Place theme toggle + help button in sidebar logo
     const logoEl = document.getElementById('sidebar-logo');
     const logoMainEl = logoEl ? logoEl.querySelector('.sidebar-logo-main') : null;
-    const sidebarToggleBtn = document.getElementById('sidebar-toggle');
     if (logoMainEl) {
-      if (sidebarToggleBtn) {
-        logoMainEl.insertBefore(themeBtn, sidebarToggleBtn);
-        logoMainEl.insertBefore(helpBtn, sidebarToggleBtn);
-      } else {
-        logoMainEl.appendChild(themeBtn);
-        logoMainEl.appendChild(helpBtn);
-      }
+      logoMainEl.appendChild(themeBtn);
+      logoMainEl.appendChild(helpBtn);
     }
 
     // Language toggle
