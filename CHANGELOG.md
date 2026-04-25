@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.11.1] - 2026-04-25
+
+### Fixed
+- Added `.npmignore` to exclude `.claude/` and `.vscode/` from npm package
+
 ## [0.11.0] - 2026-04-25
 
 ### Added
