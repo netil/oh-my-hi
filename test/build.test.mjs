@@ -57,12 +57,10 @@ describe('Build', () => {
       }
     });
 
-    it('should have usage data in global scope', () => {
+    it('should not include usage arrays in data.json (SQLite is authoritative)', () => {
+      // Usage data is stored in SQLite only — data.json is structural/config data.
       const usage = data.scopeData?.global?.usage;
-      assert.ok(usage, 'usage exists');
-      for (const key of ['tokenEntries', 'promptStats', 'latencyEntries', 'skills', 'agents', 'commands', 'mcpCalls']) {
-        assert.ok(Array.isArray(usage[key]), `usage.${key} is array`);
-      }
+      assert.ok(!usage || Object.keys(usage).length === 0, 'usage arrays must not be in data.json');
     });
 
     it('should have taskCategories with mapping and meta', () => {
@@ -114,25 +112,18 @@ describe('Build', () => {
       assert.ok(!html.includes('>__BB_CSS__<'), 'BB_CSS placeholder');
       assert.ok(!html.includes('>__STYLES__<'), 'STYLES placeholder');
       assert.ok(!html.includes('>__APP_JS__<'), 'APP_JS placeholder');
-      assert.ok(html.includes('src="data-core.js"'), 'DATA should be loaded via external data-core.js');
       assert.ok(!html.includes('__VERSION__'), 'VERSION placeholder');
     });
 
-    it('should have separate data.js file', () => {
-      assert.ok(fs.existsSync(path.join(OUTPUT, 'data.js')), 'data.js should exist');
-      const dataJs = fs.readFileSync(path.join(OUTPUT, 'data.js'), 'utf-8');
-      assert.ok(dataJs.startsWith('let DATA ='), 'data.js should define DATA variable');
+    it('should NOT have legacy data.js file (API-first architecture)', () => {
+      assert.ok(!fs.existsSync(path.join(OUTPUT, 'data.js')), 'data.js should not exist');
+      assert.ok(!fs.existsSync(path.join(OUTPUT, 'data-core.js')), 'data-core.js should not exist');
+      assert.ok(!fs.existsSync(path.join(OUTPUT, 'data-usage.js')), 'data-usage.js should not exist');
     });
 
-    it('should have progressive loading split files', () => {
-      assert.ok(fs.existsSync(path.join(OUTPUT, 'data-core.js')), 'data-core.js should exist');
-      assert.ok(fs.existsSync(path.join(OUTPUT, 'data-usage.js')), 'data-usage.js should exist');
-      const core = fs.readFileSync(path.join(OUTPUT, 'data-core.js'), 'utf-8');
-      assert.ok(core.startsWith('let DATA ='), 'data-core.js should define DATA');
-      assert.ok(core.includes('_usageReady'), 'data-core.js should have _usageReady flag');
-      const usage = fs.readFileSync(path.join(OUTPUT, 'data-usage.js'), 'utf-8');
-      assert.ok(usage.startsWith('let DATA_USAGE ='), 'data-usage.js should define DATA_USAGE');
-      assert.ok(usage.includes('_onUsageReady'), 'data-usage.js should call _onUsageReady');
+    it('should NOT load data via inline script src tags (API mode)', () => {
+      assert.ok(!html.includes('src="data-core.js"'), 'should not have data-core.js script tag');
+      assert.ok(!html.includes('src="data-usage.js"'), 'should not have data-usage.js script tag');
     });
 
     it('should reference static assets', () => {

@@ -24,6 +24,8 @@
   "costPricingTable": "Model Pricing Table (per 1M tokens)",
   "costCardNote": "Based on Anthropic API token pricing (<span style='color:#e74c3c'>not actual CLI subscription billing</span>)",
   "costPricingUnit": "USD per 1M tokens",
+  "costPricingFetchedAt": "Token costs are based on Anthropic pricing as of {date}. Run <code>/omh</code> to fetch the latest pricing.",
+  "costPricingFallback": "Token costs are based on built-in prices. Run <code>/omh</code> to fetch the latest pricing.",
   "compareToggle": "Compare with previous period",
   "comparePrev": "Previous Period",
   "weekLabel": "{1} week, {0}",

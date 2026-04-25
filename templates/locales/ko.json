@@ -24,6 +24,8 @@
   "costPricingTable": "모델별 가격표 (1M 토큰당)",
   "costCardNote": "Anthropic API 토큰 단가 기준 환산 비용입니다 (<span style='color:#e74c3c'>실제 CLI 구독 청구와 무관</span>)",
   "costPricingUnit": "USD / 1M 토큰",
+  "costPricingFetchedAt": "omh의 모든 토큰 계산은 {date} 기준의 Anthropic 가격 기준입니다. 최신 가격 정보를 가져오려면 <code>/omh</code>를 실행하세요.",
+  "costPricingFallback": "omh의 모든 토큰 계산은 내장된 가격 기준입니다. 최신 가격 정보를 가져오려면 <code>/omh</code>를 실행하세요.",
   "compareToggle": "이전 기간과 비교",
   "comparePrev": "이전 기간",
   "weekLabel": "{0} {1}째주",

@@ -45,7 +45,7 @@ import { parseTeams } from './parsers/teams.mjs';
 import { parsePlans } from './parsers/plans.mjs';
 import { parseTodos } from './parsers/todos.mjs';
 import { parseConfigFiles } from './parsers/config-files.mjs';
-import { parseUsage, loadTranscriptCache, saveTranscriptCache, savePending, mergePending, hasPending, loadMtimeIndex, saveMtimeIndex } from './parsers/usage.mjs';
+import { parseUsage, savePending, mergePending, hasPending, loadMtimeIndex, saveMtimeIndex } from './parsers/usage.mjs';
 import { detectScopes } from './parsers/scopes.mjs';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -105,6 +105,82 @@ Usage:
   oh-my-hi <path> [path...]   Include specified projects only
   oh-my-hi --help             Show help`);
   process.exit(0);
+}
+
+// ── Pricing fetch ───────────────────────────────────────────────────────────
+const PRICING_CACHE_FILE = path.join(OUTPUT, 'cache', '.pricing-cache.json');
+const PRICING_CACHE_TTL = 24 * 60 * 60 * 1000; // 24 hours
+
+function _modelNameToKey(name) {
+  // "Claude Opus 4.7 (deprecated)" → "opus-4-7", "Claude Sonnet 4" → "sonnet-4"
+  const clean = name.replace(/\([^)]*\)/g, '').trim();
+  const m = clean.match(/^Claude\s+(Opus|Sonnet|Haiku)\s+(\d+)(?:\.(\d+))?$/i);
+  if (!m) return null;
+  return [m[1].toLowerCase(), m[2], m[3]].filter(Boolean).join('-');
+}
+
+function _parsePricingHtml(html) {
+  const pricing = {};
+  let headerCols = null;
+  const trRe = /<tr[^>]*>([\s\S]*?)<\/tr>/gi;
+  let trM;
+  while ((trM = trRe.exec(html)) !== null) {
+    const cells = [];
+    const cellRe = /<t[dh][^>]*>([\s\S]*?)<\/t[dh]>/gi;
+    let cM;
+    while ((cM = cellRe.exec(trM[1])) !== null) {
+      cells.push(
+        cM[1].replace(/<[^>]+>/g, '').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/\s+/g, ' ').trim()
+      );
+    }
+    if (cells.length < 4) continue;
+    if (!headerCols && /^model$/i.test(cells[0]) && cells.some(c => /input/i.test(c))) {
+      headerCols = cells.map(c => c.toLowerCase());
+      continue;
+    }
+    if (!headerCols || !/^claude\s/i.test(cells[0])) continue;
+    const key = _modelNameToKey(cells[0]);
+    if (!key) continue;
+    const pick = (kw) => {
+      const i = headerCols.findIndex(h => h.includes(kw));
+      if (i < 0 || i >= cells.length) return null;
+      const m2 = cells[i].match(/\$([\d.]+)/);
+      return m2 ? parseFloat(m2[1]) : null;
+    };
+    const input = pick('input'), output = pick('output');
+    if (input == null || output == null) continue;
+    pricing[key] = { input, output, cacheRead: pick('hit') ?? pick('refresh'), cacheCreation: pick('5m') };
+  }
+  return Object.keys(pricing).length > 0 ? pricing : null;
+}
+
+async function fetchModelPricing() {
+  // Returns { pricing, ts } or null on failure.
+  try {
+    if (fs.existsSync(PRICING_CACHE_FILE)) {
+      const cached = JSON.parse(fs.readFileSync(PRICING_CACHE_FILE, 'utf-8'));
+      if (Date.now() - (cached.ts || 0) < PRICING_CACHE_TTL) {
+        return { pricing: cached.pricing, ts: cached.ts };
+      }
+    }
+  } catch { /* ignore */ }
+  try {
+    const res = await fetch('https://platform.claude.com/docs/en/docs/about-claude/pricing', {
+      signal: AbortSignal.timeout(8000),
+    });
+    if (!res.ok) return null;
+    const pricing = _parsePricingHtml(await res.text());
+    if (!pricing) return null;
+    const ts = Date.now();
+    try {
+      fs.mkdirSync(path.dirname(PRICING_CACHE_FILE), { recursive: true });
+      fs.writeFileSync(PRICING_CACHE_FILE, JSON.stringify({ ts, pricing }));
+    } catch { /* ignore */ }
+    console.log('  pricing: fetched from Anthropic docs');
+    return { pricing, ts };
+  } catch {
+    return null;
+  }
 }
 
 // ── Internal: background cache refresh (spawned as detached child) ──
@@ -382,22 +458,71 @@ async function main() {
   // Ensure output directory exists
   fs.mkdirSync(OUTPUT, { recursive: true });
 
-  // ── Migration detection ──
-  const dataJsPath = path.join(OUTPUT, 'data.js');
-  const needsMigration = fs.existsSync(dataPath) && !fs.existsSync(dataJsPath);
-  const needsVersionUpdate = needsHtmlRebuild(indexPath);
+  // ── SQLite: load module + handle legacy DB split ──
+  let dbModule = null;
+  try {
+    dbModule = await import('./db.mjs');
 
-  if (needsMigration || needsVersionUpdate) {
-    console.log('oh-my-hi: data structure changed — rebuilding (one-time)...');
+    // Split legacy oh-my-hi.sqlite into monthly files if needed (one-time upgrade)
+    const LEGACY_DB = path.join(OUTPUT, 'oh-my-hi.sqlite');
+    const removeLegacyFiles = () => {
+      for (const suffix of ['', '-shm', '-wal', '.migrated']) {
+        try { fs.unlinkSync(LEGACY_DB + suffix); } catch { /* ignore */ }
+      }
+    };
+    if (fs.existsSync(LEGACY_DB)) {
+      if (dbModule.listMonthlyDbs(OUTPUT).length === 0) {
+        console.log('oh-my-hi: 레거시 DB를 월별 파일로 분리하는 중...');
+        const legacyDb = dbModule.openDb(LEGACY_DB);
+        try { dbModule.splitLegacyDb(legacyDb, OUTPUT); } finally { legacyDb.close(); }
+        console.log('oh-my-hi: ✅ 레거시 DB 분리 완료');
+      }
+      removeLegacyFiles();
+    } else {
+      // No oh-my-hi.sqlite, but leftover WAL/SHM/.migrated may exist — clean them up
+      removeLegacyFiles();
+    }
+  } catch (e) {
+    console.warn('oh-my-hi: SQLite unavailable —', e.message);
   }
+
+  const appendToMonthly = (scope, usage) => {
+    if (!dbModule || !usage) return;
+    try { dbModule.appendUsageMonthly(OUTPUT, scope, usage); } catch (e) {
+      console.warn('oh-my-hi: SQLite append failed —', e.message);
+    }
+  };
+
+  const syncDb = (scopeData) => {
+    for (const [scope, sdata] of Object.entries(scopeData || {})) {
+      if (sdata?.usage) appendToMonthly(scope, sdata.usage);
+    }
+  };
+
+  const getDbCtxNames = () => {
+    if (!dbModule) return [];
+    try { return dbModule.queryContextNamesAllMonths(OUTPUT); } catch { return []; }
+  };
+
+  const getDbDateRange = () => {
+    if (!dbModule) return null;
+    try {
+      const r = dbModule.queryDateRangeAllMonths(OUTPUT);
+      return r ? { from: r.earliest, to: r.latest } : null;
+    } catch { return null; }
+  };
+
+  // ── One-time upgrade: remove legacy JS data files ──
+  cleanupLegacyFiles(OUTPUT);
+  // Migration (data.json → SQLite) is deferred until after server start so the
+  // browser can immediately display existing data via the data.json fallback.
+  const needsMigration = checkNeedsMigration(dbModule, OUTPUT, dataPath);
 
   // ── Lightweight mode (--data-only, triggered by Stop hook) ──
   // Parse changed files, update data.js for browser, save pending for cache.
   if (dataOnly) {
-    if (!needsMigration && !needsVersionUpdate) {
-      if (IS_DEV_BUILD) console.log('oh-my-hi: [dev] running from source checkout');
-      console.log('oh-my-hi: collecting data (lightweight)...');
-    }
+    if (IS_DEV_BUILD) console.log('oh-my-hi: [dev] running from source checkout');
+    console.log('oh-my-hi: collecting data (lightweight)...');
 
     // Load mtime index (tiny file) instead of full cache
     const mtimeIndex = loadMtimeIndex(CACHE_PATH);
@@ -422,44 +547,34 @@ async function main() {
     const total = Object.keys(cache).filter(k => !k.startsWith('_')).length;
     console.log(`  transcripts: ${total} files (${parsed} parsed, ${total - parsed} skipped)`);
 
-    // Update data.js by merging new entries — must run BEFORE savePending()
+    // Append new entries to SQLite — must run BEFORE savePending()
     // because savePending clears _new flags that the merge depends on.
-    const dataJsPath = path.join(OUTPUT, 'data.js');
-    const dataJsMissing = !fs.existsSync(dataJsPath);
+    if (parsed > 0 && dbModule) {
+      const newUsage = { skills: [], agents: [], mcpCalls: [], tokenEntries: [], promptStats: [], latencyEntries: [] };
+      for (const [key, entry] of Object.entries(cache)) {
+        if (key.startsWith('_') || !entry?._new || !entry.result) continue;
+        const r = entry.result;
+        for (const field of Object.keys(newUsage)) {
+          if (r[field]?.length) newUsage[field].push(...r[field]);
+        }
+      }
+      appendToMonthly('global', newUsage);
+    }
 
-    if ((parsed > 0 || dataJsMissing) && fs.existsSync(dataPath)) {
+    // Update data.json generatedAt (and pricingFetchedAt from cache if present)
+    if (fs.existsSync(dataPath)) {
       try {
         const existingData = JSON.parse(fs.readFileSync(dataPath, 'utf-8'));
-        if (parsed > 0) {
-          const globalUsage = existingData.scopeData?.global?.usage;
-          if (globalUsage) {
-            // Full re-parse (schema invalidation): all files are new, replace usage arrays
-            const fullReparse = mtimeIndexSize === 0 && parsed >= total;
-            if (fullReparse) {
-              const merged = { skills: [], agents: [], mcpCalls: [], tokenEntries: [], promptStats: [], latencyEntries: [] };
-              for (const [key, entry] of Object.entries(cache)) {
-                if (key.startsWith('_') || !entry?._new || !entry.result) continue;
-                const r = entry.result;
-                for (const field of Object.keys(merged)) {
-                  if (r[field]?.length) merged[field].push(...r[field]);
-                }
-              }
-              Object.assign(globalUsage, merged);
-            } else {
-              // Incremental: append only new entries
-              for (const [key, entry] of Object.entries(cache)) {
-                if (key.startsWith('_') || !entry?._new || !entry.result) continue;
-                const r = entry.result;
-                for (const field of ['skills', 'agents', 'mcpCalls', 'tokenEntries', 'promptStats', 'latencyEntries']) {
-                  if (r[field]?.length) globalUsage[field].push(...r[field]);
-                }
-              }
-            }
-          }
-        }
         existingData.generatedAt = new Date().toISOString();
+        if (!existingData.pricingFetchedAt && fs.existsSync(PRICING_CACHE_FILE)) {
+          try {
+            const pc = JSON.parse(fs.readFileSync(PRICING_CACHE_FILE, 'utf-8'));
+            if (pc.ts) existingData.pricingFetchedAt = new Date(pc.ts).toISOString();
+            if (pc.pricing) existingData.modelPricing = pc.pricing;
+          } catch { /* ignore */ }
+        }
         writeDataJs(existingData, dataPath);
-        console.log('  data.js updated');
+        console.log('  data.json updated');
       } catch { /* skip — full rebuild on next /omh */ }
     }
 
@@ -483,6 +598,9 @@ async function main() {
       writeHtml(indexPath, detectSystemLocale());
     }
 
+    // Deferred migration: server is already running, browser uses data.json fallback
+    if (needsMigration) await migrateWithProgress(dbModule, OUTPUT, dataPath);
+
     console.log('oh-my-hi: done (lightweight)');
     return;
   }
@@ -491,6 +609,9 @@ async function main() {
   notifyUpdateIfAvailable(); // instant: reads cache only, no network
   const scopes = detectScopes(CLAUDE_CONFIG_DIR, extraPaths);
   const systemLocale = detectSystemLocale();
+  const _pricingResult = await fetchModelPricing();
+  const modelPricing = _pricingResult?.pricing ?? null;
+  const pricingFetchedAt = _pricingResult?.ts ? new Date(_pricingResult.ts).toISOString() : null;
 
   // Check cache state to decide progressive mode
   const cacheDirPath = path.join(OUTPUT, 'cache');
@@ -502,39 +623,94 @@ async function main() {
     writeHtml(indexPath, systemLocale);
   }
 
+  let dashboardUrl;
+
   if (!cacheExists && !pendingExists) {
-    // Progressive mode: no cache at all (first run)
+    // Progressive mode: first run — no SQLite data and no mtime-index yet
     console.log('oh-my-hi: first run — generating dashboard from scratch...');
     console.log(`  [1/4] scanning ${scopes.length} workspace(s)...`);
 
     const cache = {};
     console.log('  [2/4] building 7-day preview...');
     const phase1ScopeData = await collectAllScopes(scopes, { days: 7, cache, progress: true });
-    const phase1Data = buildDataObject(scopes, phase1ScopeData, systemLocale, { _partial: true });
+    syncDb(phase1ScopeData); // seed SQLite so browser can display while full load runs
+    const phase1Data = buildDataObject(scopes, phase1ScopeData, systemLocale, [], { _partial: true, modelPricing, pricingFetchedAt });
     writeDataJs(phase1Data, dataPath);
 
-    console.log('  [3/4] opening browser with preview...');
-    openOrRefreshBrowser(indexPath);
+    console.log('  [3/4] starting server...');
+    dashboardUrl = await spawnServeOrRefresh();
 
     console.log('  [4/4] loading full history (this may take a moment)...');
+    // cachePath: saves mtime-index (no seg-*.json.gz — collectAllScopes no longer calls saveTranscriptCache)
     const phase2ScopeData = await collectAllScopes(scopes, { days: 0, cache, cachePath: CACHE_PATH, progress: true });
-    const phase2Data = buildDataObject(scopes, phase2ScopeData, systemLocale, { _firstRun: true, _dateRange: computeDateRange(phase2ScopeData) });
+    syncDb(phase2ScopeData); // seed full history into monthly SQLite files
+    const dbCtxNames = getDbCtxNames();
+    const phase2Data = buildDataObject(scopes, phase2ScopeData, systemLocale, dbCtxNames, { _firstRun: true, _dateRange: getDbDateRange(), modelPricing, pricingFetchedAt });
     writeDataJs(phase2Data, dataPath);
-    openOrRefreshBrowser(indexPath);
   } else {
-    // Normal mode: load cache + merge pending + full data
+    // Normal mode: structure scan + incremental SQLite update
     if (IS_DEV_BUILD) console.log('oh-my-hi: [dev] running from source checkout — forcing full rebuild');
     console.log('oh-my-hi: collecting data...');
     console.log(`  [1/3] scanning ${scopes.length} workspace(s)...`);
-    const scopeData = await collectAllScopes(scopes, { days: 0, cachePath: CACHE_PATH, progress: true });
+
+    // Structure data only (fast config-file scan, no transcript parsing)
+    const scopeData = await collectAllScopes(scopes, { days: 0, skipUsage: true, progress: false });
+
+    // Incremental usage: parse only new/changed transcript files, append to monthly SQLite
+    if (dbModule) {
+      const mtimeIndex = loadMtimeIndex(CACHE_PATH);
+      const stubCache = Object.fromEntries(Object.entries(mtimeIndex).map(([fp, mtimeMs]) => [fp, { mtimeMs, size: 0, result: null }]));
+      stubCache._parsed = 0;
+      stubCache._processed = 0;
+      stubCache._total = 0;
+      const projectScopes = scopes.filter(s => s.type !== 'global');
+      await Promise.all([
+        parseUsage(CLAUDE_CONFIG_DIR, 0, null, { cache: stubCache }),
+        ...projectScopes.map(s =>
+          fs.existsSync(s.configPath) ? parseUsage(CLAUDE_CONFIG_DIR, 0, s.configPath, { cache: stubCache }) : Promise.resolve()
+        ),
+      ]);
+      if (stubCache._parsed > 0) {
+        // Collect new entries from all scopes and append per-scope to monthly DBs
+        const newByScope = { global: { skills: [], agents: [], mcpCalls: [], tokenEntries: [], promptStats: [], latencyEntries: [] } };
+        for (const s of projectScopes) newByScope[s.id] = { skills: [], agents: [], mcpCalls: [], tokenEntries: [], promptStats: [], latencyEntries: [] };
+        for (const [key, entry] of Object.entries(stubCache)) {
+          if (key.startsWith('_') || !entry?._new || !entry.result) continue;
+          const r = entry.result;
+          for (const target of Object.values(newByScope)) {
+            for (const field of Object.keys(target)) {
+              if (r[field]?.length) target[field].push(...r[field]);
+            }
+          }
+        }
+        for (const [scopeId, usage] of Object.entries(newByScope)) {
+          if (usage.tokenEntries.length > 0 || usage.skills.length > 0) {
+            appendToMonthly(scopeId, usage);
+          }
+        }
+        saveMtimeIndex(CACHE_PATH, stubCache);
+        console.log(`  transcripts: ${stubCache._parsed} new file(s) parsed`);
+      }
+    }
+
     console.log('  [2/3] building dashboard...');
-    const data = buildDataObject(scopes, scopeData, systemLocale, { _dateRange: computeDateRange(scopeData) });
+    // If migration needed: start server first so browser shows old data.json, then migrate
+    if (needsMigration) {
+      console.log('  [3/3] starting server...');
+      dashboardUrl = await spawnServeOrRefresh();
+      await migrateWithProgress(dbModule, OUTPUT, dataPath);
+    }
+
+    const dbCtxNames = getDbCtxNames();
+    const data = buildDataObject(scopes, scopeData, systemLocale, dbCtxNames, { _dateRange: getDbDateRange(), modelPricing, pricingFetchedAt });
     writeDataJs(data, dataPath);
-    console.log('  [3/3] opening browser...');
-    openOrRefreshBrowser(indexPath);
+
+    if (!needsMigration) {
+      console.log('  [3/3] starting server...');
+      dashboardUrl = await spawnServeOrRefresh();
+    }
   }
 
-  const dashboardUrl = 'file://' + indexPath.replace(/ /g, '%20');
   console.log(`oh-my-hi: ✅ done → ${dashboardUrl}`);
 
   // Auto-refresh status notice
@@ -581,10 +757,10 @@ function renderProgressBar(processed, total) {
 }
 
 /** Collect all scopes (global + projects) with given options */
-async function collectAllScopes(scopes, { days = 0, cache, cachePath, progress = false } = {}) {
+async function collectAllScopes(scopes, { days = 0, cache, cachePath, skipUsage = false, progress = false } = {}) {
   const projectScopes = scopes.filter(s => s.type !== 'global');
   // Load or reuse cache; reset parse counter for this collection round
-  const sharedCache = cache || (cachePath ? loadTranscriptCache(cachePath) : {});
+  const sharedCache = cache || {};
 
   // Merge pending files into cache (from previous --data-only runs)
   if (cachePath) {
@@ -599,7 +775,7 @@ async function collectAllScopes(scopes, { days = 0, cache, cachePath, progress =
     ? () => renderProgressBar(sharedCache._processed, sharedCache._total)
     : undefined;
 
-  const usageOpts = { days, cache: sharedCache, cachePath };
+  const usageOpts = { days, cache: sharedCache, cachePath, skipUsage };
 
   const [globalData, ...projectResults] = await Promise.all([
     collectScopeData(CLAUDE_CONFIG_DIR, usageOpts),
@@ -610,11 +786,7 @@ async function collectAllScopes(scopes, { days = 0, cache, cachePath, progress =
     ),
   ]);
 
-  // Save cache once after all concurrent parseUsage calls complete
-  // This also consolidates any pending entries merged above into compressed segments
-  // Always attempt save — saveTranscriptCache internally checks for _new entries
-  if (cachePath) saveTranscriptCache(cachePath, sharedCache);
-  // Update mtime index for lightweight mode
+  // Update mtime index only — seg-*.json.gz no longer generated (SQLite is the store)
   if (cachePath) saveMtimeIndex(cachePath, sharedCache);
 
   if (progress) process.stdout.write('\n');
@@ -645,33 +817,18 @@ async function collectAllScopes(scopes, { days = 0, cache, cachePath, progress =
   return scopeData;
 }
 
-/** Build data object from scope data (strips internal _cacheStats) */
-/** Compute min/max date range from all tokenEntries across all scopes */
-function computeDateRange(scopeData) {
-  let minTs = null, maxTs = null;
-  for (const sdata of Object.values(scopeData)) {
-    for (const entry of (sdata?.usage?.tokenEntries || [])) {
-      const ts = entry.timestamp;
-      if (!ts) continue;
-      if (!minTs || ts < minTs) minTs = ts;
-      if (!maxTs || ts > maxTs) maxTs = ts;
-    }
-  }
-  return minTs && maxTs ? { from: minTs, to: maxTs } : null;
-}
+// computeDateRange is superseded by getDbDateRange() closure in main(); kept as dead code guard.
 
-function buildDataObject(scopes, scopeData, systemLocale, extra = {}) {
-  // Strip _cacheStats from usage data before building output
+function buildDataObject(scopes, scopeData, systemLocale, dbContextNames = [], extra = {}) {
+  // Strip usage arrays — SQLite is the sole store for usage data.
+  // data.json holds only structural/config data and metadata.
   const cleanScopeData = {};
   for (const [key, sdata] of Object.entries(scopeData)) {
-    if (sdata.usage?._cacheStats) {
-      const { _cacheStats, ...cleanUsage } = sdata.usage;
-      cleanScopeData[key] = { ...sdata, usage: cleanUsage };
-    } else {
-      cleanScopeData[key] = sdata;
-    }
+    // eslint-disable-next-line no-unused-vars
+    const { usage, ...rest } = sdata || {};
+    cleanScopeData[key] = rest;
   }
-  const taskCategories = buildTaskCategories(cleanScopeData);
+  const taskCategories = buildTaskCategories(scopeData, dbContextNames);
   return {
     scopes,
     scopeData: cleanScopeData,
@@ -686,88 +843,87 @@ function buildDataObject(scopes, scopeData, systemLocale, extra = {}) {
   };
 }
 
-// ── Minify usage data for browser (key shortening + sessionId indexing) ──
-const USAGE_KEY_MAP = {
-  timestamp: 'ts', model: 'm', inputTokens: 'it', outputTokens: 'ot',
-  cacheRead: 'cr', cacheCreation: 'cc', rawInput: 'ri', context: 'cx',
-  contextName: 'cn', sessionId: 'sid', latencyMs: 'ms', charLen: 'cl',
-  name: 'n', tool: 't', count: 'c', date: 'd', command: 'cmd', project: 'p',
-  messageCount: 'mc', sessionCount: 'sc', toolCallCount: 'tc',
-};
-
-function minifyUsageData(scopeDataObj) {
-  const result = {};
-  for (const [scope, sdata] of Object.entries(scopeDataObj)) {
-    const copy = { ...sdata };
-    if (copy.usage) {
-      const u = copy.usage;
-      const sidSet = new Set();
-      for (const arr of Object.values(u)) {
-        if (!Array.isArray(arr)) continue;
-        for (const item of arr) {
-          if (item.sessionId != null) sidSet.add(item.sessionId);
-        }
-      }
-      const sidList = [...sidSet];
-      const sidIndex = Object.fromEntries(sidList.map((s, i) => [s, i]));
-      const minUsage = {};
-      for (const [field, arr] of Object.entries(u)) {
-        if (!Array.isArray(arr)) { minUsage[field] = arr; continue; }
-        minUsage[field] = arr.map(item => {
-          const obj = {};
-          for (const [k, v] of Object.entries(item)) {
-            if (k === 'sessionId') obj.sid = v != null ? sidIndex[v] : null;
-            else obj[USAGE_KEY_MAP[k] || k] = v;
-          }
-          return obj;
-        });
-      }
-      minUsage._sidList = sidList;
-      copy.usage = minUsage;
-    }
-    result[scope] = copy;
-  }
-  return result;
-}
-
 const escapeForScript = (str) => str
   .replaceAll('</', String.raw`<\u002f`)
   .replaceAll('\u2028', String.raw`\u2028`)
   .replaceAll('\u2029', String.raw`\u2029`);
 
 /**
- * Write data.js (minified data for browser) + data.json (full data for programmatic access).
+ * Write data.json (full data for API and programmatic access).
  * This is the lightweight operation — no template processing, no esbuild.
  */
 function writeDataJs(data, dataPath) {
-  // data.json — full data for programmatic access
   fs.writeFileSync(dataPath, JSON.stringify(data), 'utf-8');
+}
 
-  const outDir = path.dirname(dataPath);
-  const minifiedScopeData = minifyUsageData(data.scopeData);
-
-  // --- Progressive loading: split into core + usage ---
-  // data-core.js (~400KB sync): everything except per-scope usage arrays
-  const coreScopes = {};
-  const usageScopes = {};
-  for (const [scope, sdata] of Object.entries(minifiedScopeData)) {
-    const { usage, ...meta } = sdata;
-    coreScopes[scope] = { ...meta, usage: {} };
-    if (usage && Object.keys(usage).length > 0) usageScopes[scope] = usage;
+/** Remove legacy JS data files and transcript cache segments from output/. */
+function cleanupLegacyFiles(outDir) {
+  for (const name of ['data.js', 'data-core.js', 'data-usage.js']) {
+    const p = path.join(outDir, name);
+    try { if (fs.existsSync(p)) { fs.unlinkSync(p); console.log(`  cleanup: removed ${name}`); } } catch { /* ignore */ }
   }
-  const coreData = { ...data, scopeData: coreScopes, _minified: true, _usageReady: false };
-  fs.writeFileSync(path.join(outDir, 'data-core.js'),
-    'let DATA = ' + escapeForScript(JSON.stringify(coreData)) + ';', 'utf-8');
+  // Remove seg-*.json.gz and base-*.json.gz — superseded by SQLite + mtime-index
+  const cacheDir = path.join(outDir, 'cache');
+  if (fs.existsSync(cacheDir)) {
+    try {
+      for (const f of fs.readdirSync(cacheDir)) {
+        if (!/^(seg|base)-.*\.json\.gz$/.test(f)) continue;
+        try { fs.unlinkSync(path.join(cacheDir, f)); console.log(`  cleanup: removed cache/${f}`); } catch { /* ignore */ }
+      }
+    } catch { /* ignore */ }
+  }
+}
 
-  // data-usage.js (~9MB deferred): per-scope usage arrays + merge callback
-  fs.writeFileSync(path.join(outDir, 'data-usage.js'),
-    'let DATA_USAGE = ' + escapeForScript(JSON.stringify(usageScopes))
-    + ';if(typeof window._onUsageReady==="function")window._onUsageReady();', 'utf-8');
+/**
+ * Returns true if no monthly DBs have token data but data.json exists with usage.
+ * Covers the upgrade path for users coming from the file-based era.
+ */
+function checkNeedsMigration(dbMod, outputDir, dataPath) {
+  if (!dbMod || !fs.existsSync(dataPath)) return false;
+  try {
+    const monthly = dbMod.listMonthlyDbs(outputDir);
+    if (monthly.length === 0) return true; // no DB files at all
+    return !monthly.some(({ path: p }) => {
+      try {
+        const db = dbMod.openDb(p);
+        const n = db.prepare('SELECT COUNT(*) AS n FROM token_entries').get().n;
+        db.close();
+        return n > 0;
+      } catch { return false; }
+    });
+  } catch { return false; }
+}
 
-  // data.js — legacy single-file (for backwards compatibility / tests)
-  const inlineData = { ...data, scopeData: minifiedScopeData, _minified: true };
-  fs.writeFileSync(path.join(outDir, 'data.js'),
-    'let DATA = ' + escapeForScript(JSON.stringify(inlineData)) + ';', 'utf-8');
+/**
+ * Migrate data.json → monthly SQLite files with per-scope progress output.
+ * Prints progress to stdout so the user sees it in the terminal while the
+ * browser is already served from the data.json fallback.
+ */
+async function migrateWithProgress(dbMod, outputDir, dataPath) {
+  if (!dbMod) return;
+  try {
+    const data = JSON.parse(fs.readFileSync(dataPath, 'utf-8'));
+    const scopes = Object.entries(data.scopeData || {}).filter(([, s]) => s?.usage);
+    if (scopes.length === 0) return;
+
+    const totalEntries = scopes.reduce((sum, [, s]) => sum + (s.usage?.tokenEntries?.length || 0), 0);
+    console.log(`oh-my-hi: 이전 데이터 마이그레이션 시작 (${scopes.length}개 워크스페이스, ${totalEntries.toLocaleString()}개 항목)`);
+
+    let doneScopes = 0;
+    let doneEntries = 0;
+    for (const [scope, sdata] of scopes) {
+      dbMod.appendUsageMonthly(outputDir, scope, sdata.usage);
+      doneScopes++;
+      doneEntries += sdata.usage?.tokenEntries?.length || 0;
+      const pct = Math.round((doneScopes / scopes.length) * 100);
+      const bar = '█'.repeat(Math.floor(pct / 5)) + '░'.repeat(20 - Math.floor(pct / 5));
+      process.stdout.write(`  [${bar}] ${pct}% — ${doneScopes}/${scopes.length} 워크스페이스 (${doneEntries.toLocaleString()}항목)\r`);
+    }
+    process.stdout.write(' '.repeat(80) + '\r'); // clear line
+    console.log(`oh-my-hi: ✅ 마이그레이션 완료 (${scopes.length}개 워크스페이스, ${doneEntries.toLocaleString()}개 항목)`);
+  } catch (e) {
+    console.warn('\noh-my-hi: 마이그레이션 실패 —', e.message);
+  }
 }
 
 /**
@@ -894,91 +1050,9 @@ function writeDashboard(data, dataPath, indexPath, systemLocale) {
   writeHtml(indexPath, systemLocale);
 }
 
-/** Open browser tab or refresh if already open */
-function openOrRefreshBrowser(filePath) {
-  // Windows / Linux: open only (no tab reuse)
-  if (process.platform === 'win32') {
-    try { execSync(`start "" "${filePath}"`, { shell: true }); } catch {
-      console.log('Please open manually in your browser:', filePath);
-    }
-    return;
-  }
-  if (process.platform !== 'darwin') {
-    try { execSync(`xdg-open "${filePath}"`); } catch {
-      console.log('Please open manually in your browser:', filePath);
-    }
-    return;
-  }
-
-  // macOS: try tab reuse via AppleScript, fallback to open
-
-  const fileUrl = 'file://' + filePath.replace(/ /g, '%20');
-  const needle = 'oh-my-hi';
-
-  // Try to reuse an existing tab in Chrome or Safari (tab refresh).
-  // If no existing tab is found, fall back to the system default browser.
-  const chromeScript = `
-    tell application "System Events"
-      if not (exists process "Google Chrome") then return "not_running"
-    end tell
-    tell application "Google Chrome"
-      set i to 0
-      repeat with w in windows
-        set j to 0
-        repeat with t in tabs of w
-          set j to j + 1
-          if URL of t contains "${needle}" then
-            tell t to reload
-            set active tab index of w to j
-            set index of w to 1
-            activate
-            return "refreshed"
-          end if
-        end repeat
-      end repeat
-      return "not_found"
-    end tell`;
-
-  const safariScript = `
-    tell application "System Events"
-      if not (exists process "Safari") then return "not_running"
-    end tell
-    tell application "Safari"
-      repeat with w in windows
-        repeat with t in tabs of w
-          if URL of t contains "${needle}" then
-            set URL of t to "${fileUrl}"
-            set current tab of w to t
-            set index of w to 1
-            activate
-            return "refreshed"
-          end if
-        end repeat
-      end repeat
-      return "not_found"
-    end tell`;
-
-  try {
-    const chromeResult = execSync(`osascript -e '${chromeScript.replace(/'/g, "'\"'\"'")}'`, { encoding: 'utf8' }).trim();
-    if (chromeResult === 'refreshed') return;
-  } catch { /* Chrome not available */ }
-
-  try {
-    const safariResult = execSync(`osascript -e '${safariScript.replace(/'/g, "'\"'\"'")}'`, { encoding: 'utf8' }).trim();
-    if (safariResult === 'refreshed') return;
-  } catch { /* Safari not available */ }
-
-  // No existing tab found — open with system default browser
-  try {
-    execSync(`open "${fileUrl}"`);
-  } catch {
-    console.log('oh-my-hi: ⚠️ Could not open browser automatically.');
-    console.log('  → Open manually:', fileUrl);
-  }
-}
 
 /** Collect global scope data (sync parsers + async usage in parallel) */
-async function collectScopeData(configDir, { days = 0, cache, cachePath } = {}) {
+async function collectScopeData(configDir, { days = 0, cache, cachePath, skipUsage = false } = {}) {
   // Run sync parsers immediately (fast, small files)
   const syncData = {
     configFiles: parseConfigFiles(configDir),
@@ -996,15 +1070,14 @@ async function collectScopeData(configDir, { days = 0, cache, cachePath } = {}) 
     todos: parseTodos(configDir),
   };
 
-  // Async usage parser runs concurrently with sync parsers' setup
-  const usage = await parseUsage(configDir, days, null, { cache, cachePath });
+  const usage = skipUsage ? emptyScopeData().usage : await parseUsage(configDir, days, null, { cache, cachePath });
 
   const contextStats = computeContextStats(syncData, configDir, { type: 'global', configPath: configDir });
   return { ...syncData, contextStats, usage };
 }
 
 /** Collect project scope data */
-async function collectProjectData(configPath, projectPath, { days = 0, cache, cachePath } = {}) {
+async function collectProjectData(configPath, projectPath, { days = 0, cache, cachePath, skipUsage = false } = {}) {
   const emptyUsage = emptyScopeData().usage;
 
   // Sync parsers (fast)
@@ -1024,9 +1097,10 @@ async function collectProjectData(configPath, projectPath, { days = 0, cache, ca
     todos: [],
   };
 
-  // Async usage parser
-  let usage;
-  try { usage = await parseUsage(CLAUDE_CONFIG_DIR, days, configPath, { cache, cachePath }); } catch { usage = emptyUsage; }
+  let usage = emptyUsage;
+  if (!skipUsage) {
+    try { usage = await parseUsage(CLAUDE_CONFIG_DIR, days, configPath, { cache, cachePath }); } catch { /* fallback */ }
+  }
 
   const contextStats = computeContextStats(syncData, CLAUDE_CONFIG_DIR, { type: 'project', configPath, projectPath });
   return { ...syncData, contextStats, usage };
@@ -1048,8 +1122,8 @@ const WORK_TYPE_META = WORK_TYPES.categories;
 const TOOL_CATEGORY = WORK_TYPES.toolMapping;
 const CAT_KEYWORDS = WORK_TYPES.keywords;
 
-function buildTaskCategories(scopeData) {
-  // 1. Collect descriptions from harness data
+function buildTaskCategories(scopeData, dbContextNames = []) {
+  // 1. Collect descriptions from harness data (structure — always available)
   const descMap = {};
   for (const sd of Object.values(scopeData)) {
     for (const s of (sd.skills || [])) {
@@ -1057,14 +1131,6 @@ function buildTaskCategories(scopeData) {
     }
     for (const a of (sd.agents || [])) {
       if (a.name && a.description) descMap[a.name] = a.description;
-    }
-  }
-
-  // 2. Collect all contextNames from token data
-  const allNames = new Set();
-  for (const sd of Object.values(scopeData)) {
-    for (const e of (sd.usage?.tokenEntries || [])) {
-      allNames.add(e.contextName || 'conversation');
     }
   }
 
@@ -1085,13 +1151,20 @@ function buildTaskCategories(scopeData) {
     return bestCat || 'other';
   }
 
-  // 4. Build mapping: auto-classify all contextNames
+  // 4. Build mapping: prefer SQLite-queried names (includes contextType), fall back to in-memory
   const mapping = {};
-  for (const sd of Object.values(scopeData)) {
-    for (const e of (sd.usage?.tokenEntries || [])) {
-      const name = e.contextName || 'conversation';
-      if (mapping[name]) continue;
-      mapping[name] = autoClassify(name, e.context || 'general');
+  if (dbContextNames.length > 0) {
+    for (const { contextName, contextType } of dbContextNames) {
+      const name = contextName || 'conversation';
+      if (!mapping[name]) mapping[name] = autoClassify(name, contextType || 'general');
+    }
+  } else {
+    for (const sd of Object.values(scopeData)) {
+      for (const e of (sd.usage?.tokenEntries || [])) {
+        const name = e.contextName || 'conversation';
+        if (mapping[name]) continue;
+        mapping[name] = autoClassify(name, e.context || 'general');
+      }
     }
   }
 
@@ -1214,6 +1287,54 @@ function computeContextStats(scopeData, globalConfigDir, scope) {
 /** Safe call wrapper (ignores errors) */
 function safeCall(fn) {
   try { return fn(); } catch { return []; }
+}
+
+
+/** Spawn serve.mjs as a detached background process, or reuse if already running.
+ *  Returns the server URL once the lock file is written.
+ *
+ *  Browser open policy (ABSOLUTE RULE — do not change):
+ *  - True first launch (no prior lock file): open browser once via --open.
+ *  - Server restart (stale lock file, dead pid): start server WITHOUT --open.
+ *    The user's browser already has the tab; opening again creates unwanted new tabs.
+ *  - Server already alive: return URL immediately, no browser action. */
+async function spawnServeOrRefresh() {
+  const LOCK = path.join(OUTPUT, 'cache', '.serve.json');
+
+  // Case 1: server alive → reuse port, do not open browser
+  if (fs.existsSync(LOCK)) {
+    try {
+      const { port, pid } = JSON.parse(fs.readFileSync(LOCK, 'utf-8'));
+      process.kill(pid, 0); // throws if dead
+      return `http://127.0.0.1:${port}`;
+    } catch {
+      // Stale lock file (server crashed/killed) — clean up and restart WITHOUT --open.
+      // Browser already has the tab from the previous session.
+      try { fs.unlinkSync(LOCK); } catch { /* ignore */ }
+      return spawnServe(LOCK, { open: false });
+    }
+  }
+
+  // Case 2: no lock file — true first launch, open browser once
+  return spawnServe(LOCK, { open: true });
+}
+
+async function spawnServe(lockPath, { open }) {
+  const serveScript = path.join(ROOT, 'scripts', 'serve.mjs');
+  const serveArgs = open ? [serveScript, '--open'] : [serveScript];
+  spawn(process.execPath, serveArgs, { detached: true, stdio: 'ignore' }).unref();
+
+  // Wait up to 3s for serve.mjs to write the lock file
+  for (let i = 0; i < 15; i++) {
+    await new Promise(r => setTimeout(r, 200));
+    try {
+      if (fs.existsSync(lockPath)) {
+        const { port } = JSON.parse(fs.readFileSync(lockPath, 'utf-8'));
+        return `http://127.0.0.1:${port}`;
+      }
+    } catch { /* retry */ }
+  }
+  return `http://127.0.0.1:8282`; // preferred port fallback
 }
 
 if (!args.includes('--update')) {

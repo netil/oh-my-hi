@@ -97,6 +97,54 @@ describe('listReplayableSessions', () => {
     assert.deepEqual(listReplayableSessions({ tokenEntries: [] }), []);
   });
 
+  it('uses preview field when text is absent (SQLite data shape)', () => {
+    // SQLite prompt_entries stores `preview`, not `text`. listReplayableSessions
+    // must fall back to p.preview so session names show correctly.
+    const usage = {
+      tokenEntries: [
+        { sessionId: 'sql', timestamp: 1000, inputTokens: 100, model: 'sonnet' },
+        { sessionId: 'sql', timestamp: 2000, inputTokens: 200, model: 'sonnet' },
+      ],
+      promptStats: [
+        { sessionId: 'sql', timestamp: 1000, preview: 'prompt from sqlite', charLen: 18 },
+      ],
+    };
+    const sessions = listReplayableSessions(usage);
+    const s = sessions.find(s => s.id === 'sql');
+    assert.ok(s, 'session found');
+    assert.equal(s.firstPrompt.text, 'prompt from sqlite', 'preview used as text fallback');
+  });
+
+  it('prefers text over preview when both are present', () => {
+    const usage = {
+      tokenEntries: [
+        { sessionId: 'both', timestamp: 1000, inputTokens: 100 },
+        { sessionId: 'both', timestamp: 2000, inputTokens: 200 },
+      ],
+      promptStats: [
+        { sessionId: 'both', timestamp: 1000, text: 'explicit text', preview: 'fallback preview' },
+      ],
+    };
+    const sessions = listReplayableSessions(usage);
+    const s = sessions.find(s => s.id === 'both');
+    assert.equal(s.firstPrompt.text, 'explicit text', 'text field takes priority over preview');
+  });
+
+  it('sets firstPrompt.text to null when both text and preview are absent', () => {
+    const usage = {
+      tokenEntries: [
+        { sessionId: 'notext', timestamp: 1000, inputTokens: 100 },
+        { sessionId: 'notext', timestamp: 2000, inputTokens: 200 },
+      ],
+      promptStats: [
+        { sessionId: 'notext', timestamp: 1000, charLen: 5 },
+      ],
+    };
+    const sessions = listReplayableSessions(usage);
+    const s = sessions.find(s => s.id === 'notext');
+    assert.equal(s.firstPrompt.text, null, 'firstPrompt.text is null when no preview/text');
+  });
+
   it('accepts ISO string timestamps', () => {
     const iso = {
       tokenEntries: [

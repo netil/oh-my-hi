@@ -584,7 +584,7 @@ body.dark .sidebar-period-range {
 .overview-hero > .usage-bar-card {
   display: flex;
   flex-direction: column;
-  justify-content: center;
+  justify-content: flex-start;
   min-height: 0;
   padding: 16px 18px;
 }
@@ -3000,4 +3000,34 @@ body.dark .health-factor-tooltip {
   .compare-container { flex-direction: column; }
   .compare-tab-bar { display: flex; }
   .compare-column.hidden { display: none; }
+}
+
+/* Loading overlay — shown during API init, fades out on completion */
+.loading-overlay {
+  position: fixed;
+  inset: 0;
+  background: var(--bg, #fff);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 9999;
+  transition: opacity 0.3s ease;
+}
+.loading-overlay--done {
+  opacity: 0;
+  pointer-events: none;
+}
+.loading-spinner {
+  width: 36px;
+  height: 36px;
+  border: 3px solid var(--border, #e5e7eb);
+  border-top-color: var(--accent, #3b82f6);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+.loading-error {
+  color: var(--text-muted, #6b7280);
+  font-size: 0.9rem;
+  text-align: center;
 }

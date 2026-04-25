@@ -7,7 +7,7 @@ Claude Code plugin — harness configuration & token usage dashboard.
 - Node.js (ESM), vanilla JS frontend (no framework)
 - esbuild for CSS/JS minification
 - billboard.js for charts (bundled inline, no CDN)
-- Single-file HTML output (`file://` compatible)
+- Local HTTP server (`scripts/serve.mjs`) — no external deps, port 8282
 
 ## Build & Test
 
@@ -17,6 +17,16 @@ npm test              # Run all tests (build, web-ui, plugin)
 ```
 
 Build entry: `node scripts/generate-dashboard.mjs` — full mode generates `index.html` (shell) + `data.js` (data) + cache segments. `--data-only` runs lightweight mode (mtime check → parse changes → update data.js).
+
+## Dev Workflow
+
+**[절대원칙] 브라우저 탭 단일 유지**: 브라우저 탭은 어떤 상황에서도 추가로 열지 않는다. 이미 열려있는 탭이 있으면 반드시 그 탭을 재사용한다. 새 탭 오픈은 lock file이 전혀 없는 진짜 첫 실행 시에만 허용된다.
+
+**[절대원칙] 포트 고정**: 서버는 항상 `8282` 포트를 사용한다. 포트가 바뀌는 유일한 예외는 다른 프로세스가 8282를 점유 중일 때뿐이다. 개발 중 서버를 임의로 재시작하지 않는다.
+
+- 서버 시작: `node scripts/serve.mjs --open` (최초 1회)
+- 코드/데이터 변경 후: `node scripts/generate-dashboard.mjs --data-only` → 브라우저 수동 새로고침
+- `spawnServeOrRefresh`: lock file 없음 → `--open` 허용 / stale lock file → `--open` 금지 / 서버 살아있음 → URL만 반환
 
 ### Build Gotcha
 

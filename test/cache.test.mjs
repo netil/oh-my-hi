@@ -177,51 +177,38 @@ describe('Mtime Index', () => {
   });
 });
 
-// ── Data.js Separation ──
+// ── API-first Data Architecture ──
 
-describe('Data.js Separation', () => {
+describe('API-first Data Architecture', () => {
   before(() => {
     cleanCache();
     run('--data-only');
   });
 
-  it('should generate separate data.js file', () => {
-    const dataJsPath = path.join(OUTPUT, 'data.js');
-    assert.ok(fs.existsSync(dataJsPath), 'data.js should exist');
-  });
-
-  it('data.js should define DATA variable', () => {
-    const content = fs.readFileSync(path.join(OUTPUT, 'data.js'), 'utf-8');
-    assert.ok(content.startsWith('let DATA ='), 'should start with let DATA =');
-    assert.ok(content.endsWith(';'), 'should end with semicolon');
-  });
-
-  it('data.js should contain minified usage data', () => {
-    const content = fs.readFileSync(path.join(OUTPUT, 'data.js'), 'utf-8');
-    // Extract JSON from "let DATA = {...};"
-    const json = content.slice('let DATA = '.length, -1);
-    const data = JSON.parse(json);
-    assert.equal(data._minified, true, 'should have _minified flag');
-  });
-
-  it('data.json should contain full (non-minified) data', () => {
+  it('should generate data.json (API data source)', () => {
+    assert.ok(fs.existsSync(path.join(OUTPUT, 'data.json')), 'data.json should exist');
     const data = JSON.parse(fs.readFileSync(path.join(OUTPUT, 'data.json'), 'utf-8'));
-    assert.equal(data._minified, undefined, 'data.json should not be minified');
     assert.ok(data.scopeData, 'should have scopeData');
+    assert.equal(data._minified, undefined, 'data.json should not be minified');
   });
 
-  it('index.html should load data via script src', () => {
+  it('should NOT generate legacy JS data files', () => {
+    assert.ok(!fs.existsSync(path.join(OUTPUT, 'data.js')), 'data.js should not exist');
+    assert.ok(!fs.existsSync(path.join(OUTPUT, 'data-core.js')), 'data-core.js should not exist');
+    assert.ok(!fs.existsSync(path.join(OUTPUT, 'data-usage.js')), 'data-usage.js should not exist');
+  });
+
+  it('index.html should NOT load data via script src tags', () => {
     const html = fs.readFileSync(path.join(OUTPUT, 'index.html'), 'utf-8');
-    assert.ok(html.includes('src="data-core.js"'), 'should have <script src="data-core.js">');
-    assert.ok(html.includes('src="data-usage.js"'), 'should have <script src="data-usage.js">');
-    assert.ok(!html.includes('let DATA ='), 'should NOT have inline DATA');
+    assert.ok(!html.includes('src="data-core.js"'), 'should NOT have data-core.js script tag');
+    assert.ok(!html.includes('src="data-usage.js"'), 'should NOT have data-usage.js script tag');
   });
 
-  it('index.html should not contain __DATA__ placeholder', () => {
+  it('template should not contain legacy __DATA__ placeholder', () => {
     const template = fs.readFileSync(path.join(ROOT, 'templates', 'dashboard.html'), 'utf-8');
     assert.ok(!template.includes('__DATA__'), 'template should not have __DATA__ placeholder');
-    assert.ok(template.includes('src="data-core.js"'), 'template should reference data-core.js');
-    assert.ok(template.includes('src="data-usage.js"'), 'template should reference data-usage.js');
+    assert.ok(!template.includes('src="data-core.js"'), 'template should not reference data-core.js');
+    assert.ok(!template.includes('src="data-usage.js"'), 'template should not reference data-usage.js');
   });
 });
 
@@ -246,17 +233,19 @@ describe('Conditional HTML Rebuild', () => {
 // ── Upgrade Compatibility ──
 
 describe('Upgrade Compatibility', () => {
-  it('should create data.js on --data-only when data.js is missing but data.json exists', () => {
-    // Simulate upgrade: data.json exists (old version), data.js missing (new feature)
+  it('should clean up legacy JS data files if they exist (one-time upgrade)', () => {
+    // Simulate old-version files existing in output/
     const dataJsPath = path.join(OUTPUT, 'data.js');
-    try { fs.unlinkSync(dataJsPath); } catch {}
-    assert.ok(fs.existsSync(path.join(OUTPUT, 'data.json')), 'data.json should pre-exist');
-    assert.ok(!fs.existsSync(dataJsPath), 'data.js should be missing');
+    const dataCoreJsPath = path.join(OUTPUT, 'data-core.js');
+    const dataUsageJsPath = path.join(OUTPUT, 'data-usage.js');
+    fs.writeFileSync(dataJsPath, 'let DATA = {};', 'utf-8');
+    fs.writeFileSync(dataCoreJsPath, 'let DATA = {};', 'utf-8');
+    fs.writeFileSync(dataUsageJsPath, 'let DATA_USAGE = {};', 'utf-8');
 
     run('--data-only');
-    assert.ok(fs.existsSync(dataJsPath), 'data.js should be created from existing data.json');
-    const content = fs.readFileSync(dataJsPath, 'utf-8');
-    assert.ok(content.startsWith('let DATA ='), 'data.js should define DATA');
+    assert.ok(!fs.existsSync(dataJsPath), 'data.js should be removed on upgrade');
+    assert.ok(!fs.existsSync(dataCoreJsPath), 'data-core.js should be removed on upgrade');
+    assert.ok(!fs.existsSync(dataUsageJsPath), 'data-usage.js should be removed on upgrade');
   });
 
   it('should rebuild index.html on version mismatch (upgrade)', () => {
@@ -307,15 +296,14 @@ describe('Pending Files', () => {
     assert.equal(gzFiles.length, 0, 'lightweight mode should not create gz segments');
   });
 
-  it('--data-only should update data.js when files changed', () => {
-    const dataJsBefore = fs.readFileSync(path.join(OUTPUT, 'data.js'), 'utf-8');
-    // Run again — active session transcript changes, so data.js should update
+  it('--data-only should update data.json when files changed', () => {
+    const dataBefore = fs.readFileSync(path.join(OUTPUT, 'data.json'), 'utf-8');
+    // Run again — active session transcript changes, so data.json should update
     run('--data-only');
     const output = run('--data-only');
-    // If files were parsed, data.js should be updated
+    // If files were parsed, data.json should be updated
     if (output.includes('parsed, ')) {
-      // data.js was potentially updated
-      assert.ok(fs.existsSync(path.join(OUTPUT, 'data.js')), 'data.js should exist');
+      assert.ok(fs.existsSync(path.join(OUTPUT, 'data.json')), 'data.json should exist');
     }
   });
 
@@ -436,12 +424,15 @@ describe('Progress Tracking', () => {
     }
   });
 
-  it('normal mode output contains progress bar characters', () => {
-    // Progress bar is only shown in full (non --data-only) mode
-    // Use captured stdout which includes \r-separated progress updates
+  it('normal mode uses incremental parse (no full progress bar in normal run)', () => {
+    // Normal mode (with existing SQLite + mtime-index) does incremental parse:
+    // only new/changed transcript files are parsed via stub-cache approach.
+    // Progress bars are only emitted on first run (progressive mode).
     const output = run();
-    const hasProgressBar = output.includes('[') && output.includes('%') && output.includes('files)');
-    assert.ok(hasProgressBar, 'output should contain progress bar ([ ... % ... files))');
+    // Should NOT show a scanning progress bar (those belong to first-run only)
+    assert.ok(!output.includes('files)') || output.includes('lightweight'), 'normal mode should not show full transcript scan progress bar');
+    // Should show normal completion
+    assert.ok(output.includes('done') || output.includes('serving'), 'normal mode should complete successfully');
   });
 });
 

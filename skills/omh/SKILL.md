@@ -12,8 +12,8 @@ Generates a full harness insights dashboard and opens it in the browser.
 
 ## Usage
 
-- `/omh` — Full build (parse data → build web-ui → open/refresh browser)
-- `/omh --data-only` — Regenerate data + web-ui (skip auto-refresh notice)
+- `/omh` — Full build (parse data → build web-ui → start local HTTP server → open browser)
+- `/omh --data-only` — Regenerate data files only (server continues serving updated files)
 - `/omh --enable-auto` — Enable automatic rebuild on session end
 - `/omh --disable-auto` — Disable automatic rebuild
 - `/omh --status` — Check auto-refresh status
@@ -34,15 +34,15 @@ If the user chooses **enable**, run `--enable-auto`. If they choose **disable**,
 
 1. Parses harness files from the Claude Code config directory
 2. Analyzes usage data (history.jsonl, transcript)
-3. Generates data + web-ui (index.html with inlined data, file:// compatible)
-4. Opens or refreshes browser tab
+3. Generates data files (`data-core.js`, `data-usage.js`) and `index.html`
+4. Starts a local HTTP server (port 3939+) and opens browser
 
 ## Architecture
 
-- **Inline data**: index.html embeds data directly (file:// compatible, no CORS issues)
-- **--data-only**: Regenerates data + web-ui without auto-refresh notice
-- **Auto-refresh**: `--enable-auto` registers a Stop hook — rebuilds on every session end
-- **Browser reuse**: macOS AppleScript tab detection; Windows/Linux fallback to system open
+- **Local HTTP server**: `scripts/serve.mjs` serves `output/` over HTTP (port 8282, auto-detects next available); re-uses running instance on subsequent `/omh` calls
+- **--data-only**: Regenerates data files only; server continues serving the updated files on next browser refresh
+- **Auto-refresh**: `--enable-auto` registers a Stop hook — rebuilds data on every session end
+- **Browser open**: macOS `open`, Windows `start`, Linux `xdg-open`
 
 Find and run the script (picks the latest version from cache, falls back to marketplaces):
 

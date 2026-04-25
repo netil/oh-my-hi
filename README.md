@@ -3,7 +3,7 @@
 
 > **Oh, so that's what Claude's been doing!** — A visual dashboard for your Claude Code harness.
 
-Parses your entire Claude Code configuration and usage data, then generates an interactive single-file HTML dashboard you can open locally.
+Parses your entire Claude Code configuration and usage data, stores results in a local SQLite database, and serves an interactive dashboard via a local HTTP server.
 
 <img src="./assets/dashboard.png?v=3" alt="Dashboard preview" width="800">
 
@@ -94,7 +94,7 @@ Enable automatic data refresh so the dashboard stays up to date:
 /omh --enable-auto
 ```
 
-This registers a Stop hook that collects data whenever a Claude Code session ends. The dashboard data (`data.js`) is updated incrementally — just refresh the browser tab to see the latest data.
+This registers a Stop hook that collects data whenever a Claude Code session ends. `data.json` and SQLite are updated incrementally — just refresh the browser tab to see the latest data.
 
 ### Update
 
@@ -113,8 +113,9 @@ See **[GUIDE.md](GUIDE.md)** for a detailed walkthrough of each dashboard sectio
 1. **Parse** — Reads your Claude Code config directory for skills, agents, plugins, hooks, memory, MCP servers, rules, principles, commands, teams, plans, and usage transcripts
 2. **Analyze** — Extracts token usage, prompt stats, response latency, activity patterns from `.jsonl` transcripts
 3. **Classify** — Auto-categorizes token usage into work types (code editing, docs, planning, etc.) based on skill/agent descriptions. Saves to `task-categories.json` for user customization
-4. **Build** — Generates `index.html` (shell with CSS/JS) + `data-core.js` (515KB, instant load) + `data-usage.js` (~9MB, deferred). Progressive loading ensures the dashboard renders immediately while full usage data loads in the background
-5. **Open** — On macOS, reuses an existing browser tab if found (AppleScript). On Windows/Linux, opens a new tab
+4. **Store** — Writes `data.json` (full data) and syncs token entries to `oh-my-hi.sqlite` for fast API queries
+5. **Serve** — Starts a local HTTP server (`serve.mjs`, port 7942) with `/api/meta` and `/api/usage` endpoints. Server is reused across builds via a lock file
+6. **Open** — On macOS, reuses an existing browser tab if found (AppleScript). On Windows/Linux, opens a new tab
 
 ## i18n
 
@@ -123,11 +124,11 @@ See **[GUIDE.md](GUIDE.md)** for a detailed walkthrough of each dashboard sectio
 
 ## Privacy
 
-All data stays on your machine. `oh-my-hi` reads only local Claude Code config files and transcripts — nothing is sent to external servers. The generated dashboard is a standalone HTML file opened via `file://` protocol, with no network requests. Your usage data, token statistics, and configuration details never leave your local environment.
+All data stays on your machine. `oh-my-hi` reads only local Claude Code config files and transcripts — nothing is sent to external servers. The dashboard is served by a local HTTP server on localhost; all API calls go to `127.0.0.1` only. Your usage data, token statistics, and configuration details never leave your local environment.
 
 ## Browser support
 
-The dashboard opens as a local `file://` HTML file. No web server required.
+The dashboard is served locally via `http://localhost:7942` (or next available port). The server starts automatically on first `/omh` run and stays running between builds.
 
 On macOS, subsequent builds will refresh the existing browser tab instead of opening a new one (Chrome and Safari supported).
 

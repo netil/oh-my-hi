@@ -3,7 +3,7 @@
 ## Overview
 
 Claude Code harness dashboard generator. Invoked as `/omh` skill.
-Parses harness configuration and usage data, builds a single-file HTML dashboard.
+Parses harness configuration and usage data, stores results in SQLite, and serves an interactive dashboard via a local HTTP server.
 
 ## Directory Structure
 
@@ -13,6 +13,8 @@ oh-my-hi/
 ├── spec.md                      # This file
 ├── scripts/
 │   ├── generate-dashboard.mjs   # Main entry point
+│   ├── db.mjs                   # SQLite helper (openDb, upsertUsage, schema migrations)
+│   ├── serve.mjs                # Local HTTP server (port 7942, /api/meta, /api/usage)
 │   └── parsers/
 │       ├── agents.mjs           # agents/*.md (frontmatter)
 │       ├── commands.mjs         # commands/*.md (frontmatter)
@@ -43,15 +45,16 @@ oh-my-hi/
 │       ├── en.json              # English locale (base)
 │       └── ko.json              # Korean locale
 └── output/                      # Generated artifacts
-    ├── data.json                # Raw data (for programmatic access)
-    ├── data-core.js             # Core data for instant load (~515KB, sync)
-    ├── data-usage.js            # Usage data (~9MB, deferred via <script defer>)
-    ├── data.js                  # Legacy single-file (backwards compat)
-    ├── index.html               # Dashboard shell (CSS+JS+locales, loads data-core.js + data-usage.js)
+    ├── data.json                # Raw data (API source of truth + /api/meta base)
+    ├── db/
+    │   └── {year}/
+    │       └── {year}-MM.sqlite  # Monthly-partitioned SQLite DBs (token_entries, prompt_entries, skill_usage, agent_usage, mcp_calls, latency_entries)
+    ├── index.html               # Dashboard shell (CSS+JS+locales, fetches data via HTTP API)
     ├── cache/
     │   ├── mtime-index.json     # File path → mtime mapping (relative paths)
     │   ├── base-*.json.gz       # Compacted cache (after 50 segments)
     │   ├── seg-*.json.gz        # Incremental cache segments
+    │   ├── .serve.json          # Lock file: running server PID + URL
     │   └── .update-check        # npm registry check cache (24h TTL)
     └── pending/
         └── *.json               # Lightweight mode deltas (plain JSON)
@@ -62,7 +65,7 @@ oh-my-hi/
 | Parameter | Description |
 |-----------|-------------|
 | `/omh` | Full build: parse data → build web-ui → open/refresh browser |
-| `--data-only` | Lightweight data collection — parse changed files, update data.js (skip full build) |
+| `--data-only` | Lightweight data collection — parse changed files, update data.json + SQLite (skip full build) |
 | `--enable-auto` | Register Stop hook for auto-rebuild on session end |
 | `--disable-auto` | Remove Stop hook |
 | `--update` | Check npm registry and install latest version |
@@ -75,23 +78,26 @@ oh-my-hi/
 ```
 Full mode (/omh):
   1. Detect scopes (global + projects)
-  2. Load cache segments + merge pending files
-  3. Parse changed transcript files (incremental via mtime/size cache)
-  4. Save cache segment (gzipped, append-only) + mtime index
-  5. Build task categories (description-based classification → task-categories.json)
-  6. Generate data.json + data-core.js + data-usage.js + data.js (minified for browser)
-  7. Generate index.html (only on version change or first run):
+  2. Open monthly SQLite DBs (`output/db/{year}/{year-MM}.sqlite`) — degrades gracefully if unavailable
+  3. Load cache segments + merge pending files
+  4. Parse changed transcript files (incremental via mtime/size cache)
+  5. Save cache segment (gzipped, append-only) + mtime index
+  6. Build task categories (description-based classification → task-categories.json)
+  7. Generate data.json + sync to SQLite (upsertUsage per scope)
+  8. Generate index.html (only on version change or first run):
      - dashboard.html template + __STYLES__ + __APP_JS__ + __LOCALE_DATA__ + billboard.js
      - __APP_JS__ = inlined .mjs modules (session-events, context-example) + app.js
-     - Data loaded via <script src="data-core.js"> (sync) + <script src="data-usage.js" defer>
-  8. Open/refresh browser + async update check (24h cache)
+     - No embedded data; app.js calls /api/meta + /api/usage at runtime
+  9. Spawn/reuse local HTTP server (serve.mjs, lock file: cache/.serve.json)
+ 10. Async update check (24h cache)
 
 Lightweight mode (--data-only, Stop hook):
   1. Load mtime-index.json (~34KB) for change detection
   2. Parse only changed transcript files
   3. Save pending file (plain JSON, no gzip)
-  4. Update data.js by merging into existing data.json
+  4. Merge into data.json + sync changes to SQLite
   5. Rebuild index.html only if missing or version changed
+  6. Run deferred data.json → SQLite migration if needed
 ```
 
 ### Dev vs Plugin Build Mode
@@ -196,13 +202,14 @@ configFiles, skills, agents, plugins, hooks, memory, mcpServers, rules, principl
 
 ## Key Architectural Decisions
 
-1. **Data separated from shell**: `index.html` is the dashboard shell (CSS/JS/locales). Data is split into `data-core.js` (~515KB, sync) and `data-usage.js` (~9MB, deferred). Shell is rebuilt only on version change; data is updated independently. Works with `file://` protocol.
-2. **Progressive data loading**: `data-core.js` loads instantly with scopes + metadata, allowing Overview to render immediately. `data-usage.js` loads asynchronously with full token/prompt/latency data, then triggers `mergeUsageData()` → re-render. Legacy single `data.js` is also generated for backwards compatibility.
-3. **Incremental cache**: Transcript parse results cached as gzipped segments (append-only). Only changed files are re-parsed. Compaction merges segments when count exceeds 50.
-4. **Lightweight mode**: `--data-only` (Stop hook) uses a mtime-index for change detection without loading full cache. Writes plain JSON pending files, updates `data.js` by merging into existing `data.json`.
-5. **Persistent category mapping**: `task-categories.json` auto-generated at every build from `work-types.json` schema.
-6. **Auto-update check**: `/omh` queries npm registry asynchronously (3s timeout, 24h cache). Notifies when new version is available.
-7. **AppleScript tab reuse**: macOS-only optimization. Searches all browser windows/tabs for URL match.
-8. **Pure modules prepended to `app.js`**: `session-events.mjs`, `context-example.mjs`, `cost-projection.mjs`, `canvas-bars.mjs`, and `regression.mjs` are authored as ESM for unit-testability. The generator strips `export` keywords and prepends them to `app.js` so symbols land in the same script scope. Source of truth lives in the `.mjs` files — never edit the inlined copies.
-9. **Week-over-week regression anchored to today**: regression detection (F5) always uses `Date.now()` as the anchor, independent of the sidebar period filter. The card shows explicit dates (`직전 7일 03.28~04.04 / 최근 7일 04.04~04.11`) to avoid confusion with the filter.
+1. **HTTP server + API**: `serve.mjs` runs a local HTTP server (port 8282) reused across builds via a lock file (`cache/.serve.json`). Serves `index.html` statically and exposes `/api/meta` (data.json minus usage arrays) and `/api/usage` (SQLite query by scope + time range). No `file://` protocol.
+2. **API-based data loading**: `app.js` calls `tryApiInit()` → `GET /api/meta` at startup to load scopes and metadata. Usage data is fetched on demand via `fetchUsageForPeriod(scope, from, to)` when the user switches scope or period. No embedded DATA variable.
+3. **SQLite backend**: `db.mjs` uses monthly-partitioned files (`output/db/{year}/{year-MM}.sqlite`). Tables: `token_entries`, `prompt_entries`, `skill_usage`, `agent_usage`, `mcp_calls`, `latency_entries`. Each entry is routed to the DB for the month its timestamp falls in. Written by `appendUsageMonthly()` on every build/data-only run. Queried by `serve.mjs` for `/api/usage` across the relevant month DBs. SQLite is additive — failures degrade gracefully to JSON-only mode.
+4. **Incremental cache**: Transcript parse results cached as gzipped segments (append-only). Only changed files are re-parsed. Compaction merges segments when count exceeds 50.
+5. **Lightweight mode**: `--data-only` (Stop hook) uses a mtime-index for change detection without loading full cache. Writes plain JSON pending files, merges into `data.json`, and syncs changes to SQLite.
+6. **Persistent category mapping**: `task-categories.json` auto-generated at every build from `work-types.json` schema.
+7. **Auto-update check**: `/omh` queries npm registry asynchronously (3s timeout, 24h cache). Notifies when new version is available.
+8. **Server lock file reuse**: `cache/.serve.json` stores the running server's PID and URL. On subsequent builds, the generator checks if the process is still alive before spawning a new one. On macOS, AppleScript reloads the existing browser tab by URL match.
+9. **Pure modules prepended to `app.js`**: `session-events.mjs`, `context-example.mjs`, `cost-projection.mjs`, `canvas-bars.mjs`, and `regression.mjs` are authored as ESM for unit-testability. The generator strips `export` keywords and prepends them to `app.js` so symbols land in the same script scope. Source of truth lives in the `.mjs` files — never edit the inlined copies.
+10. **Week-over-week regression anchored to today**: regression detection (F5) always uses `Date.now()` as the anchor, independent of the sidebar period filter. The card shows explicit dates (`직전 7일 03.28~04.04 / 최근 7일 04.04~04.11`) to avoid confusion with the filter.
 10. **Auto log-scale for wide-range data**: `computeBarScale()` switches bar widths from linear to logarithmic when `max/min > 100` so small rows stay visible (applies to `#tokens` where cache dwarfs input/output). The `%` column always shows the real linear share.

@@ -10,7 +10,7 @@
  *
  * Table of contents (search the marker to jump):
  *
- *   // ── Restore minified usage data ──   DATA unpacking (key rehydration)
+ *   // ── Data state ──                    DATA object + tryApiInit()
  *   // ── i18n ──                          t(), locales, numLocale
  *   // ── Dark mode ──                     theme toggle + bb dark CSS swap
  *   // ── Constants ──                     CATEGORIES, color maps
@@ -45,39 +45,36 @@
  *   // ── Data staleness check ──          update banner trigger
  *   // ── Partial data banner ──           progressive first-run UX
  *   // ── New-data banner ──               firstRun dismiss
- *   // ── Boot ──                          init() entry point
+ *   // ── Boot ──                          tryApiInit() → init() entry point
  * ========================================================================== */
 
-  // ── Restore minified usage data ──
-  if (typeof DATA !== 'undefined' && DATA._minified) {
-    const _KEY_REV = {
-      ts:'timestamp', m:'model', it:'inputTokens', ot:'outputTokens',
-      cr:'cacheRead', cc:'cacheCreation', ri:'rawInput', cx:'context',
-      cn:'contextName', sid:'sessionId', ms:'latencyMs', cl:'charLen',
-      n:'name', t:'tool', c:'count', d:'date', cmd:'command', p:'project',
-      mc:'messageCount', sc:'sessionCount', tc:'toolCallCount'
-    };
-    for (const _scope in DATA.scopeData) {
-      const _u = DATA.scopeData[_scope].usage;
-      if (!_u) continue;
-      const _sidList = _u._sidList || [];
-      delete _u._sidList;
-      for (const _field in _u) {
-        if (!Array.isArray(_u[_field])) continue;
-        _u[_field] = _u[_field].map((item) => {
-          const obj = {};
-          for (const k in item) {
-            const rk = _KEY_REV[k] || k;
-            if (rk === 'sessionId') { obj[rk] = item[k] != null ? _sidList[item[k]] : null; }
-            else { obj[rk] = item[k]; }
-          }
-          return obj;
-        });
+  // ── Data state ──
+  // Populated by tryApiInit() via /api/meta. No embedded data files.
+  let DATA = { scopes: [], scopeData: {}, _usageReady: false };
+
+  // ── API-based data loading ──
+  async function tryApiInit() {
+    const overlay = document.getElementById('loading-overlay');
+    try {
+      const res = await fetch('/api/meta', { signal: AbortSignal.timeout(5000) });
+      if (!res.ok) throw new Error(`/api/meta returned ${res.status}`);
+      const meta = await res.json();
+      Object.assign(DATA, meta);
+      DATA._apiMode = true;
+      DATA._usageReady = false;
+
+      // Fetch usage for the initial period/scope.
+      const range = computeCurrentPeriodRange();
+      if (range) {
+        const scope = currentScope || 'global';
+        await fetchUsageForPeriod(scope, range.from, range.to);
       }
+    } catch (e) {
+      console.error('[oh-my-hi] Failed to load data from server:', e.message);
+      throw e;
+    } finally {
+      if (overlay) overlay.remove();
     }
-    delete DATA._minified;
-    // Legacy single data.js has full usage — mark ready immediately.
-    if (DATA._usageReady === undefined) DATA._usageReady = true;
   }
 
   // ── i18n ──
@@ -88,7 +85,7 @@
   }
   I18N.en = (typeof __EN__ !== 'undefined') ? __EN__ : {};
 
-  const systemLocale = (DATA.systemLocale || 'en').substring(0, 2);
+  let systemLocale = (DATA.systemLocale || 'en').substring(0, 2);
   let currentLang = localStorage.getItem('harness-lang') || (I18N[systemLocale] ? systemLocale : 'en');
 
   // ── Dark mode ──
@@ -234,7 +231,7 @@
       render();
     });
 
-    // Place theme toggle + help button before the inline sidebar-toggle
+    // Place theme toggle + help button in sidebar logo
     const logoEl = document.getElementById('sidebar-logo');
     const logoMainEl = logoEl ? logoEl.querySelector('.sidebar-logo-main') : null;
     const inlineToggle = document.getElementById('sidebar-toggle');
@@ -360,6 +357,9 @@
       item.addEventListener('mouseleave', () => {
         if (tipEl) { tipEl.remove(); tipEl = null; }
       });
+      item.addEventListener('click', () => {
+        if (tipEl) { tipEl.remove(); tipEl = null; }
+      });
     });
   }
 
@@ -374,12 +374,9 @@
   function updateLangToggle() {
     const group = document.getElementById('lang-toggle-group');
     if (!group) return;
-    // Hide toggle if system locale is English (only one language available)
-    if (systemLocale === 'en') {
-      group.style.display = 'none';
-      return;
-    }
-    group.style.display = '';
+    // Re-read from DATA in API mode (systemLocale may not be set at module init time)
+    const activeLocale = (DATA.systemLocale || '').substring(0, 2) || systemLocale;
+    if (activeLocale !== systemLocale) systemLocale = activeLocale;
     group.querySelectorAll('.lang-btn').forEach((btn) => {
       if (btn.dataset.lang === currentLang) {
         btn.classList.add('active');
@@ -492,6 +489,18 @@
     render();
     skipScrollReset = false;
     requestAnimationFrame(() => { content.scrollTop = scrollPos; });
+    // API mode: fetch usage for the new scope if not already hydrated.
+    if (DATA._apiMode) {
+      const sd = DATA.scopeData[currentScope];
+      if (sd && !sd.usage) {
+        const range = computeCurrentPeriodRange();
+        if (range) {
+          fetchUsageForPeriod(currentScope, range.from, range.to).then((ok) => {
+            if (ok) render();
+          });
+        }
+      }
+    }
   }
 
   function onSearchInput() {
@@ -502,6 +511,56 @@
   // ── Data helpers ──
   function getScopeData() {
     return DATA.scopeData[currentScope] || {};
+  }
+
+  // Compute the timestamp range (ms) matching the current period / custom
+  // range controls. Used by the API loader to request only the needed slice.
+  function computeCurrentPeriodRange() {
+    const now = Date.now();
+    if (customDateRange) {
+      return { from: customDateRange.start.getTime(), to: customDateRange.end.getTime() };
+    }
+    if (currentPeriod === 0 || currentPeriod < 0) {
+      // All-time — use the scope's dateRange if available, otherwise a wide window.
+      const sd = DATA.scopeData && DATA.scopeData[currentScope];
+      const dr = sd && sd.dateRange;
+      if (dr && dr.start && dr.end) {
+        return { from: new Date(dr.start).getTime(), to: new Date(dr.end).getTime() };
+      }
+      return { from: 0, to: now };
+    }
+    const from = now - (currentPeriod * 24 * 60 * 60 * 1000);
+    return { from, to: now };
+  }
+
+  // Abort controller for in-flight /api/usage fetches — cancelled on each new request.
+  let _usageFetchAbort = null;
+
+  // Fetch usage data for the given scope+range from the server API and
+  // replace DATA.scopeData[scope].usage. Returns true on success.
+  async function fetchUsageForPeriod(scope, fromMs, toMs) {
+    if (!DATA._apiMode) return false;
+    if (!DATA.scopeData[scope]) return false;
+    if (_usageFetchAbort) _usageFetchAbort.abort();
+    _usageFetchAbort = new AbortController();
+    const signal = _usageFetchAbort.signal;
+    try {
+      const params = new URLSearchParams({
+        scope,
+        from: String(Math.floor(fromMs)),
+        to: String(Math.floor(toMs))
+      });
+      const res = await fetch('/api/usage?' + params, { signal });
+      if (!res.ok) return false;
+      const usage = await res.json();
+      if (usage && usage.error) return false; // e.g. db_not_ready
+      DATA.scopeData[scope].usage = usage;
+      DATA._usageReady = true;
+      return true;
+    } catch (e) {
+      if (e.name === 'AbortError') return false; // superseded by newer fetch
+      return false;
+    }
   }
 
   function getItems(category) {
@@ -760,11 +819,18 @@
     return '$0.00';
   }
 
-  // Claude model pricing per 1M tokens (USD)
-  // https://docs.anthropic.com/en/docs/about-claude/models
-  const MODEL_PRICING = {
+  // Claude model pricing per 1M tokens (USD).
+  // Fetched from Anthropic pricing docs at build time (DATA.modelPricing).
+  // Hardcoded table below is the fallback when the build-time fetch fails.
+  // cacheCreation = 5-minute cache write (1.25x input); cacheRead = cache hit (0.1x input)
+  // Opus 4.5+ dropped to $5/$25 — distinct from original Opus 4 / 4.1 ($15/$75)
+  const _PRICING_FALLBACK = {
+    'opus-4-7': { input: 5, output: 25, cacheRead: 0.5, cacheCreation: 6.25 },
+    'opus-4-6': { input: 5, output: 25, cacheRead: 0.5, cacheCreation: 6.25 },
+    'opus-4-5': { input: 5, output: 25, cacheRead: 0.5, cacheCreation: 6.25 },
     'opus-4': { input: 15, output: 75, cacheRead: 1.5, cacheCreation: 18.75 },
     'sonnet-4': { input: 3, output: 15, cacheRead: 0.3, cacheCreation: 3.75 },
+    'haiku-4-5': { input: 1, output: 5, cacheRead: 0.1, cacheCreation: 1.25 },
     'haiku-4': { input: 0.8, output: 4, cacheRead: 0.08, cacheCreation: 1 },
     'sonnet-3-5': { input: 3, output: 15, cacheRead: 0.3, cacheCreation: 3.75 },
     'haiku-3-5': { input: 0.8, output: 4, cacheRead: 0.08, cacheCreation: 1 },
@@ -772,13 +838,19 @@
     'sonnet-3': { input: 3, output: 15, cacheRead: 0.3, cacheCreation: 3.75 },
     'haiku-3': { input: 0.25, output: 1.25, cacheRead: 0.03, cacheCreation: 0.3 },
   };
+  const MODEL_PRICING = DATA.modelPricing || _PRICING_FALLBACK;
 
   function resolvePricingKey(model) {
     if (!model || model === 'unknown') return null;
     const s = model.replace(/^claude-/, '').replace(/-\d{8,}$/, '');
     if (MODEL_PRICING[s]) return s;
-    const m = s.match(/^(opus|sonnet|haiku)-(\d+)(?:-\d+)?$/);
+    const m = s.match(/^(opus|sonnet|haiku)-(\d+)(?:-(\d+))?$/);
     if (m) {
+      // Check with minor version first (e.g. opus-4-6) then fall back to major (opus-4)
+      if (m[3]) {
+        const withMinor = m[1] + '-' + m[2] + '-' + m[3];
+        if (MODEL_PRICING[withMinor]) return withMinor;
+      }
       const base = m[1] + '-' + m[2];
       if (MODEL_PRICING[base]) return base;
     }
@@ -1052,6 +1124,7 @@
 
   // ── Period filter with calendar ──
   function renderSidebarPeriod() {
+    document.querySelectorAll('.period-tooltip').forEach((el) => el.remove());
     const sidebarPeriod = document.getElementById('sidebar-period');
     if (!sidebarPeriod) return;
 
@@ -1147,6 +1220,15 @@
         renderContent();
         skipScrollReset = false;
         requestAnimationFrame(() => { content.scrollTop = scrollPos2; });
+        // API mode: refetch usage for the new period and re-render on arrival.
+        if (DATA._apiMode) {
+          const range = computeCurrentPeriodRange();
+          if (range) {
+            fetchUsageForPeriod(currentScope, range.from, range.to).then((ok) => {
+              if (ok) render();
+            });
+          }
+        }
       });
     });
   }
@@ -1287,6 +1369,15 @@
         renderContent();
         skipScrollReset = false;
         requestAnimationFrame(() => { content.scrollTop = scrollPosCal; });
+        // API mode: refetch usage for the custom range.
+        if (DATA._apiMode) {
+          const range = computeCurrentPeriodRange();
+          if (range) {
+            fetchUsageForPeriod(currentScope, range.from, range.to).then((ok) => {
+              if (ok) render();
+            });
+          }
+        }
         return;
       }
     });
@@ -1549,7 +1640,17 @@
     html += '</tbody></table>'
       + '<div style="margin-top:8px;font-size:12px;color:var(--text-secondary)">'
       + t('costPricingUnit') + ' · <a href="https://www.anthropic.com/pricing" target="_blank" style="color:var(--accent)">anthropic.com/pricing</a>'
-      + '</div></details></div></div>';
+      + '</div></details>';
+    if (DATA.pricingFetchedAt) {
+      html += '<div style="margin-top:8px;font-size:11px;color:var(--accent)">'
+        + t('costPricingFetchedAt').replace('{date}', formatDate(DATA.pricingFetchedAt))
+        + '</div>';
+    } else {
+      html += '<div style="margin-top:8px;font-size:11px;color:var(--accent)">'
+        + t('costPricingFallback')
+        + '</div>';
+    }
+    html += '</div></div>';
 
     html += '<div class="generated-at">' + t('generatedAt') + ' ' + formatDateTime(DATA.generatedAt) + ' · ' + (DATA.configDir || '') + '</div>';
     content.innerHTML = html;
@@ -7201,46 +7302,15 @@
   }
 
   // ── Boot ──
-  init();
-  showPartialBanner();
-  showFirstRunBanner();
-  checkDataVersion();
-
-  // ── Progressive loading: deferred usage merge ──
-  // data-core.js loads instantly (~400KB). data-usage.js (~9MB) loads async
-  // via defer and calls _onUsageReady when available. Merge usage into
-  // DATA.scopeData and re-render so usage-dependent views become live.
-  function mergeUsageData() {
-    if (typeof DATA_USAGE === 'undefined') return;
-    const _KEY_REV = {
-      ts:'timestamp', m:'model', it:'inputTokens', ot:'outputTokens',
-      cr:'cacheRead', cc:'cacheCreation', ri:'rawInput', cx:'context',
-      cn:'contextName', sid:'sessionId', ms:'latencyMs', cl:'charLen',
-      n:'name', t:'tool', c:'count', d:'date', cmd:'command', p:'project',
-      mc:'messageCount', sc:'sessionCount', tc:'toolCallCount'
-    };
-    for (const scope in DATA_USAGE) {
-      if (!DATA.scopeData[scope]) continue;
-      const u = DATA_USAGE[scope];
-      const sidList = u._sidList || [];
-      delete u._sidList;
-      for (const field in u) {
-        if (!Array.isArray(u[field])) continue;
-        u[field] = u[field].map((item) => {
-          const obj = {};
-          for (const k in item) {
-            const rk = _KEY_REV[k] || k;
-            if (rk === 'sessionId') { obj[rk] = item[k] != null ? sidList[item[k]] : null; }
-            else { obj[rk] = item[k]; }
-          }
-          return obj;
-        });
-      }
-      DATA.scopeData[scope].usage = u;
-    }
-    DATA._usageReady = true;
+  tryApiInit().then(() => {
+    init();
     render();
-  }
-  // If DATA_USAGE already loaded (cached / fast network), merge immediately.
-  if (typeof DATA_USAGE !== 'undefined') { mergeUsageData(); }
-  else { window._onUsageReady = mergeUsageData; }
+    showPartialBanner();
+    showFirstRunBanner();
+    checkDataVersion();
+  }).catch(() => {
+    const overlay = document.getElementById('loading-overlay');
+    if (overlay) {
+      overlay.innerHTML = '<div style="text-align:center"><div style="font-size:2rem;margin-bottom:.5rem">⚠️</div><div style="color:#dc2626">Could not connect to oh-my-hi server.<br>Run <code>/omh</code> to start it.</div></div>';
+    }
+  });

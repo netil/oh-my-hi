@@ -1,5 +1,32 @@
 # Changelog
 
+## [0.11.0] - 2026-04-25
+
+### Added
+- **Local HTTP server** (`scripts/serve.mjs`, port 8282) — replaces `file://` protocol. Serves `output/` as static files and exposes two REST endpoints:
+  - `GET /api/meta` — `data.json` with usage arrays stripped, for fast initial load
+  - `GET /api/usage?scope=&from=&to=` — SQLite query returning usage payload for the requested scope and time range
+  - Server reused across builds via a lock file (`cache/.serve.json`). Dev build serves with `Cache-Control: no-store`; production with `immutable`.
+- **Monthly-partitioned SQLite** (`scripts/db.mjs`) — usage data stored in `output/db/{year}/{year-MM}.sqlite`. Each entry is routed to the DB for the month its timestamp falls in. Tables: `token_entries`, `prompt_entries`, `skill_usage`, `agent_usage`, `mcp_calls`, `latency_entries`. Schema v1 with UNIQUE indexes on all tables for safe incremental writes.
+  - `prompt_entries` replaces legacy `prompt_stats` daily aggregates — stores individual prompt events with `{sessionId, timestamp, charLen, preview}`.
+  - `latency_entries` — new table for response latency measurements per API call.
+  - `appendUsageMonthly()` — routes all 6 data types to the correct monthly DB by timestamp.
+  - `queryUsageMultiDb()` — merges and deduplicates results across multiple monthly DBs for date-spanning queries.
+  - `splitLegacyDb()` — one-time migration helper from pre-partitioned `oh-my-hi.sqlite`.
+- **API-based data loading in `app.js`** — inline `DATA` embed removed. `tryApiInit()` fetches `/api/meta` at startup; `fetchUsageForPeriod(scope, from, to)` fetches `/api/usage` on demand. `AbortController` cancels stale in-flight requests when scope or period changes rapidly.
+- **Loading overlay** — shown during initial API fetch, removed when data is ready.
+- **`better-sqlite3`** added to `dependencies`.
+- **19 new DB tests** — `latencyEntries` write/read/filter/dedup, `upsertUsage` latencyEntries replacement, `queryUsageMultiDb` latencyEntries merge, `appendUsageMonthly` routing, `splitLegacyDb` migration.
+
+### Changed
+- `generate-dashboard.mjs` now spawns `serve.mjs` instead of opening `file://` directly. `appendUsageMonthly()` called after every data write. Deferred migration (`data.json` → SQLite) runs after the server is already serving data.
+- `--data-only` lightweight path always runs collect + merge + SQLite sync.
+- Default server port changed from 7979 to **8282**. Fallback ports: 7979, 8181, 8383, 9191, 9292.
+- `SPEC.md` updated to reflect monthly DB structure and port change.
+
+### Tests
+- **459 → 478** (+19): `db.test.mjs` latencyEntries, appendUsageMonthly, splitLegacyDb
+
 ## [0.10.0] - 2026-04-15
 
 ### Added

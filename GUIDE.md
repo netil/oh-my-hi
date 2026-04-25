@@ -228,9 +228,9 @@ Enable the ⚖ compare toggle in the sidebar to see explicit previous period val
 
 ### Data Refresh
 
-Run `/omh --data-only` to collect the latest data without rebuilding the dashboard. The data file (`data.js`) is updated incrementally — only changed transcript files are re-parsed.
+Run `/omh --data-only` to collect the latest data without rebuilding the dashboard. `data.json` and the SQLite database are updated incrementally — only changed transcript files are re-parsed.
 
-Enable auto-refresh with `/omh --enable-auto` to collect data on every session end. Bookmark `output/index.html` and refresh the page anytime to see the latest data.
+Enable auto-refresh with `/omh --enable-auto` to collect data on every session end. The local server stays running between builds, so just refresh the browser tab to see the latest data.
 
 ### Update
 

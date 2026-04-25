@@ -17,7 +17,15 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const ROOT = path.resolve(__dirname, '..');
 const OUTPUT_DIR = path.join(ROOT, 'output');
-const DB_PATH = path.join(OUTPUT_DIR, 'oh-my-hi.sqlite');
+// Dev build: templates can change without version bump, so don't use immutable cache.
+const IS_DEV_BUILD = (() => {
+  try {
+    if (!fs.existsSync(path.join(ROOT, '.git'))) return false;
+    const pkg = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf-8'));
+    return pkg.name === 'oh-my-hi';
+  } catch { return false; }
+})();
+const LEGACY_DB_PATH = path.join(OUTPUT_DIR, 'oh-my-hi.sqlite');
 const DATA_JSON = path.join(OUTPUT_DIR, 'data.json');
 const CACHE_DIR = path.join(OUTPUT_DIR, 'cache');
 const LOCK_FILE = path.join(CACHE_DIR, '.serve.json');
@@ -30,18 +38,44 @@ try {
   console.warn('serve: SQLite unavailable —', e.message);
 }
 
-let _db = null;
-function getDb() {
-  if (_db) return _db;
-  if (!dbModule) return null;
-  if (!fs.existsSync(DB_PATH)) return null;
-  try {
-    _db = dbModule.openDb(DB_PATH);
-    return _db;
-  } catch (e) {
-    console.warn('serve: could not open DB —', e.message);
-    return null;
+// Lazily opened monthly DB instances — keyed by '${year}-${month}'.
+const _monthlyDbs = new Map();
+let _legacyDb = null;
+
+/**
+ * Return open DB instances that cover the given [fromMs, toMs] range.
+ * Falls back to the legacy oh-my-hi.sqlite if no monthly DBs exist yet.
+ */
+function getDbsForRange(fromMs, toMs) {
+  if (!dbModule) return [];
+  let monthly;
+  try { monthly = dbModule.listMonthlyDbs(OUTPUT_DIR); } catch { return []; }
+
+  if (monthly.length === 0) {
+    // Legacy fallback for pre-partitioned installs
+    if (!fs.existsSync(LEGACY_DB_PATH)) return [];
+    if (!_legacyDb) {
+      try { _legacyDb = dbModule.openDb(LEGACY_DB_PATH); } catch (e) {
+        console.warn('serve: could not open legacy DB —', e.message);
+        return [];
+      }
+    }
+    return [_legacyDb];
   }
+
+  const dbs = [];
+  for (const { year, month, path: p } of monthly) {
+    const monthStart = Date.UTC(year, month - 1, 1);
+    const monthEnd = Date.UTC(year, month, 1); // first ms of next month (exclusive)
+    if (monthStart < toMs && monthEnd > fromMs) {
+      const key = `${year}-${month}`;
+      if (!_monthlyDbs.has(key)) {
+        try { _monthlyDbs.set(key, dbModule.openDb(p)); } catch { continue; }
+      }
+      dbs.push(_monthlyDbs.get(key));
+    }
+  }
+  return dbs;
 }
 
 const MIME = {
@@ -123,22 +157,19 @@ function handleUsageFallback(res, scope) {
 }
 
 function handleUsage(req, res, url) {
-  const db = getDb();
   const scope = url.searchParams.get('scope') || 'global';
   const fromRaw = url.searchParams.get('from');
   const toRaw = url.searchParams.get('to');
   const from = fromRaw != null ? parseInt(fromRaw, 10) : 0;
   const to = toRaw != null ? parseInt(toRaw, 10) : Number.MAX_SAFE_INTEGER;
 
-  // Fall back to data.json when SQLite is absent or not yet populated (migration in progress).
-  if (!db) return handleUsageFallback(res, scope);
-  try {
-    const count = db.prepare('SELECT COUNT(*) AS n FROM token_entries').get().n;
-    if (count === 0) return handleUsageFallback(res, scope);
-  } catch { return handleUsageFallback(res, scope); }
+  if (!dbModule) return handleUsageFallback(res, scope);
+
+  const dbs = getDbsForRange(from, to);
+  if (dbs.length === 0) return handleUsageFallback(res, scope);
 
   try {
-    const payload = dbModule.queryUsage(db, scope, from, to);
+    const payload = dbModule.queryUsageMultiDb(dbs, scope, from, to);
     sendJson(res, 200, payload);
   } catch (e) {
     sendJson(res, 500, { error: 'query_failed', detail: e.message });
@@ -156,10 +187,10 @@ function serveStatic(req, res, pathname) {
     res.writeHead(404); res.end('not found'); return;
   }
   const ext = path.extname(filePath).toLowerCase();
-  // /static/ files are versioned (app-x.y.z.js) or billboard files gated by .bb-version,
-  // so they never change in-place — safe for long-lived immutable caching.
+  // /static/ files are versioned (app-x.y.z.js) or billboard files gated by .bb-version.
+  // In dev builds skip immutable so hard-reload always fetches the latest file.
   const cacheControl = pathname.startsWith('/static/')
-    ? 'public, max-age=31536000, immutable'
+    ? IS_DEV_BUILD ? 'no-store' : 'public, max-age=31536000, immutable'
     : 'no-store';
   res.writeHead(200, {
     'Content-Type': MIME[ext] || 'application/octet-stream',
@@ -197,10 +228,29 @@ function openBrowser(url) {
   }
 }
 
-const PREFERRED_PORT = 7979;
+/**
+ * Returns true when an oh-my-hi server is already listening on the given port.
+ * Probes GET /api/meta and checks for application/json response — a fingerprint
+ * specific to oh-my-hi's serve.mjs (generic servers won't match this path).
+ */
+function checkOmhRunning(port) {
+  return new Promise((resolve) => {
+    const req = http.get(
+      { hostname: '127.0.0.1', port, path: '/api/meta', timeout: 600 },
+      (res) => {
+        res.resume();
+        resolve((res.headers['content-type'] || '').startsWith('application/json'));
+      }
+    );
+    req.on('error', () => resolve(false));
+    req.on('timeout', () => { req.destroy(); resolve(false); });
+  });
+}
+
+const PREFERRED_PORT = 8282;
 // All ports follow the XX-repeated pattern (XY+XY) to stay memorable.
 // 8080/8888 omitted — too commonly used by other tools.
-const FALLBACK_PORTS = [8181, 8282, 8383, 9191, 9292];
+const FALLBACK_PORTS = [7979, 8181, 8383, 9191, 9292];
 
 function listen(startPort = PREFERRED_PORT, { open = false } = {}) {
   const server = http.createServer(requestHandler);
@@ -221,11 +271,24 @@ function listen(startPort = PREFERRED_PORT, { open = false } = {}) {
 
   const tryListen = () => {
     const port = portQueue[portIndex];
-    server.once('error', (err) => {
+    server.once('error', async (err) => {
       server.removeListener('listening', onListening);
-      if (err.code === 'EADDRINUSE' && portIndex < portQueue.length - 1) {
-        portIndex++;
-        tryListen();
+      if (err.code === 'EADDRINUSE') {
+        const omhRunning = await checkOmhRunning(port);
+        if (omhRunning) {
+          // oh-my-hi is already serving on this port — reuse it instead of
+          // switching to a fallback. No new process or browser tab needed.
+          const url = `http://127.0.0.1:${port}`;
+          console.log(`oh-my-hi: already running → ${url}`);
+          process.exit(0);
+        }
+        if (portIndex < portQueue.length - 1) {
+          portIndex++;
+          tryListen();
+        } else {
+          console.error('serve: failed to bind —', err.message);
+          process.exit(1);
+        }
       } else {
         console.error('serve: failed to bind —', err.message);
         process.exit(1);

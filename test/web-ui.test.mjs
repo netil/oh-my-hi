@@ -35,9 +35,10 @@ describe('Web UI — Templates', () => {
       assert.ok(html.includes('id="sidebar-period"'));
     });
 
-    it('should use progressive loading split scripts', () => {
-      assert.ok(html.includes('src="data-core.js"'), 'loads data-core.js sync');
-      assert.ok(html.includes('src="data-usage.js" defer'), 'loads data-usage.js deferred');
+    it('should use API-first loading (no inline data script tags)', () => {
+      assert.ok(!html.includes('src="data-core.js"'), 'should not have data-core.js script tag');
+      assert.ok(!html.includes('src="data-usage.js"'), 'should not have data-usage.js script tag');
+      assert.ok(html.includes('loading-overlay'), 'should have loading overlay for API init');
     });
   });
 
@@ -77,9 +78,10 @@ describe('Web UI — Templates', () => {
       }
     });
 
-    it('should have _KEY_REV for minified data restoration', () => {
-      assert.ok(js.includes('_KEY_REV'));
-      assert.ok(js.includes("ts:'timestamp'"));
+    it('should have API-first data initialization', () => {
+      assert.ok(js.includes('tryApiInit'), 'tryApiInit function defined');
+      assert.ok(js.includes('/api/meta'), '/api/meta endpoint referenced');
+      assert.ok(js.includes('loading-overlay'), 'loading overlay referenced');
     });
 
     it('should define MODEL_PRICING', () => {
@@ -234,6 +236,30 @@ describe('Web UI — Templates', () => {
       assert.ok(js.includes('renderSessionInfo()'), 'renderSessionInfo invoked');
     });
 
+    it('should remove tooltip on collapsed sidebar item click', () => {
+      // When the sidebar is collapsed, menu items show a tooltip on hover.
+      // Clicking a menu item re-renders the sidebar, removing the item from the
+      // DOM before mouseleave fires — leaving an orphan tooltip. A click handler
+      // must clean up the tooltip immediately on click.
+      const clickHandler = js.indexOf("item.addEventListener('click', () => {");
+      assert.ok(clickHandler !== -1, 'click listener registered on nav items');
+      const snippet = js.slice(clickHandler, clickHandler + 120);
+      assert.ok(snippet.includes('tipEl.remove()'), 'click handler removes tipEl');
+      assert.ok(snippet.includes('tipEl = null'), 'click handler nulls tipEl ref');
+    });
+
+    it('should toggle dark theme via <link disabled> not dynamic style injection', () => {
+      // setBbDarkTheme should flip the `disabled` property on the preloaded
+      // billboard dark CSS <link> tag rather than injecting a <style> element.
+      // This keeps the theme swap to a single attribute change with no DOM cost.
+      const fnIdx = js.indexOf('function setBbDarkTheme');
+      assert.ok(fnIdx !== -1, 'setBbDarkTheme function defined');
+      const snippet = js.slice(fnIdx, fnIdx + 200);
+      assert.ok(snippet.includes("getElementById('bb-dark-theme')"), 'targets bb-dark-theme link element');
+      assert.ok(snippet.includes('.disabled'), 'sets .disabled property');
+      assert.ok(!snippet.includes('createElement'), 'does not create new elements');
+    });
+
     it('should only reset session list scroll when sort actually changes', () => {
       // Contract: scroll resets to top ONLY when the sort criterion changes.
       // Re-opening with the same sort after picking an item must preserve
@@ -323,13 +349,11 @@ describe('Web UI — Templates', () => {
       assert.ok(js.includes("drawStackedBar('vis-bar'"), 'invoked for vis-bar canvas');
     });
 
-    it('should support progressive data loading', () => {
+    it('should support API-based usage lazy loading', () => {
       assert.ok(js.includes('_usageReady'), 'usage ready flag');
-      assert.ok(js.includes('mergeUsageData'), 'mergeUsageData function defined');
-      assert.ok(js.includes('DATA_USAGE'), 'DATA_USAGE referenced');
-      assert.ok(js.includes('_onUsageReady'), 'deferred callback registered');
-      // Legacy single data.js path sets _usageReady immediately
-      assert.ok(js.includes('DATA._usageReady = true'), 'legacy path marks ready');
+      assert.ok(js.includes('fetchUsageForPeriod'), 'fetchUsageForPeriod function defined');
+      assert.ok(js.includes('/api/usage'), '/api/usage endpoint referenced');
+      assert.ok(js.includes('_apiMode'), 'API mode flag set');
     });
 
     it('should have Help page Context Explorer section', () => {
