@@ -93,15 +93,8 @@
 
   // ── Dark mode ──
   function setBbDarkTheme(enabled) {
-    let el = document.getElementById('bb-dark-theme');
-    if (enabled && !el) {
-      el = document.createElement('style');
-      el.id = 'bb-dark-theme';
-      el.textContent = typeof __BB_DARK_CSS__ === 'string' ? __BB_DARK_CSS__ : '';
-      document.head.appendChild(el);
-    } else if (!enabled && el) {
-      el.remove();
-    }
+    const el = document.getElementById('bb-dark-theme');
+    if (el) el.disabled = !enabled;
   }
 
   (function initTheme() {

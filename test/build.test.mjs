@@ -135,18 +135,23 @@ describe('Build', () => {
       assert.ok(usage.includes('_onUsageReady'), 'data-usage.js should call _onUsageReady');
     });
 
-    it('should contain inlined billboard.js', () => {
-      assert.ok(html.includes('bb.generate') || html.includes('billboard'));
+    it('should reference static assets', () => {
+      assert.ok(html.includes('src="/static/billboard.pkgd.min.js"'), 'billboard JS script tag');
+      assert.ok(html.includes('href="/static/billboard.min.css"'), 'billboard CSS link tag');
+      assert.ok(html.includes('href="/static/billboard-dark.min.css"'), 'billboard dark CSS link tag');
     });
 
-    it('should contain app.js code', () => {
-      assert.ok(html.includes('renderContent'));
-      assert.ok(html.includes('renderOverview'));
-    });
-
-    it('should contain CSS styles', () => {
-      assert.ok(html.includes('--accent'));
-      assert.ok(html.includes('.sidebar'));
+    it('should have static directory with versioned files', () => {
+      const pkg = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf-8'));
+      const staticDir = path.join(OUTPUT, 'static');
+      assert.ok(fs.existsSync(path.join(staticDir, `app-${pkg.version}.js`)), 'app-{version}.js');
+      assert.ok(fs.existsSync(path.join(staticDir, `styles-${pkg.version}.css`)), 'styles-{version}.css');
+      assert.ok(fs.existsSync(path.join(staticDir, 'billboard.pkgd.min.js')), 'billboard.pkgd.min.js');
+      assert.ok(fs.existsSync(path.join(staticDir, '.bb-version')), '.bb-version marker');
+      const appJs = fs.readFileSync(path.join(staticDir, `app-${pkg.version}.js`), 'utf-8');
+      assert.ok(appJs.includes('renderContent'), 'app.js contains renderContent');
+      const styles = fs.readFileSync(path.join(staticDir, `styles-${pkg.version}.css`), 'utf-8');
+      assert.ok(styles.includes('--accent') || styles.includes('.sidebar'), 'styles.css contains CSS');
     });
 
     it('should contain version from package.json', () => {

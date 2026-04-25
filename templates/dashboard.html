@@ -4,8 +4,9 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>oh-my-hi</title>
-  <style>__BB_CSS__</style>
-  <style>__STYLES__</style>
+  <link rel="stylesheet" href="/static/billboard.min.css">
+  <link id="bb-dark-theme" rel="stylesheet" href="/static/billboard-dark.min.css" disabled>
+  <link rel="stylesheet" href="/static/styles-__VERSION__.css">
 </head>
 <body>
   <div class="app">
@@ -47,14 +48,13 @@
     </aside>
     <main class="content" id="content"></main>
   </div>
-  <script>__BB_JS__</script>
+  <script src="/static/billboard.pkgd.min.js"></script>
   <script src="data-core.js"></script>
   <script src="data-usage.js" defer></script>
   <script>
     let __EN__ = __EN_DATA__;
     let __LOCALE__ = __LOCALE_DATA__;
-    var __BB_DARK_CSS__ = __BB_DARK_CSS_STR__;
-    __APP_JS__
   </script>
+  <script src="/static/app-__VERSION__.js"></script>
 </body>
 </html>

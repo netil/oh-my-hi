@@ -14,10 +14,18 @@ describe('Web UI — Templates', () => {
     before(() => { html = fs.readFileSync(path.join(TEMPLATES, 'dashboard.html'), 'utf-8'); });
 
     it('should contain all required placeholders', () => {
-      const required = ['__BB_CSS__', '__STYLES__', '__BB_JS__', '__EN_DATA__', '__LOCALE_DATA__', '__APP_JS__', '__VERSION__', '__BB_DARK_CSS_STR__'];
+      const required = ['__EN_DATA__', '__LOCALE_DATA__', '__VERSION__'];
       for (const ph of required) {
         assert.ok(html.includes(ph), `missing placeholder: ${ph}`);
       }
+    });
+
+    it('should reference static assets via link/script tags', () => {
+      assert.ok(html.includes('href="/static/billboard.min.css"'), 'billboard CSS link');
+      assert.ok(html.includes('href="/static/billboard-dark.min.css"'), 'billboard dark CSS link');
+      assert.ok(html.includes('href="/static/styles-__VERSION__.css"'), 'styles link');
+      assert.ok(html.includes('src="/static/billboard.pkgd.min.js"'), 'billboard JS script');
+      assert.ok(html.includes('src="/static/app-__VERSION__.js"'), 'app JS script');
     });
 
     it('should have sidebar structure', () => {

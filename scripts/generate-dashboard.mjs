@@ -793,8 +793,36 @@ function writeHtml(indexPath, systemLocale) {
   }
 
   const template = fs.readFileSync(path.join(TEMPLATES, 'dashboard.html'), 'utf-8');
-  const rawStyles = fs.readFileSync(path.join(TEMPLATES, 'styles.css'), 'utf-8');
   const pkg = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf-8'));
+
+  const STATIC_DIR = path.join(path.dirname(indexPath), 'static');
+  fs.mkdirSync(STATIC_DIR, { recursive: true });
+
+  // Copy billboard static files only when the billboard.js version changes.
+  const bbDir = path.join(ROOT, 'node_modules', 'billboard.js', 'dist');
+  if (!fs.existsSync(bbDir)) {
+    console.error('oh-my-hi: ❌ node_modules not found. Run `npm install` in', ROOT);
+    process.exit(1);
+  }
+  const bbPkg = JSON.parse(fs.readFileSync(path.join(bbDir, '..', 'package.json'), 'utf-8'));
+  const bbVersion = bbPkg.version;
+  const bbVersionMarker = path.join(STATIC_DIR, '.bb-version');
+  const installedBbVersion = fs.existsSync(bbVersionMarker)
+    ? fs.readFileSync(bbVersionMarker, 'utf-8').trim()
+    : null;
+  if (bbVersion !== installedBbVersion) {
+    fs.copyFileSync(path.join(bbDir, 'billboard.pkgd.min.js'), path.join(STATIC_DIR, 'billboard.pkgd.min.js'));
+    fs.copyFileSync(path.join(bbDir, 'billboard.min.css'), path.join(STATIC_DIR, 'billboard.min.css'));
+    fs.copyFileSync(path.join(bbDir, 'theme', 'dark.min.css'), path.join(STATIC_DIR, 'billboard-dark.min.css'));
+    fs.writeFileSync(bbVersionMarker, bbVersion, 'utf-8');
+    console.log(`  billboard.js ${bbVersion} → static/`);
+  }
+
+  // Build versioned app.js and styles.css. In dev mode always regenerate;
+  // otherwise skip if the versioned file already exists (same version = same content).
+  const appJsDest = path.join(STATIC_DIR, `app-${pkg.version}.js`);
+  const stylesDest = path.join(STATIC_DIR, `styles-${pkg.version}.css`);
+
   // Pure helper modules that live alongside app.js but are authored as ESM
   // so they can be unit-tested. Strip the `export ` keywords and prepend the
   // code before app.js so the symbols land in the same script scope. Source
@@ -815,26 +843,19 @@ function writeHtml(indexPath, systemLocale) {
   const rawAppJs = (INLINED_MODULES + '\n' + fs.readFileSync(path.join(TEMPLATES, 'app.js'), 'utf-8'))
     .replace(/__VERSION__/g, JSON.stringify(pkg.version));
 
-  const bbDir = path.join(ROOT, 'node_modules', 'billboard.js', 'dist');
-  if (!fs.existsSync(bbDir)) {
-    console.error('oh-my-hi: ❌ node_modules not found. Run `npm install` in', ROOT);
-    process.exit(1);
+  if (IS_DEV_BUILD || !fs.existsSync(appJsDest)) {
+    const appJs = transformSync(rawAppJs, { loader: 'js', minify: true }).code;
+    fs.writeFileSync(appJsDest, appJs, 'utf-8');
   }
-  const bbJs = fs.readFileSync(path.join(bbDir, 'billboard.pkgd.min.js'), 'utf-8');
-  const bbCss = fs.readFileSync(path.join(bbDir, 'billboard.min.css'), 'utf-8');
-  const bbDarkCss = fs.readFileSync(path.join(bbDir, 'theme', 'dark.min.css'), 'utf-8');
-
-  const styles = transformSync(rawStyles, { loader: 'css', minify: true }).code;
-  const appJs = transformSync(rawAppJs, { loader: 'js', minify: true }).code;
+  if (IS_DEV_BUILD || !fs.existsSync(stylesDest)) {
+    const rawStyles = fs.readFileSync(path.join(TEMPLATES, 'styles.css'), 'utf-8');
+    const styles = transformSync(rawStyles, { loader: 'css', minify: true }).code;
+    fs.writeFileSync(stylesDest, styles, 'utf-8');
+  }
 
   const placeholders = {
-    __BB_CSS__: bbCss,
-    __BB_DARK_CSS_STR__: JSON.stringify(bbDarkCss),
-    __BB_JS__: bbJs,
-    __STYLES__: styles,
     __EN_DATA__: escapeForScript(JSON.stringify(enObj)),
     __LOCALE_DATA__: escapeForScript(JSON.stringify(localeObj)),
-    __APP_JS__: appJs,
     __VERSION__: pkg.version,
   };
   const placeholderRe = new RegExp(Object.keys(placeholders).map(k => k.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|'), 'g');
@@ -856,6 +877,10 @@ function needsHtmlRebuild(indexPath) {
     const pkg = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf-8'));
     const html = fs.readFileSync(indexPath, 'utf-8');
     if (!html.includes(pkg.version)) return true;
+    // Rebuild if versioned static assets are missing
+    const staticDir = path.join(path.dirname(indexPath), 'static');
+    if (!fs.existsSync(path.join(staticDir, `app-${pkg.version}.js`))) return true;
+    if (!fs.existsSync(path.join(staticDir, `styles-${pkg.version}.css`))) return true;
     // Rebuild if any template file is newer than the output
     const outMtime = fs.statSync(indexPath).mtimeMs;
     const templateFiles = ['app.js', 'styles.css', 'dashboard.html', 'session-events.mjs', 'context-example.mjs', 'cost-projection.mjs', 'canvas-bars.mjs', 'regression.mjs', 'health-score.mjs', 'context-optimizer.mjs', 'session-bookmarks.mjs', 'cache-ttl.mjs'].map(f => path.join(TEMPLATES, f));
