@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.11.2] - 2026-04-27
+
+### Fixed
+- **Duplicate browser tab prevention** — `openBrowser` now routes through a `/open` launcher page instead of opening the dashboard URL directly. The launcher calls `window.open('/', 'oh-my-hi')`: if an existing tab with that name is found it is focused and the launcher closes itself; otherwise the launcher navigates to the dashboard in-place.
+- `window.name = 'oh-my-hi'` set at dashboard startup so the tab is discoverable by subsequent `/open` launcher calls.
+
+### Tests
+- Added `test/serve.test.mjs` — HTTP-level tests for `requestHandler`: `/open` response (status, content-type, cache headers, launcher script contents), `/api/meta` still responds as JSON, unknown paths return 404.
+- Added `window.name` assertion to `web-ui.test.mjs` app.js static checks.
+
 ## [0.11.1] - 2026-04-25
 
 ### Fixed

@@ -107,6 +107,10 @@ describe('Web UI — Templates', () => {
       assert.ok(js.includes('function buildCacheTips'));
     });
 
+    it('should set window.name for tab reuse via /open launcher', () => {
+      assert.ok(js.includes("window.name = 'oh-my-hi'"), "window.name must be set so /open can reuse the tab");
+    });
+
     it('should have compare mode support', () => {
       assert.ok(js.includes('compareMode'));
       assert.ok(js.includes('comparePrev'));

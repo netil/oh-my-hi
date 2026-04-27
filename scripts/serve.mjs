@@ -199,11 +199,33 @@ function serveStatic(req, res, pathname) {
   fs.createReadStream(filePath).pipe(res);
 }
 
+function handleOpen(req, res) {
+  const html = `<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>oh-my-hi</title></head><body>
+<script>
+(function () {
+  var base = location.protocol + '//' + location.host + '/';
+  var w = window.open(base, 'oh-my-hi');
+  if (!w || w === window) {
+    // No existing named tab found — this tab navigates to main
+    if (!w) window.location.replace(base);
+  } else {
+    // Existing named tab was focused; try to close this launcher
+    window.close();
+  }
+}());
+<\/script>
+</body></html>`;
+  res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' });
+  res.end(html);
+}
+
 function requestHandler(req, res) {
   const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
   const pathname = url.pathname;
   if (pathname === '/api/meta') return handleMeta(req, res);
   if (pathname === '/api/usage') return handleUsage(req, res, url);
+  if (pathname === '/open') return handleOpen(req, res);
   serveStatic(req, res, pathname);
 }
 
@@ -219,10 +241,12 @@ function deleteLockFile() {
 }
 
 function openBrowser(url) {
+  // Route through /open so window.open(url, 'oh-my-hi') can reuse an existing named tab
+  const launchUrl = new URL('/open', url).href;
   try {
-    if (process.platform === 'darwin') execSync(`open "${url}"`);
-    else if (process.platform === 'win32') execSync(`start "" "${url}"`, { shell: true });
-    else execSync(`xdg-open "${url}"`);
+    if (process.platform === 'darwin') execSync(`open "${launchUrl}"`);
+    else if (process.platform === 'win32') execSync(`start "" "${launchUrl}"`, { shell: true });
+    else execSync(`xdg-open "${launchUrl}"`);
   } catch {
     console.log(`  → Open manually: ${url}`);
   }

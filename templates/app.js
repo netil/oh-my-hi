@@ -1,5 +1,8 @@
 'use strict';
 
+// Claim a stable tab name so /open launcher can reuse this tab via window.open(url, name)
+window.name = 'oh-my-hi';
+
 /* =============================================================================
  * app.js — oh-my-hi dashboard client script (browser bundle)
  * -----------------------------------------------------------------------------
