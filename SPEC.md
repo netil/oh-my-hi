@@ -173,9 +173,10 @@ Built at build time in `generate-dashboard.mjs`. Persisted in `task-categories.j
 
 | OS | Tab Reuse | Open |
 |----|-----------|------|
-| macOS | AppleScript: Chrome → Safari (search by URL containing "oh-my-hi", reload + activate) | `open` fallback |
-| Windows | — | `start ""` |
-| Linux | — | `xdg-open` |
+| macOS + Chromium | AppleScript: scan all tabs for URL starting with dashboard base → focus tab + bring window to front; if not found → `open location <url>` in the running browser | `/open` route fallback |
+| macOS + other browsers | — | `/open` route: sets `window.name = 'oh-my-hi'`, navigates launcher tab to dashboard via `window.location.replace` |
+| Windows | — | `start ""` → `/open` route |
+| Linux | — | `xdg-open` → `/open` route |
 
 ## Dashboard Pages
 
@@ -209,7 +210,8 @@ configFiles, skills, agents, plugins, hooks, memory, mcpServers, rules, principl
 5. **Lightweight mode**: `--data-only` (Stop hook) uses a mtime-index for change detection without loading full cache. Writes plain JSON pending files, merges into `data.json`, and syncs changes to SQLite.
 6. **Persistent category mapping**: `task-categories.json` auto-generated at every build from `work-types.json` schema.
 7. **Auto-update check**: `/omh` queries npm registry asynchronously (3s timeout, 24h cache). Notifies when new version is available.
-8. **Server lock file reuse**: `cache/.serve.json` stores the running server's PID and URL. On subsequent builds, the generator checks if the process is still alive before spawning a new one. On macOS, AppleScript reloads the existing browser tab by URL match.
+8. **Server lock file reuse**: `cache/.serve.json` stores the running server's PID and URL. On subsequent builds, the generator checks if the process is still alive before spawning a new one. On macOS + Chromium, AppleScript focuses an existing tab by URL match or opens a new one; other platforms use the `/open` launcher route.
+9. **`version.json`**: written alongside every `writeDataJs` call (`{ generatedAt }`). Served with `no-store`. The dashboard polls it every 30 s to detect data updates and show a refresh banner without requiring a manual reload.
 9. **Pure modules prepended to `app.js`**: `session-events.mjs`, `context-example.mjs`, `cost-projection.mjs`, `canvas-bars.mjs`, and `regression.mjs` are authored as ESM for unit-testability. The generator strips `export` keywords and prepends them to `app.js` so symbols land in the same script scope. Source of truth lives in the `.mjs` files — never edit the inlined copies.
 10. **Week-over-week regression anchored to today**: regression detection (F5) always uses `Date.now()` as the anchor, independent of the sidebar period filter. The card shows explicit dates (`직전 7일 03.28~04.04 / 최근 7일 04.04~04.11`) to avoid confusion with the filter.
 10. **Auto log-scale for wide-range data**: `computeBarScale()` switches bar widths from linear to logarithmic when `max/min > 100` so small rows stay visible (applies to `#tokens` where cache dwarfs input/output). The `%` column always shows the real linear share.

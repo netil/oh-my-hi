@@ -10,7 +10,7 @@
 import http from 'http';
 import fs from 'fs';
 import path from 'path';
-import { execSync } from 'child_process';
+import { execSync, spawnSync } from 'child_process';
 import { fileURLToPath } from 'url';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -205,14 +205,11 @@ function handleOpen(req, res) {
 <script>
 (function () {
   var base = location.protocol + '//' + location.host + '/';
-  var w = window.open(base, 'oh-my-hi');
-  if (!w || w === window) {
-    // No existing named tab found — this tab navigates to main
-    if (!w) window.location.replace(base);
-  } else {
-    // Existing named tab was focused; try to close this launcher
-    window.close();
-  }
+  // Make this launcher tab become the named dashboard tab.
+  // This avoids the duplicate-tab problem caused by window.open() creating a second tab
+  // and window.close() being blocked (tabs opened by the OS cannot close themselves).
+  window.name = 'oh-my-hi';
+  window.location.replace(base);
 }());
 <\/script>
 </body></html>`;
@@ -240,8 +237,67 @@ function deleteLockFile() {
   try { fs.unlinkSync(LOCK_FILE); } catch { /* ignore */ }
 }
 
+// Chromium-based browsers that support AppleScript tab control on macOS.
+const CHROMIUM_APPS = [
+  'Google Chrome', 'Brave Browser', 'Microsoft Edge', 'Chromium',
+  'Google Chrome Canary', 'Google Chrome Beta', 'Arc',
+];
+
+/**
+ * On macOS, use AppleScript to focus an existing dashboard tab or open a new one.
+ * Returns true on success, false if no supported browser is running or AppleScript fails.
+ * Approach: same as Create React App / better-opn / Vite.
+ */
+function tryAppleScriptOpen(url) {
+  if (process.platform !== 'darwin') return false;
+
+  // Find the first Chromium browser that is currently running
+  let browser = null;
+  for (const app of CHROMIUM_APPS) {
+    try {
+      const r = spawnSync('osascript', ['-e', `tell application "System Events" to (name of processes) contains "${app}"`], { encoding: 'utf8', timeout: 2000 });
+      if (r.stdout.trim() === 'true') { browser = app; break; }
+    } catch { /* skip */ }
+  }
+  if (!browser) return false;
+
+  // AppleScript: focus existing tab whose URL starts with `url`, else open a new tab.
+  // Use loop counter for tab index — Chrome AppleScript doesn't expose `index of tab` directly.
+  const script = `
+tell application "${browser}"
+  set theURL to "${url.replace(/"/g, '\\"')}"
+  set found to false
+  if (count of windows) > 0 then
+    repeat with w in windows
+      set tabCount to count of tabs of w
+      repeat with i from 1 to tabCount
+        set t to tab i of w
+        if (URL of t) starts with theURL then
+          set active tab index of w to i
+          set index of w to 1
+          activate
+          set found to true
+          exit repeat
+        end if
+      end repeat
+      if found then exit repeat
+    end repeat
+  end if
+  if not found then
+    activate
+    open location theURL
+  end if
+end tell`;
+
+  const r = spawnSync('osascript', [], { input: script, encoding: 'utf8', timeout: 5000 });
+  return r.status === 0;
+}
+
 function openBrowser(url) {
-  // Route through /open so window.open(url, 'oh-my-hi') can reuse an existing named tab
+  // macOS + Chromium: AppleScript for reliable tab reuse (same approach as CRA/Vite/better-opn)
+  if (tryAppleScriptOpen(url)) return;
+
+  // Fallback: /open route uses window.name so the launcher tab navigates in-place
   const launchUrl = new URL('/open', url).href;
   try {
     if (process.platform === 'darwin') execSync(`open "${launchUrl}"`);

@@ -130,7 +130,7 @@ describe('listReplayableSessions', () => {
     assert.equal(s.firstPrompt.text, 'explicit text', 'text field takes priority over preview');
   });
 
-  it('sets firstPrompt.text to null when both text and preview are absent', () => {
+  it('excludes sessions where no prompt has text', () => {
     const usage = {
       tokenEntries: [
         { sessionId: 'notext', timestamp: 1000, inputTokens: 100 },
@@ -141,11 +141,10 @@ describe('listReplayableSessions', () => {
       ],
     };
     const sessions = listReplayableSessions(usage);
-    const s = sessions.find(s => s.id === 'notext');
-    assert.equal(s.firstPrompt.text, null, 'firstPrompt.text is null when no preview/text');
+    assert.equal(sessions.find(s => s.id === 'notext'), undefined, 'session without text excluded');
   });
 
-  it('accepts ISO string timestamps', () => {
+  it('excludes sessions with no promptStats', () => {
     const iso = {
       tokenEntries: [
         { sessionId: 'x', timestamp: '2026-04-09T12:00:00Z', inputTokens: 100 },
@@ -153,9 +152,7 @@ describe('listReplayableSessions', () => {
       ],
       promptStats: [],
     };
-    const s = listReplayableSessions(iso)[0];
-    assert.equal(s.count, 2);
-    assert.ok(s.minTs < s.maxTs);
+    assert.equal(listReplayableSessions(iso).length, 0, 'session without prompt excluded');
   });
 });
 

@@ -1,5 +1,27 @@
 # Changelog
 
+## [0.11.3] - 2026-04-29
+
+### Fixed
+- **Duplicate browser tab** — `openBrowser` now uses AppleScript on macOS + Chromium (Chrome, Brave, Edge, Arc…) to focus an existing dashboard tab or open exactly one new tab via `open location`. For other browsers / platforms, the `/open` launcher route navigates itself to the dashboard (`window.name = 'oh-my-hi'`; `window.location.replace`), avoiding the `window.open` + `window.close` race that left a blank launcher tab behind.
+- **`latency_entries` migration** — `db.mjs` now checks for the table's existence on every DB open and creates it if missing, fixing a `no such table: latency_entries` error for databases created before the table was added to the schema.
+
+### Added
+- **`version.json` generation** — `writeDataJs` writes `output/version.json` (`{ generatedAt }`) alongside every data update (full build and `--data-only`). This file is served with `Cache-Control: no-store`.
+- **30-second update polling** — `app.js` polls `version.json` every 30 s after page load. When `generatedAt` has changed it shows the existing *New data available* banner, so the tab self-notifies after a `--data-only` auto-refresh without requiring a manual page reload.
+
+### Fixed (banners)
+- **Partial + update banner overlap** — `showUpdateBanner` removes the partial-data banner before inserting itself, so the two never stack.
+- **Firstrun banner over-firing** — `showFirstRunBanner` now guards on `DATA._firstRun`; the banner only appears on the very first full history collection, not on every reload after a data update.
+
+### Improved
+- **Prompt preview quality** — parser skips `isMeta` entries (skill/tool injections) when collecting prompt stats; converts `<command-name>` XML to `/command args` notation; strips leading system XML wrapper tags; preview length extended from 60 → 120 characters.
+- **Session list filtering** — `listReplayableSessions` now requires at least one prompt with actual text content; sessions composed entirely of invisible or meta messages no longer appear in the session list.
+
+### Tests
+- `serve.test.mjs` updated: `/open` assertions now verify `window.name` assignment and `window.location.replace` instead of the removed `window.open` / `window.close` approach.
+- `session-events.test.mjs` updated: tests reflect new filtering behavior (sessions without text are excluded).
+
 ## [0.11.2] - 2026-04-27
 
 ### Fixed

@@ -854,6 +854,13 @@ const escapeForScript = (str) => str
  */
 function writeDataJs(data, dataPath) {
   fs.writeFileSync(dataPath, JSON.stringify(data), 'utf-8');
+  // Keep version.json in sync so the browser's checkDataVersion() can detect new data
+  if (data.generatedAt) {
+    try {
+      const versionPath = path.join(path.dirname(dataPath), 'version.json');
+      fs.writeFileSync(versionPath, JSON.stringify({ generatedAt: data.generatedAt }), 'utf-8');
+    } catch { /* best effort */ }
+  }
 }
 
 /** Remove legacy JS data files and transcript cache segments from output/. */

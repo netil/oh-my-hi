@@ -609,7 +609,8 @@ async function parseTranscriptFile(jsonlPath, cutoffMs) {
       const entry = JSON.parse(trimmed);
 
       // Collect user prompt stats + track human timestamp for latency
-      if (entry.type === 'human' || entry.type === 'user') {
+      // isMeta entries are skill/tool injections (e.g. SKILL.md content), not real user messages
+      if ((entry.type === 'human' || entry.type === 'user') && !entry.isMeta) {
         const tsMs = entry.timestamp ? new Date(entry.timestamp).getTime() : 0;
         if (cutoffMs && tsMs < cutoffMs) continue;
         const sid = entry.sessionId ?? '_default';
@@ -635,7 +636,23 @@ async function parseTranscriptFile(jsonlPath, cutoffMs) {
         // Skip tool-result and system-reminder pseudo-prompts so the preview is a real user message.
         const isToolResult = /^<(tool_use_result|command-stdout|command-stderr|system-reminder|local-command-stdout)/i.test(fullText.trimStart());
         if (charLen > 0 && !isToolResult) {
-          const preview = fullText.replace(/\s+/g, ' ').trim().slice(0, 60);
+          let previewText = fullText.replace(/\s+/g, ' ').trim();
+          // Convert <command-name>foo</command-name> to /foo for legibility
+          const cmdMatch = previewText.match(/<command-name>([\s\S]*?)<\/command-name>/i);
+          if (cmdMatch) {
+            const cmdName = cmdMatch[1].trim();
+            const cmdStr = cmdName.startsWith('/') ? cmdName : '/' + cmdName;
+            const argsMatch = previewText.match(/<command-args>([\s\S]*?)<\/command-args>/i);
+            const argsStr = argsMatch ? argsMatch[1].trim() : '';
+            previewText = argsStr ? cmdStr + ' ' + argsStr : cmdStr;
+          } else {
+            // Strip leading XML-like wrapper tags iteratively (hooks, system tags, etc.)
+            const leadingTag = /^<([a-z][a-z0-9-]*)(?:\s[^>]*)?>[\s\S]*?<\/\1>\s*|^<[a-z][a-z0-9-]*(?:\s[^>]*)?\/>\s*/i;
+            let prev;
+            do { prev = previewText; previewText = previewText.replace(leadingTag, ''); } while (previewText !== prev);
+            previewText = previewText.trim();
+          }
+          const preview = previewText.slice(0, 120);
           promptStats.push({ timestamp: tsMs || entry.timestamp, charLen, sessionId: entry.sessionId ?? null, preview });
         }
         continue;

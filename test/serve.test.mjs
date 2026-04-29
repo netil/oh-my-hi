@@ -47,16 +47,12 @@ describe('serve.mjs — requestHandler', () => {
       assert.strictEqual(res.headers['cache-control'], 'no-store');
     });
 
-    it('should contain window.open with oh-my-hi target name', () => {
-      assert.ok(res.body.includes("window.open(base, 'oh-my-hi')"), 'launcher must use named target');
+    it('should set window.name to oh-my-hi for tab reuse', () => {
+      assert.ok(res.body.includes("window.name = 'oh-my-hi'"), 'launcher must set window.name so it becomes the named dashboard tab');
     });
 
-    it('should attempt window.close on the launcher tab', () => {
-      assert.ok(res.body.includes('window.close()'), 'launcher must close itself after focusing existing tab');
-    });
-
-    it('should navigate this tab when no named tab exists', () => {
-      assert.ok(res.body.includes('window.location.replace(base)'), 'fallback navigation for first-ever open');
+    it('should navigate this tab to the dashboard', () => {
+      assert.ok(res.body.includes('window.location.replace(base)'), 'launcher must navigate itself to the dashboard');
     });
   });
 

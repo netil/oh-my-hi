@@ -5615,16 +5615,41 @@ window.name = 'oh-my-hi';
       _pendingScrollReset: false
     };
 
+    function cleanSessionSnippet(raw) {
+      if (!raw) return null;
+      // <command-name> can appear anywhere (e.g. after <command-message>)
+      const cmd = raw.match(/<command-name>([\s\S]*?)(?:<\/command-name>|$)/i);
+      if (cmd) {
+        const name = cmd[1].replace(/<.*$/, '').trim();
+        if (!name) return null;
+        const cmdStr = name.startsWith('/') ? name : '/' + name;
+        const args = raw.match(/<command-args>([\s\S]*?)(?:<\/command-args>|$)/i);
+        const argsStr = args ? args[1].replace(/<.*$/, '').trim() : '';
+        return argsStr ? cmdStr + ' ' + argsStr : cmdStr;
+      }
+      // Strip leading XML-like wrapper tags (hooks, system-reminder, etc.) iteratively
+      const leadingTag = /^<([a-z][a-z0-9-]*)(?:\s[^>]*)?>[\s\S]*?<\/\1>\s*|^<[a-z][a-z0-9-]*(?:\s[^>]*)?\/>\s*/i;
+      let s = raw;
+      let prev;
+      do { prev = s; s = s.replace(leadingTag, ''); } while (s !== prev);
+      // Drop unclosed/truncated leading tag (e.g. "<command-nam" or "<user-prompt-submit-hook>truncated...")
+      s = s.replace(/^<[a-z][a-z0-9-]*[\s\S]*$/, '').trim();
+      return s || null;
+    }
+
     function formatSessionOption(s) {
       const d = new Date(s.maxTs);
       const pad = (n) => (n < 10 ? '0' + n : '' + n);
       const dayNames = (t('dayNames') || 'Sun,Mon,Tue,Wed,Thu,Fri,Sat').split(',');
       const dateStr = (d.getMonth() + 1) + '/' + d.getDate() + ' ' + (dayNames[d.getDay()] || '')
         + ' ' + pad(d.getHours()) + ':' + pad(d.getMinutes());
-      const snippet = (s.firstPrompt && s.firstPrompt.text) ? s.firstPrompt.text : s.id;
+      const raw = (s.firstPrompt && s.firstPrompt.text) ? s.firstPrompt.text : null;
+      const cleaned = cleanSessionSnippet(raw);
+      const hasSnippet = !!cleaned;
+      const snippet = cleaned || '(no preview)';
       const modelStr = s.model ? shortModel(s.model) : '';
       const peakStr = s.peakTokens > 0 ? fmt(s.peakTokens) : '';
-      return { snippet: snippet, dateStr: dateStr, turns: s.count, modelStr: modelStr, peakStr: peakStr };
+      return { snippet: snippet, hasSnippet: hasSnippet, dateStr: dateStr, turns: s.count, modelStr: modelStr, peakStr: peakStr };
     }
 
     // Apply search / sort / global period to produce the visible session list.
@@ -5673,8 +5698,11 @@ window.name = 'oh-my-hi';
         const tagParts = [];
         if (f.modelStr) tagParts.push('<span style="padding:1px 5px;border-radius:3px;background:rgba(217,119,87,0.12);color:#D97757;font-size:10px;font-weight:600">' + escapeHtml(f.modelStr) + '</span>');
         if (f.peakStr)  tagParts.push('<span style="padding:1px 5px;border-radius:3px;background:rgba(138,136,128,0.1);color:var(--cw-text-faint);font-size:10px;font-weight:600">' + escapeHtml(f.peakStr) + ' ctx</span>');
+        const snippetStyle = f.hasSnippet
+          ? 'font-size:13px;color:var(--cw-text-2);line-height:1.4;white-space:nowrap;overflow:hidden;text-overflow:ellipsis'
+          : 'font-size:12px;color:var(--cw-text-faint);font-style:italic;line-height:1.4;white-space:nowrap;overflow:hidden;text-overflow:ellipsis';
         return '<div data-cw-pick="' + escapeHtml(s.id) + '" style="padding:8px 12px;cursor:pointer;border-bottom:1px solid var(--cw-border);background:' + bg + '">'
-          +   '<div style="font-size:13px;color:var(--cw-text-2);line-height:1.4;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">' + escapeHtml(f.snippet) + '</div>'
+          +   '<div data-cw-tip="' + escapeHtml(f.snippet) + '" style="' + snippetStyle + '">' + escapeHtml(f.snippet) + '</div>'
           +   '<div style="display:flex;align-items:center;gap:6px;margin-top:3px;flex-wrap:wrap">'
           +     '<span style="font-size:11px;color:var(--cw-text-faint);font-family:var(--cw-font-mono)">' + escapeHtml(metaParts.join(' · ')) + '</span>'
           +     tagParts.join('')
@@ -5683,6 +5711,35 @@ window.name = 'oh-my-hi';
       }).join('');
       sessionItems.innerHTML = html;
       sessionNav.style.display = list.length > 3 ? 'flex' : 'none';
+      bindSnippetTooltips();
+    }
+
+    function bindSnippetTooltips() {
+      let tipEl = null;
+      const removeTip = () => { if (tipEl) { tipEl.remove(); tipEl = null; } };
+      sessionItems.querySelectorAll('[data-cw-tip]').forEach((el) => {
+        el.addEventListener('mouseenter', () => {
+          const tip = el.dataset.cwTip;
+          if (!tip || el.scrollWidth <= el.offsetWidth) return;
+          removeTip();
+          tipEl = document.createElement('div');
+          tipEl.className = 'period-tooltip';
+          tipEl.style.maxWidth = '480px';
+          tipEl.style.whiteSpace = 'normal';
+          tipEl.style.wordBreak = 'break-all';
+          tipEl.textContent = tip;
+          document.body.appendChild(tipEl);
+          const r = el.getBoundingClientRect();
+          const tw = tipEl.offsetWidth, th = tipEl.offsetHeight;
+          let left = r.left;
+          if (left + tw > window.innerWidth - 8) left = window.innerWidth - tw - 8;
+          if (left < 8) left = 8;
+          const topAbove = r.top - th - 4;
+          tipEl.style.left = left + 'px';
+          tipEl.style.top = (topAbove > 8 ? topAbove : r.bottom + 4) + 'px';
+        });
+        el.addEventListener('mouseleave', removeTip);
+      });
     }
 
     function openSessionList() {
@@ -5730,7 +5787,7 @@ window.name = 'oh-my-hi';
       // long first-prompts do not push the meta chips off the row.
       parts.push('<div style="flex:1;min-width:120px;display:flex;align-items:baseline;gap:6px;overflow:hidden">'
         + '<span style="font-size:10px;text-transform:uppercase;letter-spacing:0.5px;color:var(--cw-text-faint);font-weight:600;flex-shrink:0">' + escapeHtml(t('cwe_infoPrompt')) + '</span>'
-        + '<span title="' + escapeHtml(f.snippet) + '" style="font-size:12px;color:var(--cw-text-2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0">' + escapeHtml(f.snippet) + '</span>'
+        + '<span title="' + escapeHtml(f.snippet) + '" style="font-size:12px;' + (f.hasSnippet ? 'color:var(--cw-text-2)' : 'color:var(--cw-text-faint);font-style:italic') + ';white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0">' + escapeHtml(f.snippet) + '</span>'
         + '</div>');
       parts.push(chip(t('cwe_infoDate'), f.dateStr, true));
       parts.push(chip(t('cwe_infoTurns'), fmtCompact(f.turns), true));
@@ -7246,23 +7303,43 @@ window.name = 'oh-my-hi';
   }
 
   // ── Data staleness check (once on load) ──
+  var _updateBannerShown = false;
+
   function checkDataVersion() {
     // Only works with HTTP (local server / index.html), not file://
     if (location.protocol === 'file:') return;
     fetch('./version.json?' + Date.now()).then(r => r.json()).then(v => {
       if (!v || !v.generatedAt) return;
-      if (v.generatedAt !== DATA.generatedAt) {
+      if (v.generatedAt !== DATA.generatedAt && !_updateBannerShown) {
+        _updateBannerShown = true;
         showUpdateBanner();
       }
     }).catch(() => {});
   }
 
+  // Poll every 30 s so the banner appears after --data-only auto-refresh
+  function startVersionPolling() {
+    if (location.protocol === 'file:') return;
+    setInterval(checkDataVersion, 30000);
+  }
+
   function showUpdateBanner() {
-    const banner = document.createElement('div');
+    // Remove partial banner if still present — update banner supersedes it
+    var partial = document.querySelector('.partial-banner');
+    if (partial) partial.remove();
+    var banner = document.createElement('div');
     banner.className = 'update-banner';
-    banner.innerHTML = '<span>' + t('updateBannerMsg') + '</span>'
-      + '<button onclick="location.reload()">' + t('updateBannerRefresh') + '</button>'
-      + '<button onclick="this.parentElement.remove()">✕</button>';
+    var msg = document.createElement('span');
+    msg.textContent = t('updateBannerMsg');
+    var refreshBtn = document.createElement('button');
+    refreshBtn.textContent = t('updateBannerRefresh');
+    refreshBtn.onclick = function () { location.reload(); };
+    var closeBtn = document.createElement('button');
+    closeBtn.textContent = t('close');
+    closeBtn.onclick = function () { banner.remove(); };
+    banner.appendChild(msg);
+    banner.appendChild(refreshBtn);
+    banner.appendChild(closeBtn);
     document.body.prepend(banner);
   }
 
@@ -7277,10 +7354,13 @@ window.name = 'oh-my-hi';
 
   // ── New-data banner ──
   function showFirstRunBanner() {
+    // Only show when the server explicitly marks this as the first full history collection.
+    // Subsequent /omh runs regenerate data but do not set _firstRun, so this banner
+    // does not appear on every refresh after a data update.
+    if (!DATA._firstRun) return;
     const current = DATA.generatedAt;
     if (!current) return;
-    // Use URL ?seen=<generatedAt> to track "already shown" state.
-    // history.replaceState works on file:// URLs and persists across refreshes.
+    // Use URL ?seen=<generatedAt> to track "already shown" state across tab duplicates.
     const params = new URLSearchParams(location.search);
     if (params.get('seen') === current) return;
     params.set('seen', current);
@@ -7311,6 +7391,7 @@ window.name = 'oh-my-hi';
     showPartialBanner();
     showFirstRunBanner();
     checkDataVersion();
+    startVersionPolling();
   }).catch(() => {
     const overlay = document.getElementById('loading-overlay');
     if (overlay) {

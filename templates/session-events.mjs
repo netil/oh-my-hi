@@ -118,17 +118,15 @@ export function listReplayableSessions(usage) {
   prompts.forEach((p) => {
     if (!p.sessionId || !map[p.sessionId]) return;
     const ts = tsOf(p);
+    const text = p.text || p.preview || null;
     const cur = map[p.sessionId].firstPrompt;
-    if (!cur || ts < cur.ts) {
-      map[p.sessionId].firstPrompt = {
-        ts: ts,
-        text: p.text || p.preview || null,
-        len: p.charLen || 0
-      };
+    // Prefer the earliest entry that has actual text; fall back to any earliest if none have text
+    if (!cur || (text && (!cur.text || ts < cur.ts)) || (!text && !cur.text && ts < cur.ts)) {
+      map[p.sessionId].firstPrompt = { ts, text, len: p.charLen || 0 };
     }
   });
   return Object.values(map)
-    .filter((s) => s.count >= 2)
+    .filter((s) => s.count >= 2 && s.firstPrompt && s.firstPrompt.text)
     .sort((a, b) => b.maxTs - a.maxTs);
 }
 
