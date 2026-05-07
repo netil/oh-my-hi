@@ -215,8 +215,20 @@ describe('API-first Data Architecture', () => {
 // ── Conditional HTML Rebuild ──
 
 describe('Conditional HTML Rebuild', () => {
+  // These tests delete and recreate output/index.html. To avoid racing with
+  // build.test.mjs (which reads index.html concurrently), rename it away and
+  // restore it in after() so other parallel test files are unaffected.
+  let savedHtml = null;
+  before(() => {
+    const p = path.join(OUTPUT, 'index.html');
+    if (fs.existsSync(p)) { savedHtml = fs.readFileSync(p); fs.unlinkSync(p); }
+  });
+  after(() => {
+    if (savedHtml !== null) fs.writeFileSync(path.join(OUTPUT, 'index.html'), savedHtml);
+  });
+
   it('should rebuild index.html when missing', () => {
-    try { fs.unlinkSync(path.join(OUTPUT, 'index.html')); } catch {}
+    // index.html was removed by before() hook above
     run('--data-only');
     assert.ok(fs.existsSync(path.join(OUTPUT, 'index.html')), 'should recreate index.html');
   });
