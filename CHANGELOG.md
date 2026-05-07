@@ -1,5 +1,26 @@
 # Changelog
 
+## [0.11.4] - 2026-05-07
+
+### Fixed
+- **9 data-correctness, install, and SPA bugs** (issue #2) — fixes reported on macOS arm64 + Node 24:
+  - `better-sqlite3` bumped `^9.4.0` → `^11.7.0` for Node 24 prebuild support; `postinstall` script patches `@rpath/libc++.1.dylib` on arm64
+  - Scope routing fan-out: transcript data now routed to `global` + matching scope only (was written to all scopes, causing identical counts across workspaces)
+  - `collectProjectData` now uses `projectPath/.claude/` for structural parsers (skills/agents/hooks/rules/commands/plans); was using transcript `configPath`
+  - Workspace switch in API mode now re-fetches usage (`!sd.usage || !sd.usage.tokenEntries`; was always skipping because `{}` is truthy)
+  - `countUsageList`, `calcChangeForList`, trend-chart binning now sum `row.count` instead of using `.length` for rolled-up SQLite rows
+  - Path pill and dropdown tooltip now show `projectPath` before `configPath` (was showing transcript hash dir)
+  - `currentScope` persisted to `localStorage['harness-scope']` on change
+  - `Cache-Control: immutable` replaced with ETag + `no-cache, must-revalidate` for static assets
+- **`OMH_OUTPUT_DIR` env var** — `generate-dashboard.mjs` accepts `OMH_OUTPUT_DIR` to override the output directory (used by tests for isolation)
+
+### Added
+- **CI workflow** — `.github/workflows/ci.yml` runs `npm test` on Node 22 & 24 for all PRs targeting `main`; uses `actions/checkout@v6` and `actions/setup-node@v6`
+
+### Tests
+- 28 new test cases (`issue2-server`, `issue2-spa`, `issue2-infra`) covering all 9 issue #2 fixes
+- Fixed concurrent test race conditions: `Conditional HTML Rebuild` tests now use isolated `OMH_OUTPUT_DIR`; `build.test.mjs` snapshots output files immediately after build
+
 ## [0.11.3] - 2026-04-29
 
 ### Fixed
