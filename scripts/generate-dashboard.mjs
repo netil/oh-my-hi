@@ -674,10 +674,20 @@ async function main() {
         // Collect new entries from all scopes and append per-scope to monthly DBs
         const newByScope = { global: { skills: [], agents: [], mcpCalls: [], tokenEntries: [], promptStats: [], latencyEntries: [] } };
         for (const s of projectScopes) newByScope[s.id] = { skills: [], agents: [], mcpCalls: [], tokenEntries: [], promptStats: [], latencyEntries: [] };
+        const sortedProjectScopes = [...projectScopes].sort((a, b) => b.configPath.length - a.configPath.length);
         for (const [key, entry] of Object.entries(stubCache)) {
           if (key.startsWith('_') || !entry?._new || !entry.result) continue;
           const r = entry.result;
-          for (const target of Object.values(newByScope)) {
+          let matchedScope = null;
+          for (const s of sortedProjectScopes) {
+            if (key === s.configPath || key.startsWith(s.configPath + path.sep)) {
+              matchedScope = s;
+              break;
+            }
+          }
+          const targets = [newByScope.global];
+          if (matchedScope) targets.push(newByScope[matchedScope.id]);
+          for (const target of targets) {
             for (const field of Object.keys(target)) {
               if (r[field]?.length) target[field].push(...r[field]);
             }
@@ -1088,20 +1098,21 @@ async function collectProjectData(configPath, projectPath, { days = 0, cache, ca
   const emptyUsage = emptyScopeData().usage;
 
   // Sync parsers (fast)
+  const projectClaudeDir = projectPath ? path.join(projectPath, '.claude') : configPath;
   const syncData = {
     configFiles: safeCall(() => parseConfigFiles(configPath, projectPath)),
-    skills: safeCall(() => parseSkills(configPath)),
-    agents: safeCall(() => parseAgents(configPath)),
-    plugins: [],
-    hooks: safeCall(() => parseHooks(configPath)),
+    skills: safeCall(() => parseSkills(projectClaudeDir)),
+    agents: safeCall(() => parseAgents(projectClaudeDir)),
+    plugins: [],      // global-only (marketplace plugins not scoped per-project)
+    hooks: safeCall(() => parseHooks(projectClaudeDir)),
     memory: safeCall(() => parseMemory(configPath)),
-    mcpServers: [],
-    rules: safeCall(() => parseRules(configPath)),
-    principles: safeCall(() => parsePrinciples(configPath)),
-    commands: [],
-    teams: [],
-    plans: [],
-    todos: [],
+    mcpServers: [],   // global-only (.mcp.json parsing not yet scoped per-project)
+    rules: safeCall(() => parseRules(projectClaudeDir)),
+    principles: safeCall(() => parsePrinciples(projectClaudeDir)),
+    commands: safeCall(() => parseCommands(projectClaudeDir)),
+    teams: [],        // global-only
+    plans: safeCall(() => parsePlans(projectClaudeDir)),
+    todos: [],        // global-only
   };
 
   let usage = emptyUsage;
