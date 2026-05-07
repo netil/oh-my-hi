@@ -10,21 +10,27 @@ const ROOT = path.resolve(__dirname, '..');
 const OUTPUT = path.join(ROOT, 'output');
 
 describe('Build', () => {
-  // Snapshot data.json immediately after the build so concurrent test runs
-  // (e.g. cache.test.mjs with OMH_BUILD_MODE=plugin) cannot overwrite it.
+  // Snapshot output files immediately after the build so concurrent test runs
+  // (e.g. cache.test.mjs deleting index.html) cannot cause ENOENT races.
   let buildSnapshot;
+  let htmlSnapshot;
+  let htmlMtime;
   before(() => {
-    // Run full build
     execSync('node scripts/generate-dashboard.mjs --data-only', {
       cwd: ROOT,
       encoding: 'utf-8',
       timeout: 30000,
     });
     buildSnapshot = JSON.parse(fs.readFileSync(path.join(OUTPUT, 'data.json'), 'utf-8'));
+    const indexPath = path.join(OUTPUT, 'index.html');
+    if (fs.existsSync(indexPath)) {
+      htmlSnapshot = fs.readFileSync(indexPath, 'utf-8');
+      htmlMtime = fs.statSync(indexPath).mtimeMs;
+    }
   });
 
   it('should generate output/index.html', () => {
-    assert.ok(fs.existsSync(path.join(OUTPUT, 'index.html')));
+    assert.ok(htmlSnapshot != null, 'index.html should exist after build');
   });
 
   it('should generate output/data.json', () => {
@@ -98,7 +104,10 @@ describe('Build', () => {
     let html;
 
     before(() => {
-      html = fs.readFileSync(path.join(OUTPUT, 'index.html'), 'utf-8');
+      // Use the snapshot captured right after the build (guards against
+      // concurrent cache.test.mjs deleting output/index.html mid-suite).
+      assert.ok(htmlSnapshot != null, 'index.html snapshot must exist');
+      html = htmlSnapshot;
     });
 
     it('should be a valid HTML document', () => {
@@ -153,10 +162,10 @@ describe('Build', () => {
 
   describe('needsHtmlRebuild — template mtime check', () => {
     const TEMPLATES = path.join(ROOT, 'templates');
-    const indexPath = path.join(OUTPUT, 'index.html');
 
     it('index.html should be newer than all template files after build', () => {
-      const outMtime = fs.statSync(indexPath).mtimeMs;
+      assert.ok(htmlMtime != null, 'index.html mtime snapshot must exist');
+      const outMtime = htmlMtime;
       for (const f of ['app.js', 'styles.css', 'dashboard.html']) {
         const tmplMtime = fs.statSync(path.join(TEMPLATES, f)).mtimeMs;
         assert.ok(outMtime >= tmplMtime,
