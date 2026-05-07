@@ -215,16 +215,39 @@ describe('API-first Data Architecture', () => {
 // ── Conditional HTML Rebuild ──
 
 describe('Conditional HTML Rebuild', () => {
+  // Use an isolated temp output dir so we never touch the shared output/index.html
+  // that build.test.mjs reads concurrently.
+  let tmpOut;
+  before(() => {
+    tmpOut = fs.mkdtempSync('/tmp/omh-rebuild-');
+    // Seed with data.json and mtime-index so --data-only has something to update
+    if (fs.existsSync(path.join(OUTPUT, 'data.json'))) {
+      fs.copyFileSync(path.join(OUTPUT, 'data.json'), path.join(tmpOut, 'data.json'));
+    }
+    const cacheDir = path.join(OUTPUT, 'cache');
+    const mtimeIndex = path.join(cacheDir, 'mtime-index.json');
+    if (fs.existsSync(mtimeIndex)) {
+      fs.mkdirSync(path.join(tmpOut, 'cache'), { recursive: true });
+      fs.copyFileSync(mtimeIndex, path.join(tmpOut, 'cache', 'mtime-index.json'));
+    }
+  });
+  after(() => { fs.rmSync(tmpOut, { recursive: true, force: true }); });
+
+  function runIsolated(args = '') {
+    return execSync(`node scripts/generate-dashboard.mjs ${args}`, {
+      cwd: ROOT, encoding: 'utf-8', timeout: 30000,
+      env: { ...process.env, OMH_BUILD_MODE: 'plugin', OMH_OUTPUT_DIR: tmpOut },
+    });
+  }
+
   it('should rebuild index.html when missing', () => {
-    try { fs.unlinkSync(path.join(OUTPUT, 'index.html')); } catch {}
-    run('--data-only');
-    assert.ok(fs.existsSync(path.join(OUTPUT, 'index.html')), 'should recreate index.html');
+    // tmpOut has no index.html — verify --data-only creates it
+    runIsolated('--data-only');
+    assert.ok(fs.existsSync(path.join(tmpOut, 'index.html')), 'should create index.html');
   });
 
   it('should not rebuild index.html when version matches', () => {
-    // Check output rather than mtime: mtime comparison is unreliable on macOS APFS
-    // due to sub-millisecond timestamp precision artifacts.
-    const output = run('--data-only');
+    const output = runIsolated('--data-only');
     assert.ok(!output.includes('rebuilding'), 'should not print rebuilding message');
     assert.ok(!output.includes('data structure changed'), 'should not trigger migration rebuild');
   });

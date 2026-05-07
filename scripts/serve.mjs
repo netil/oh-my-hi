@@ -17,14 +17,6 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const ROOT = path.resolve(__dirname, '..');
 const OUTPUT_DIR = path.join(ROOT, 'output');
-// Dev build: templates can change without version bump, so don't use immutable cache.
-const IS_DEV_BUILD = (() => {
-  try {
-    if (!fs.existsSync(path.join(ROOT, '.git'))) return false;
-    const pkg = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf-8'));
-    return pkg.name === 'oh-my-hi';
-  } catch { return false; }
-})();
 const LEGACY_DB_PATH = path.join(OUTPUT_DIR, 'oh-my-hi.sqlite');
 const DATA_JSON = path.join(OUTPUT_DIR, 'data.json');
 const CACHE_DIR = path.join(OUTPUT_DIR, 'cache');
@@ -183,18 +175,25 @@ function serveStatic(req, res, pathname) {
   if (!filePath.startsWith(OUTPUT_DIR + path.sep) && filePath !== OUTPUT_DIR) {
     res.writeHead(403); res.end('forbidden'); return;
   }
-  if (!fs.existsSync(filePath) || !fs.statSync(filePath).isFile()) {
+  let stat;
+  try { stat = fs.statSync(filePath); } catch { /* file not found */ }
+  if (!stat || !stat.isFile()) {
     res.writeHead(404); res.end('not found'); return;
   }
   const ext = path.extname(filePath).toLowerCase();
-  // /static/ files are versioned (app-x.y.z.js) or billboard files gated by .bb-version.
-  // In dev builds skip immutable so hard-reload always fetches the latest file.
-  const cacheControl = pathname.startsWith('/static/')
-    ? IS_DEV_BUILD ? 'no-store' : 'public, max-age=31536000, immutable'
-    : 'no-store';
+  // Use ETag + no-cache revalidation for all static assets so that local patches
+  // (same version, changed content) are always picked up without a hard-refresh.
+  // Browsers will send If-None-Match; we return 304 when the file hasn't changed.
+  const etag = `"${stat.mtimeMs.toString(36)}"`;
+  if (req.headers['if-none-match'] === etag) {
+    res.writeHead(304, { ETag: etag, 'Cache-Control': 'no-cache, must-revalidate' });
+    res.end();
+    return;
+  }
   res.writeHead(200, {
     'Content-Type': MIME[ext] || 'application/octet-stream',
-    'Cache-Control': cacheControl,
+    'Cache-Control': 'no-cache, must-revalidate',
+    ETag: etag,
   });
   fs.createReadStream(filePath).pipe(res);
 }

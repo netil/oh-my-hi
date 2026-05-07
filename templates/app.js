@@ -141,7 +141,7 @@ window.name = 'oh-my-hi';
   CATEGORIES.forEach((c) => { CATEGORY_ICON_MAP[c.key] = c.icon; });
 
   // ── State ──
-  let currentScope = 'global';
+  let currentScope = localStorage.getItem('harness-scope') || 'global';
   let currentView = 'overview';
   let currentDetail = null;
   let currentPeriod = parseInt(localStorage.getItem('harness-period') || '30');
@@ -472,18 +472,19 @@ window.name = 'oh-my-hi';
       const opt = document.createElement('option');
       opt.value = s.id;
       opt.textContent = s.label;
-      opt.title = s.configPath || s.projectPath || '';
+      opt.title = s.projectPath || s.configPath || '';
       if (s.id === currentScope) opt.selected = true;
       scopeSelect.appendChild(opt);
     });
     let sel = DATA.scopes.find((s) => { return s.id === currentScope; });
-    scopeSelect.title = sel ? (sel.configPath || sel.projectPath || '') : '';
+    scopeSelect.title = sel ? (sel.projectPath || sel.configPath || '') : '';
   }
 
   function onScopeChange() {
     currentScope = scopeSelect.value;
+    try { localStorage.setItem('harness-scope', currentScope); } catch (_) {}
     const sel = DATA.scopes.find((s) => { return s.id === currentScope; });
-    scopeSelect.title = sel ? (sel.configPath || sel.projectPath || '') : '';
+    scopeSelect.title = sel ? (sel.projectPath || sel.configPath || '') : '';
     // Clear detail view but keep current category/page
     currentDetail = null;
     const scrollPos = content.scrollTop;
@@ -495,7 +496,7 @@ window.name = 'oh-my-hi';
     // API mode: fetch usage for the new scope if not already hydrated.
     if (DATA._apiMode) {
       const sd = DATA.scopeData[currentScope];
-      if (sd && !sd.usage) {
+      if (sd && (!sd.usage || !sd.usage.tokenEntries)) {
         const range = computeCurrentPeriodRange();
         if (range) {
           fetchUsageForPeriod(currentScope, range.from, range.to).then((ok) => {
@@ -3239,7 +3240,7 @@ window.name = 'oh-my-hi';
   // ── Overview page ──
   function renderOverview() {
     let scope = DATA.scopes.find((s) => { return s.id === currentScope; });
-    const scopePath = scope ? (scope.configPath || scope.projectPath || currentScope) : currentScope;
+    const scopePath = scope ? (scope.projectPath || scope.configPath || currentScope) : currentScope;
     const usage = getUsage();
     let days = customDateRange ? 0 : currentPeriod;
 
@@ -3544,7 +3545,7 @@ window.name = 'oh-my-hi';
       let key = '';
       if (typeof ts === 'string') key = ts.substring(0, 10);
       else if (typeof ts === 'number') key = new Date(ts).toISOString().substring(0, 10);
-      if (dailyMap.hasOwnProperty(key)) dailyMap[key]++;
+      if (dailyMap.hasOwnProperty(key)) dailyMap[key] += countOf(item);
     });
 
     for (let j = 1; j < dateLabels.length; j++) {
@@ -3872,9 +3873,11 @@ window.name = 'oh-my-hi';
     return html;
   }
 
+  const countOf = (r) => typeof r.count === 'number' ? r.count : 1;
+
   function countUsageList(list, days) {
     if (!list) return 0;
-    return filterByPeriod(list, 'timestamp', days).length;
+    return filterByPeriod(list, 'timestamp', days).reduce((s, r) => s + countOf(r), 0);
   }
 
   function calcChangeForList(list, days) {
@@ -3884,11 +3887,13 @@ window.name = 'oh-my-hi';
     curStart.setDate(curStart.getDate() - days);
     const prevStart = new Date(curStart);
     prevStart.setDate(prevStart.getDate() - days);
-    let cur = list.filter((i) => { return new Date(i.timestamp) >= curStart; }).length;
-    let prev = list.filter((i) => {
-      let d = new Date(i.timestamp);
-      return d >= prevStart && d < curStart;
-    }).length;
+    let cur = 0, prev = 0;
+    for (const r of list) {
+      const d = new Date(r.timestamp);
+      const v = countOf(r);
+      if (d >= curStart) cur += v;
+      else if (d >= prevStart) prev += v;
+    }
     if (prev === 0) return cur > 0 ? 100 : 0;
     return Math.round(((cur - prev) / prev) * 100);
   }

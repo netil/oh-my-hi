@@ -52,7 +52,7 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const ROOT = path.resolve(__dirname, '..');
 const TEMPLATES = path.join(ROOT, 'templates');
-const OUTPUT = path.join(ROOT, 'output');
+const OUTPUT = process.env.OMH_OUTPUT_DIR || path.join(ROOT, 'output');
 
 // Dev vs plugin build detection.
 // Dev build:     script is running from the source git checkout (the folder
@@ -637,8 +637,10 @@ async function main() {
     const phase1Data = buildDataObject(scopes, phase1ScopeData, systemLocale, [], { _partial: true, modelPricing, pricingFetchedAt });
     writeDataJs(phase1Data, dataPath);
 
-    console.log('  [3/4] starting server...');
-    dashboardUrl = await spawnServeOrRefresh();
+    if (!process.env.CI) {
+      console.log('  [3/4] starting server...');
+      dashboardUrl = await spawnServeOrRefresh();
+    }
 
     console.log('  [4/4] loading full history (this may take a moment)...');
     // cachePath: saves mtime-index (no seg-*.json.gz — collectAllScopes no longer calls saveTranscriptCache)
@@ -674,10 +676,20 @@ async function main() {
         // Collect new entries from all scopes and append per-scope to monthly DBs
         const newByScope = { global: { skills: [], agents: [], mcpCalls: [], tokenEntries: [], promptStats: [], latencyEntries: [] } };
         for (const s of projectScopes) newByScope[s.id] = { skills: [], agents: [], mcpCalls: [], tokenEntries: [], promptStats: [], latencyEntries: [] };
+        const sortedProjectScopes = [...projectScopes].sort((a, b) => b.configPath.length - a.configPath.length);
         for (const [key, entry] of Object.entries(stubCache)) {
           if (key.startsWith('_') || !entry?._new || !entry.result) continue;
           const r = entry.result;
-          for (const target of Object.values(newByScope)) {
+          let matchedScope = null;
+          for (const s of sortedProjectScopes) {
+            if (key === s.configPath || key.startsWith(s.configPath + path.sep)) {
+              matchedScope = s;
+              break;
+            }
+          }
+          const targets = [newByScope.global];
+          if (matchedScope) targets.push(newByScope[matchedScope.id]);
+          for (const target of targets) {
             for (const field of Object.keys(target)) {
               if (r[field]?.length) target[field].push(...r[field]);
             }
@@ -696,8 +708,10 @@ async function main() {
     console.log('  [2/3] building dashboard...');
     // If migration needed: start server first so browser shows old data.json, then migrate
     if (needsMigration) {
-      console.log('  [3/3] starting server...');
-      dashboardUrl = await spawnServeOrRefresh();
+      if (!process.env.CI) {
+        console.log('  [3/3] starting server...');
+        dashboardUrl = await spawnServeOrRefresh();
+      }
       await migrateWithProgress(dbModule, OUTPUT, dataPath);
     }
 
@@ -705,7 +719,7 @@ async function main() {
     const data = buildDataObject(scopes, scopeData, systemLocale, dbCtxNames, { _dateRange: getDbDateRange(), modelPricing, pricingFetchedAt });
     writeDataJs(data, dataPath);
 
-    if (!needsMigration) {
+    if (!needsMigration && !process.env.CI) {
       console.log('  [3/3] starting server...');
       dashboardUrl = await spawnServeOrRefresh();
     }
@@ -1088,20 +1102,21 @@ async function collectProjectData(configPath, projectPath, { days = 0, cache, ca
   const emptyUsage = emptyScopeData().usage;
 
   // Sync parsers (fast)
+  const projectClaudeDir = projectPath ? path.join(projectPath, '.claude') : configPath;
   const syncData = {
     configFiles: safeCall(() => parseConfigFiles(configPath, projectPath)),
-    skills: safeCall(() => parseSkills(configPath)),
-    agents: safeCall(() => parseAgents(configPath)),
-    plugins: [],
-    hooks: safeCall(() => parseHooks(configPath)),
+    skills: safeCall(() => parseSkills(projectClaudeDir)),
+    agents: safeCall(() => parseAgents(projectClaudeDir)),
+    plugins: [],      // global-only (marketplace plugins not scoped per-project)
+    hooks: safeCall(() => parseHooks(projectClaudeDir)),
     memory: safeCall(() => parseMemory(configPath)),
-    mcpServers: [],
-    rules: safeCall(() => parseRules(configPath)),
-    principles: safeCall(() => parsePrinciples(configPath)),
-    commands: [],
-    teams: [],
-    plans: [],
-    todos: [],
+    mcpServers: [],   // global-only (.mcp.json parsing not yet scoped per-project)
+    rules: safeCall(() => parseRules(projectClaudeDir)),
+    principles: safeCall(() => parsePrinciples(projectClaudeDir)),
+    commands: safeCall(() => parseCommands(projectClaudeDir)),
+    teams: [],        // global-only
+    plans: safeCall(() => parsePlans(projectClaudeDir)),
+    todos: [],        // global-only
   };
 
   let usage = emptyUsage;
