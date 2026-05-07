@@ -637,8 +637,10 @@ async function main() {
     const phase1Data = buildDataObject(scopes, phase1ScopeData, systemLocale, [], { _partial: true, modelPricing, pricingFetchedAt });
     writeDataJs(phase1Data, dataPath);
 
-    console.log('  [3/4] starting server...');
-    dashboardUrl = await spawnServeOrRefresh();
+    if (!process.env.CI) {
+      console.log('  [3/4] starting server...');
+      dashboardUrl = await spawnServeOrRefresh();
+    }
 
     console.log('  [4/4] loading full history (this may take a moment)...');
     // cachePath: saves mtime-index (no seg-*.json.gz — collectAllScopes no longer calls saveTranscriptCache)
@@ -706,8 +708,10 @@ async function main() {
     console.log('  [2/3] building dashboard...');
     // If migration needed: start server first so browser shows old data.json, then migrate
     if (needsMigration) {
-      console.log('  [3/3] starting server...');
-      dashboardUrl = await spawnServeOrRefresh();
+      if (!process.env.CI) {
+        console.log('  [3/3] starting server...');
+        dashboardUrl = await spawnServeOrRefresh();
+      }
       await migrateWithProgress(dbModule, OUTPUT, dataPath);
     }
 
@@ -715,7 +719,7 @@ async function main() {
     const data = buildDataObject(scopes, scopeData, systemLocale, dbCtxNames, { _dateRange: getDbDateRange(), modelPricing, pricingFetchedAt });
     writeDataJs(data, dataPath);
 
-    if (!needsMigration) {
+    if (!needsMigration && !process.env.CI) {
       console.log('  [3/3] starting server...');
       dashboardUrl = await spawnServeOrRefresh();
     }

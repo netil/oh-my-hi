@@ -26,5 +26,8 @@ jobs:
       - name: Setup test environment
         run: mkdir -p ~/.claude/projects
 
+      - name: Build dashboard
+        run: node scripts/generate-dashboard.mjs
+
       - name: Run tests
         run: npm test
