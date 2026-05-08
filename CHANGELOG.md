@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.11.7] - 2026-05-08
+
+### Fixed
+- **`postinstall.mjs`: missing prebuilt binary not recovered** — previously exited early when the binary file was absent (e.g. optional dependency skipped during install). Now always runs a load probe and triggers `npm rebuild better-sqlite3` for both missing binary and ABI mismatch cases.
+
 ## [0.11.6] - 2026-05-08
 
 ### Fixed

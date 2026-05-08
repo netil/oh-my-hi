@@ -9,10 +9,8 @@ import { fileURLToPath } from 'url';
 const ROOT = resolve(fileURLToPath(import.meta.url), '../..');
 const nativeModule = resolve(ROOT, 'node_modules/better-sqlite3/build/Release/better_sqlite3.node');
 
-if (!existsSync(nativeModule)) process.exit(0);
-
-// ── macOS arm64: patch LC_RPATH for libc++ ──────────────────────────────────
-if (process.platform === 'darwin' && process.arch === 'arm64') {
+// ── macOS arm64: patch LC_RPATH for libc++ (only if binary already exists) ──
+if (existsSync(nativeModule) && process.platform === 'darwin' && process.arch === 'arm64') {
   const otool = spawnSync('otool', ['-l', nativeModule], { encoding: 'utf8' });
   if (otool.stdout && !otool.stdout.includes('LC_RPATH')) {
     try {
@@ -27,15 +25,17 @@ if (process.platform === 'darwin' && process.arch === 'arm64') {
   }
 }
 
-// ── ABI load check: rebuild if the binary doesn't load with this Node.js ────
-// Run in a child process so a native crash (segfault) doesn't kill postinstall itself.
+// ── Load check: rebuild if binary is missing or fails to load ────────────────
+// Covers two cases: (1) prebuilt not downloaded (optional dep skipped),
+// (2) ABI mismatch after Node.js upgrade.
+// Run probe in a child process so a segfault doesn't kill postinstall itself.
 const probe = spawnSync(process.execPath, ['-e', "require('better-sqlite3')"], {
   cwd: ROOT,
   encoding: 'utf8',
   env: { ...process.env, NODE_PATH: resolve(ROOT, 'node_modules') },
 });
 if (probe.status !== 0) {
-  console.warn('oh-my-hi: better-sqlite3 load failed (ABI mismatch?) — rebuilding…');
+  console.warn('oh-my-hi: better-sqlite3 unavailable — rebuilding from source…');
   try {
     execFileSync('npm', ['rebuild', 'better-sqlite3'], {
       cwd: ROOT,
