@@ -21,7 +21,7 @@
 import { fileURLToPath } from 'url';
 import path from 'path';
 import fs from 'fs';
-import { execSync, spawn } from 'child_process';
+import { execSync, spawnSync, spawn } from 'child_process';
 
 // Auto-install dependencies if missing
 const __boot_dir = path.dirname(fileURLToPath(import.meta.url));
@@ -276,6 +276,25 @@ if (args.includes('--update')) {
   runUpdate().then(() => process.exit(0)).catch(() => process.exit(1));
 }
 
+function findClaudeBin() {
+  try {
+    const r = spawnSync(process.platform === 'win32' ? 'where' : 'which', ['claude'], { encoding: 'utf8' });
+    if (r.status === 0 && r.stdout.trim()) return r.stdout.trim().split(/\r?\n/)[0].trim();
+  } catch { /* ignore */ }
+  // Common installation locations (macOS desktop app, npm global, etc.)
+  const home = process.env.HOME || process.env.USERPROFILE || '';
+  const candidates = [
+    path.join(home, '.claude', 'local', 'claude'),   // npm global / desktop app default
+    '/usr/local/bin/claude',                          // symlink (macOS/Linux common)
+    '/opt/homebrew/bin/claude',                       // Homebrew (macOS arm64)
+    path.join(home, '.local', 'bin', 'claude'),       // Linux user-local
+    '/usr/bin/claude',                                // Linux system
+    '/Applications/Claude.app/Contents/Resources/bin/claude',  // macOS desktop app
+  ];
+  for (const c of candidates) { if (fs.existsSync(c)) return c; }
+  return null;
+}
+
 async function runUpdate() {
   const pkg = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf-8'));
   console.log(`oh-my-hi: current version v${pkg.version}`);
@@ -354,7 +373,9 @@ async function runUpdate() {
     }
     console.log(`oh-my-hi: v${latest} available`);
     console.log(`oh-my-hi: updating v${pkg.version} → v${latest}...`);
-    execSync(`claude plugin update ${pkg.name}@${marketplace}`, {
+    const claudeBin = findClaudeBin();
+    if (!claudeBin) throw new Error('claude CLI not found — install Claude Code or add it to PATH');
+    execSync(`"${claudeBin}" plugin update ${pkg.name}@${marketplace}`, {
       stdio: 'inherit',
       env: { ...process.env, CLAUDE_CONFIG_DIR },
     });

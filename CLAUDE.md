@@ -84,6 +84,18 @@ Execute in order when a version bump is requested:
 8. **GitHub Release** — `gh release create vX.Y.Z --title "vX.Y.Z" --notes "..."` with the relevant CHANGELOG section as notes
 9. **npm publish** — prompt user for OTP
 
+## Ground Rules
+
+**Paths must be portable — never hardcode developer-machine paths.**
+
+This plugin runs on any user's machine. All path resolution must work on a clean install:
+
+- Use `process.env.HOME` / `process.env.USERPROFILE` instead of `/Users/netil/...`
+- Use `process.env.CLAUDE_CONFIG_DIR` for the Claude config directory
+- When locating external binaries (e.g. `claude`), try `which`/`where` via PATH first, then fall back to standard installation locations across macOS/Linux/Windows
+- Never reference app names specific to one machine (e.g. `/Applications/cmux.app/...`)
+- Standard Claude Code install locations: `~/.claude/local/claude`, `/usr/local/bin/claude`, `/opt/homebrew/bin/claude`, `~/.local/bin/claude`
+
 ## Code Conventions
 
 - Rendering pattern: build HTML string → `content.innerHTML = html` → `bindContentActions()` → draw charts

@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.11.5] - 2026-05-08
+
+### Fixed
+- **`better-sqlite3` ABI mismatch auto-recovery** — `postinstall.mjs` now probes the native binary via a child process (isolated from the installer to prevent segfault propagation) and auto-runs `npm rebuild better-sqlite3` if the load fails. Fixes missing monthly usage data after Node.js upgrades.
+- **`--update` flag: `claude` CLI not found** — `generate-dashboard.mjs` now resolves the `claude` binary via `which`/`where` first, then falls back to standard installation paths (`~/.claude/local/claude`, `/usr/local/bin/claude`, `/opt/homebrew/bin/claude`, `~/.local/bin/claude`, `/Applications/Claude.app/...`). Fixes `claude not found in PATH` error when running from plugin context.
+
+### Changed
+- **Portable path resolution** — all hardcoded developer-machine paths removed; binary lookup now uses cross-platform standard locations only.
+- Windows `\r\n` line endings handled correctly in `which`/`where` output parsing.
+
 ## [0.11.4] - 2026-05-07
 
 ### Fixed
