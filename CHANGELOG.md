@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.11.6] - 2026-05-08
+
+### Fixed
+- **`/omh --update` bootstrap problem** — SKILL.md bash block now augments PATH with standard `claude` CLI locations before invoking the node script, so `--update` works even in plugin context where PATH is stripped. Resolves chicken-and-egg situation where updating required `claude` but `claude` wasn't findable.
+
 ## [0.11.5] - 2026-05-08
 
 ### Fixed

@@ -59,5 +59,18 @@ if [ -z "$SCRIPT" ]; then
   echo "oh-my-hi: ERROR — generate-dashboard.mjs not found. Try: /omh --update"
   exit 1
 fi
+# Ensure claude CLI is findable for --update (plugin context may have a stripped PATH)
+for _claude_candidate in \
+    "$HOME/.claude/local/claude" \
+    "/usr/local/bin/claude" \
+    "/opt/homebrew/bin/claude" \
+    "$HOME/.local/bin/claude" \
+    "/usr/bin/claude" \
+    "/Applications/Claude.app/Contents/Resources/bin/claude"; do
+  if [ -x "$_claude_candidate" ]; then
+    export PATH="$(dirname "$_claude_candidate"):$PATH"
+    break
+  fi
+done
 node "$SCRIPT" $ARGUMENTS
 ```
