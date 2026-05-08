@@ -45,8 +45,9 @@ import { parseTeams } from './parsers/teams.mjs';
 import { parsePlans } from './parsers/plans.mjs';
 import { parseTodos } from './parsers/todos.mjs';
 import { parseConfigFiles } from './parsers/config-files.mjs';
-import { parseUsage, savePending, mergePending, hasPending, loadMtimeIndex, saveMtimeIndex } from './parsers/usage.mjs';
+import { parseUsage, savePending, mergePending, hasPending, loadMtimeIndex, saveMtimeIndex, scanTranscriptMonths } from './parsers/usage.mjs';
 import { detectScopes } from './parsers/scopes.mjs';
+import { toMonthKey } from './util.mjs';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -507,18 +508,118 @@ async function main() {
     console.warn('oh-my-hi: SQLite unavailable —', e.message);
   }
 
-  const appendToMonthly = (scope, usage) => {
-    if (!dbModule || !usage) return false;
-    try { dbModule.appendUsageMonthly(OUTPUT, scope, usage); return true; } catch (e) {
-      console.warn('oh-my-hi: SQLite append failed —', e.message);
-      return false;
+  // ── Spinner ──────────────────────────────────────────────────────────────
+  const startSpinner = (text) => {
+    const frames = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
+    if (!process.stdout.isTTY) {
+      process.stdout.write(`  ${text}\n`);
+      return { stop(msg) { if (msg) console.log(msg); } };
     }
+    let i = 0;
+    const timer = setInterval(() => {
+      process.stdout.write(`\r  ${frames[i++ % frames.length]} ${text}`);
+    }, 80);
+    return {
+      stop(msg) {
+        clearInterval(timer);
+        process.stdout.write(`\r${' '.repeat(text.length + 6)}\r`);
+        if (msg) console.log(msg);
+      },
+    };
   };
 
-  const syncDb = (scopeData) => {
+  // ── DB 복구 헬퍼 ─────────────────────────────────────────────────────────
+  const isTransientDbError = (msg) => /SQLITE_BUSY|SQLITE_LOCKED|database is locked/i.test(msg);
+  const isNativeModuleError = (msg) => /NODE_MODULE_VERSION|was compiled against|invalid ELF|not a valid Win32|cannot open shared/i.test(msg);
+
+  const rebuildSqlite = () => new Promise(resolve => {
+    const spinner = startSpinner('better-sqlite3 재빌드 중...');
+    const proc = spawn('npm', ['rebuild', 'better-sqlite3'], {
+      cwd: __boot_root, stdio: 'pipe', shell: process.platform === 'win32',
+    });
+    let stderrBuf = '';
+    proc.stderr.on('data', chunk => { stderrBuf += chunk; });
+    proc.on('close', code => {
+      if (code === 0) {
+        dbModule.reloadNativeModule();
+        spinner.stop('  ✅ better-sqlite3 재빌드 완료 — DB 쓰기 재시도');
+        resolve(true);
+      } else {
+        const errLine = stderrBuf.split('\n')[0];
+        spinner.stop(`  ❌ 재빌드 실패${errLine ? ' — ' + errLine : ''}`);
+        resolve(false);
+      }
+    });
+  });
+
+  // Rescue: DB 쓰기가 완전히 실패할 때 데이터를 JSON으로 즉시 저장
+  const RESCUE_DIR = path.join(OUTPUT, 'rescue');
+  const saveRescue = (scope, usage) => {
+    try {
+      fs.mkdirSync(RESCUE_DIR, { recursive: true });
+      const fp = path.join(RESCUE_DIR, `${Date.now()}-${scope.replace(/[^a-z0-9]/gi, '_')}.json`);
+      fs.writeFileSync(fp, JSON.stringify({ scope, usage }), 'utf8');
+      return true;
+    } catch { return false; }
+  };
+
+  // 실행 종료 전 rescue 파일을 DB로 플러시
+  const flushRescue = async () => {
+    if (!dbModule || !fs.existsSync(RESCUE_DIR)) return;
+    const files = fs.readdirSync(RESCUE_DIR).filter(f => f.endsWith('.json'));
+    if (files.length === 0) return;
+    const spinner = startSpinner(`rescue 데이터 ${files.length}건 DB 재기록 중...`);
+    let ok = 0, fail = 0;
+    for (const f of files) {
+      const fp = path.join(RESCUE_DIR, f);
+      try {
+        const { scope, usage } = JSON.parse(fs.readFileSync(fp, 'utf8'));
+        dbModule.appendUsageMonthly(OUTPUT, scope, usage);
+        fs.unlinkSync(fp);
+        ok++;
+      } catch { fail++; }
+    }
+    spinner.stop(
+      ok > 0
+        ? `  ✅ rescue ${ok}건 DB 기록 완료` + (fail ? `, ${fail}건 재시도 필요` : '')
+        : `  ⚠️  rescue ${fail}건 DB 기록 실패 — ${RESCUE_DIR} 에 보존됨`
+    );
+    try { fs.rmdirSync(RESCUE_DIR); } catch { /* not empty */ }
+  };
+
+  const appendToMonthly = async (scope, usage) => {
+    if (!dbModule || !usage) return false;
+    let lastErr;
+    let rebuilt = false;
+    for (let attempt = 0; attempt < 4; attempt++) {
+      try {
+        dbModule.appendUsageMonthly(OUTPUT, scope, usage);
+        return true;
+      } catch (e) {
+        lastErr = e;
+        if (isNativeModuleError(e.message) && !rebuilt) {
+          rebuilt = true;
+          if (await rebuildSqlite()) continue;
+          break;
+        }
+        if (isTransientDbError(e.message) && attempt < 3) {
+          await new Promise(r => setTimeout(r, 100 * (attempt + 1)));
+          continue;
+        }
+        break;
+      }
+    }
+    console.warn('oh-my-hi: SQLite 쓰기 실패 —', lastErr?.message);
+    if (saveRescue(scope, usage)) {
+      console.warn('  → 데이터를 rescue 파일로 보존 (실행 종료 전 재시도)');
+    }
+    return false;
+  };
+
+  const syncDb = async (scopeData) => {
     let ok = true;
     for (const [scope, sdata] of Object.entries(scopeData || {})) {
-      if (sdata?.usage) if (!appendToMonthly(scope, sdata.usage)) ok = false;
+      if (sdata?.usage && !await appendToMonthly(scope, sdata.usage)) ok = false;
     }
     return ok;
   };
@@ -574,6 +675,7 @@ async function main() {
 
     // Append new entries to SQLite — must run BEFORE savePending()
     // because savePending clears _new flags that the merge depends on.
+    let dataOnlyDbOk = true;
     if (parsed > 0 && dbModule) {
       const newUsage = { skills: [], agents: [], mcpCalls: [], tokenEntries: [], promptStats: [], latencyEntries: [] };
       for (const [key, entry] of Object.entries(cache)) {
@@ -583,7 +685,10 @@ async function main() {
           if (r[field]?.length) newUsage[field].push(...r[field]);
         }
       }
-      appendToMonthly('global', newUsage);
+      dataOnlyDbOk = await appendToMonthly('global', newUsage);
+      if (!dataOnlyDbOk) {
+        console.warn('oh-my-hi: SQLite write failed — skipping mtime cache so next run retries');
+      }
     }
 
     // Update data.json generatedAt (and pricingFetchedAt from cache if present)
@@ -603,9 +708,9 @@ async function main() {
       } catch { /* skip — full rebuild on next /omh */ }
     }
 
-    // Save as pending + update mtime index
+    // Save pending + update mtime index only if DB write succeeded
     savePending(CACHE_PATH, cache);
-    saveMtimeIndex(CACHE_PATH, cache);
+    if (dataOnlyDbOk) saveMtimeIndex(CACHE_PATH, cache);
 
     // Ensure _devBuild flag is set when running from the real dev repo
     if (IS_ACTUAL_DEV_REPO && fs.existsSync(dataPath)) {
@@ -626,6 +731,7 @@ async function main() {
     // Deferred migration: server is already running, browser uses data.json fallback
     if (needsMigration) await migrateWithProgress(dbModule, OUTPUT, dataPath);
 
+    await flushRescue();
     console.log('oh-my-hi: done (lightweight)');
     return;
   }
@@ -658,7 +764,7 @@ async function main() {
     const cache = {};
     console.log('  [2/4] building 7-day preview...');
     const phase1ScopeData = await collectAllScopes(scopes, { days: 7, cache, progress: true });
-    syncDb(phase1ScopeData); // seed SQLite so browser can display while full load runs
+    await syncDb(phase1ScopeData); // seed SQLite so browser can display while full load runs
     const phase1Data = buildDataObject(scopes, phase1ScopeData, systemLocale, [], { _partial: true, modelPricing, pricingFetchedAt });
     writeDataJs(phase1Data, dataPath);
 
@@ -671,9 +777,8 @@ async function main() {
     // cachePath: saves mtime-index (no seg-*.json.gz — collectAllScopes no longer calls saveTranscriptCache)
     const phase2ScopeData = await collectAllScopes(scopes, { days: 0, cache, cachePath: CACHE_PATH, progress: true });
     // If SQLite write fails, delete mtime-index so next run re-parses transcripts
-    if (!syncDb(phase2ScopeData)) {
+    if (!await syncDb(phase2ScopeData)) {
       try { fs.unlinkSync(path.join(OUTPUT, 'cache', 'mtime-index.json')); } catch { /* ignore */ }
-      console.warn('oh-my-hi: SQLite write failed — mtime cache cleared, will retry on next run');
     }
     const dbCtxNames = getDbCtxNames();
     const phase2Data = buildDataObject(scopes, phase2ScopeData, systemLocale, dbCtxNames, { _firstRun: true, _dateRange: getDbDateRange(), modelPricing, pricingFetchedAt });
@@ -694,10 +799,28 @@ async function main() {
       // Auto-recover by clearing the stale index + empty DBs so re-parse runs now.
       const recovered = dbModule.recoverIfCorrupt(OUTPUT, path.join(OUTPUT, 'cache', 'mtime-index.json'));
       if (recovered.recovered) {
-        console.warn(
-          `oh-my-hi: DB integrity issue detected — ${recovered.cachedCount} transcript(s) in mtime-index but DB empty.` +
-          '\n  Clearing stale cache and rebuilding from scratch...'
-        );
+        if (recovered.dbRows === 0) {
+          console.warn(
+            `oh-my-hi: DB integrity issue detected — ${recovered.cachedCount} transcript(s) in mtime-index but DB empty.` +
+            '\n  Clearing stale cache and rebuilding from scratch...'
+          );
+        } else if (recovered.missingMonths?.length) {
+          console.warn(
+            `oh-my-hi: partial DB loss detected — months missing: ${recovered.missingMonths.join(', ')}.` +
+            `\n  Cleared ${recovered.removedEntries} mtime-index entries — will re-parse on this run.`
+          );
+        }
+      }
+
+      // Fast coverage check: compare transcript file months vs DB months
+      // readdir + stat only — no content parsing, typically <50ms
+      // reuse existingMonths from recoverIfCorrupt to avoid a redundant listMonthlyDbs call
+      const transcriptMonths = scanTranscriptMonths(CLAUDE_CONFIG_DIR);
+      const dbMonthSet = recovered.existingMonths ?? new Set(dbModule.listMonthlyDbs(OUTPUT).map(({ year, month }) => toMonthKey(year, month)));
+      const coverageGaps = [...transcriptMonths.keys()].filter(m => !dbMonthSet.has(m)).sort();
+      if (coverageGaps.length > 0) {
+        const detail = coverageGaps.map(m => `${m}(${transcriptMonths.get(m)} files)`).join(', ');
+        console.warn(`oh-my-hi: data gap detected — transcripts exist but no DB for: ${detail}. Parsing now...`);
       }
 
       const mtimeIndex = loadMtimeIndex(CACHE_PATH);
@@ -738,7 +861,7 @@ async function main() {
         let dbWriteOk = true;
         for (const [scopeId, usage] of Object.entries(newByScope)) {
           if (usage.tokenEntries.length > 0 || usage.skills.length > 0) {
-            if (!appendToMonthly(scopeId, usage)) dbWriteOk = false;
+            if (!await appendToMonthly(scopeId, usage)) dbWriteOk = false;
           }
         }
         // Only cache mtime if SQLite write succeeded — failed writes must be retried next run
@@ -771,6 +894,7 @@ async function main() {
     }
   }
 
+  await flushRescue();
   console.log(`oh-my-hi: ✅ done → ${dashboardUrl}`);
 
   // Auto-refresh status notice

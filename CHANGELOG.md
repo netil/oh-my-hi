@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.11.9] - 2026-05-08
+
+### Fixed
+- **Subagent transcript parsing missed** — newer Claude Code stores subagent transcripts under `projects/{project}/{sessionId}/subagents/*.jsonl` (depth-3). Both `parseTranscripts` (global scan) and `parseProjectTranscripts` (per-project scan) only walked depth-1 files, silently skipping all subagent data. Fixed by introducing `collectProjectJsonlPaths` which covers flat, session-subdir, and subagents layouts; both scanners now share this helper.
+- **SQLite write failure deferred to next run** — when `appendUsageMonthly` threw (transient lock, ABI mismatch, disk error), data was silently skipped until the next build. Now resolved in the same run via three-tier recovery: (1) retry with backoff for `SQLITE_BUSY`/`SQLITE_LOCKED`; (2) `npm rebuild better-sqlite3` + module cache reload for ABI/native-module errors; (3) rescue file written to `output/rescue/` and flushed to DB before process exit for persistent failures. Braille spinner shows progress during rebuild.
+- **`--data-only` (Stop hook): `saveMtimeIndex` called unconditionally on DB failure** — transcripts were permanently marked as processed while their data was never written to DB. `saveMtimeIndex` is now skipped when the DB write fails.
+- **`phase1ScopeData` sync dropped** — the 7-day preview seed (`syncDb(phase1ScopeData)`) was missing `await`, making DB writes fire-and-forget with no failure handling. Fixed.
+- **`recoverIfCorrupt` missed partial DB loss** — previously only triggered when the DB was completely empty. Now also detects when mtime-index entries reference months for which no monthly DB file exists, removes those entries so the next build re-parses them. Returns `existingMonths` set for caller reuse.
+
+### Added
+- **`scanTranscriptMonths(configDir)`** — fast startup coverage check (readdir + stat, no JSONL parsing, ~16ms for 800 files). Compares transcript file months against DB months; warns and triggers re-parse when gaps are found.
+- **`scripts/util.mjs`** — shared `toMonthKey(year, month)` helper, eliminating three copies of the same inline `YYYY-MM` format expression.
+- **`db.mjs`: `reloadNativeModule()`** — clears `better-sqlite3` from the CJS require cache after a successful rebuild so the next `openDb()` loads the fresh binary in-process.
+- **22 new tests** (`test/db-recovery.test.mjs`) — covers `reloadNativeModule`, `recoverIfCorrupt` (complete + partial loss), `scanTranscriptMonths` (depth-1 + depth-3), `parseTranscripts` subagent scanning, rescue save/flush/idempotency, and `appendToMonthly` retry logic.
+
 ## [0.11.8] - 2026-05-08
 
 ### Fixed

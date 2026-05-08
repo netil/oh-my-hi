@@ -80,6 +80,7 @@ Full mode (/omh):
   1. Detect scopes (global + projects)
   2. Open monthly SQLite DBs (`output/db/{year}/{year-MM}.sqlite`) — degrades gracefully if unavailable
   3. Load cache segments + merge pending files
+  3b. Startup integrity check: `recoverIfCorrupt` verifies mtime-index against monthly DB files; `scanTranscriptMonths` detects transcript months not covered by any DB
   4. Parse changed transcript files (incremental via mtime/size cache)
   5. Save cache segment (gzipped, append-only) + mtime index
   6. Build task categories (description-based classification → task-categories.json)
@@ -134,7 +135,7 @@ where they need to exercise the optimized path.
 
 ### Usage Parser (usage.mjs)
 
-Parses `history.jsonl` and `projects/*/*.jsonl` transcripts.
+Parses `history.jsonl` and transcript files under `projects/`. Supports two layouts: flat (`{project}/{uuid}.jsonl`) and session-subdir (`{project}/{sessionId}/subagents/*.jsonl`) introduced in newer Claude Code versions.
 
 | Output | Source | Notes |
 |--------|--------|-------|

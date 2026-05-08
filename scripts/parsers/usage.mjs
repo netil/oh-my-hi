@@ -51,6 +51,7 @@ import fsp from 'fs/promises';
 import path from 'path';
 import os from 'os';
 import { gzipSync, gunzipSync } from 'zlib';
+import { toMonthKey } from '../util.mjs';
 
 const PARALLEL_CONCURRENCY = Math.max(os.cpus().length, 4);
 
@@ -732,31 +733,53 @@ async function parseTranscriptFile(jsonlPath, cutoffMs) {
 }
 
 /**
- * Parse all transcript JSONL files under projects/
- * Uses incremental cache: only re-parses files whose mtime/size changed.
- * @param {string} configDir
- * @param {number} cutoffMs - applied as post-filter (cache stores full data)
- * @param {object} cache - mutable cache object (updated in place)
- * @returns {object} merged transcript results (cutoff-filtered)
+ * Collect JSONL paths from a single project directory.
+ * Covers flat ({uuid}.jsonl), session-subdir ({sessionId}/*.jsonl),
+ * and subagent ({sessionId}/subagents/*.jsonl) layouts.
  */
+function collectProjectJsonlPaths(projDirPath) {
+  const filePaths = [];
+  let files;
+  try { files = fs.readdirSync(projDirPath, { withFileTypes: true }); } catch { return filePaths; }
+  for (const f of files) {
+    if (f.isFile() && f.name.endsWith('.jsonl')) {
+      filePaths.push(path.join(projDirPath, f.name));
+    } else if (f.isDirectory()) {
+      const sessionDir = path.join(projDirPath, f.name);
+      let hasSubagents = false;
+      try {
+        for (const sf of fs.readdirSync(sessionDir, { withFileTypes: true })) {
+          if (sf.isFile() && sf.name.endsWith('.jsonl')) filePaths.push(path.join(sessionDir, sf.name));
+          else if (sf.isDirectory() && sf.name === 'subagents') hasSubagents = true;
+        }
+      } catch { /* skip */ }
+      if (hasSubagents) try {
+        for (const af of fs.readdirSync(path.join(sessionDir, 'subagents'), { withFileTypes: true })) {
+          if (af.isFile() && af.name.endsWith('.jsonl')) filePaths.push(path.join(sessionDir, 'subagents', af.name));
+        }
+      } catch { /* skip */ }
+    }
+  }
+  return filePaths;
+}
+
+function collectJsonlPaths(projectsDir) {
+  const filePaths = [];
+  if (!fs.existsSync(projectsDir)) return filePaths;
+  try {
+    for (const projectDir of fs.readdirSync(projectsDir, { withFileTypes: true })) {
+      if (!projectDir.isDirectory()) continue;
+      filePaths.push(...collectProjectJsonlPaths(path.join(projectsDir, projectDir.name)));
+    }
+  } catch { /* skip */ }
+  return filePaths;
+}
+
 async function parseTranscripts(configDir, cutoffMs, cache = {}) {
   const projectsDir = path.join(configDir, 'projects');
   if (!fs.existsSync(projectsDir)) return { skills: [], agents: [], mcpCalls: [], tokenEntries: [], promptStats: [], latencyEntries: [] };
 
-  // Phase 1: Collect all candidate file paths (sync — fast directory scan)
-  const filePaths = [];
-  for (const projectDir of fs.readdirSync(projectsDir, { withFileTypes: true })) {
-    if (!projectDir.isDirectory()) continue;
-
-    const projPath = path.join(projectsDir, projectDir.name);
-    let files;
-    try { files = fs.readdirSync(projPath, { withFileTypes: true }); } catch { continue; }
-
-    for (const file of files) {
-      if (!file.isFile() || !file.name.endsWith('.jsonl')) continue;
-      filePaths.push(path.join(projPath, file.name));
-    }
-  }
+  const filePaths = collectJsonlPaths(projectsDir);
 
   // Phase 2: Parse all files in parallel (with cache)
   cache._total = (cache._total || 0) + filePaths.length;
@@ -802,6 +825,24 @@ function mergeTranscriptResults(results) {
 }
 
 /**
+ * Fast coverage scan: returns month → file-count map for all transcript JSONL files.
+ * Uses readdir + stat only — no JSONL content parsing. Suitable for startup checks.
+ * @param {string} configDir
+ * @returns {Map<string, number>} e.g. Map { '2026-02' => 30, '2026-04' => 315 }
+ */
+export function scanTranscriptMonths(configDir) {
+  const counts = new Map();
+  for (const fp of collectJsonlPaths(path.join(configDir, 'projects'))) {
+    try {
+      const d = new Date(fs.statSync(fp).mtimeMs);
+      const m = toMonthKey(d.getUTCFullYear(), d.getUTCMonth() + 1);
+      counts.set(m, (counts.get(m) || 0) + 1);
+    } catch { /* skip */ }
+  }
+  return counts;
+}
+
+/**
  * Parse all usage data from transcripts and history.
  * @param {string} configDir - Claude config root path
  * @param {number} [days=0] - 0 for all, >0 for last N days
@@ -843,32 +884,11 @@ async function parseProjectTranscripts(projDirPath, cutoffMs, cache = {}) {
   if (!fs.existsSync(projDirPath)) return empty;
 
   // Phase 1: Collect all candidate file paths (sync — fast directory scan)
-  const filePaths = [];
-  const dirs = [projDirPath, path.join(projDirPath, 'subagents')];
-  for (const dir of dirs) {
-    if (!fs.existsSync(dir)) continue;
-    let files;
-    try { files = fs.readdirSync(dir, { withFileTypes: true }); } catch { continue; }
-
-    for (const file of files) {
-      if (!file.isFile() || !file.name.endsWith('.jsonl')) continue;
-      filePaths.push(path.join(dir, file.name));
-    }
-
-    // Also check session subdirectories
-    try {
-      for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
-        if (!entry.isDirectory()) continue;
-        const subDir = path.join(dir, entry.name);
-        let subFiles;
-        try { subFiles = fs.readdirSync(subDir, { withFileTypes: true }); } catch { continue; }
-        for (const sf of subFiles) {
-          if (!sf.isFile() || !sf.name.endsWith('.jsonl')) continue;
-          filePaths.push(path.join(subDir, sf.name));
-        }
-      }
-    } catch { /* skip */ }
-  }
+  // Include legacy projDirPath/subagents/ root in addition to projDirPath itself
+  const filePaths = [
+    ...collectProjectJsonlPaths(projDirPath),
+    ...collectProjectJsonlPaths(path.join(projDirPath, 'subagents')),
+  ];
 
   // Phase 2: Parse all files in parallel (with cache)
   cache._total = (cache._total || 0) + filePaths.length;

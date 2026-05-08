@@ -9,8 +9,21 @@
 import path from 'path';
 import fs from 'fs';
 import { createRequire } from 'module';
+import { toMonthKey } from './util.mjs';
 
 const require = createRequire(import.meta.url);
+
+/**
+ * Clear the better-sqlite3 native module from the CJS require cache so the
+ * next openDb() call loads the freshly rebuilt binary.
+ * Called after `npm rebuild better-sqlite3` succeeds.
+ */
+export function reloadNativeModule() {
+  try {
+    const resolved = require.resolve('better-sqlite3');
+    delete require.cache[resolved];
+  } catch { /* module not in cache — nothing to clear */ }
+}
 
 // Schema version rule: when the schema needs to change after release, bump
 // CURRENT_SCHEMA_VERSION, add `if (v < N) migrateToVN(db)` in migrate(), and
@@ -167,7 +180,7 @@ function initSchema(db) {
  * Layout: {outputDir}/db/{year}/{year}-{MM}.sqlite
  */
 export function getMonthlyDbPath(outputDir, year, month) {
-  return path.join(outputDir, 'db', String(year), `${year}-${String(month).padStart(2, '0')}.sqlite`);
+  return path.join(outputDir, 'db', String(year), `${toMonthKey(year, month)}.sqlite`);
 }
 
 /** Returns the path for the current calendar month's DB. */
@@ -715,10 +728,12 @@ export function countDbRows(outputDir) {
 }
 
 /**
- * Detect and auto-recover stale mtime-index: if mtime-index has ≥50 entries
- * but the DB is empty, a previous run cached transcripts without writing to
- * SQLite (e.g. broken native bindings). Deletes the mtime-index and empty DBs
- * so the next loadMtimeIndex call returns empty, triggering a full re-parse.
+ * Detect and auto-recover stale mtime-index.
+ *
+ * Case 1 (complete loss): mtime-index has ≥threshold entries but all monthly DBs are empty.
+ * Case 2 (partial loss): mtime-index references files with mtimes covering months that have
+ *   no corresponding monthly DB file. Clears only those months' entries from the mtime-index
+ *   so the next build re-parses them.
  *
  * @param {string} outputDir  - e.g. path.join(ROOT, 'output')
  * @param {string} mtimeIndexPath - absolute path to mtime-index.json
@@ -734,14 +749,50 @@ export function recoverIfCorrupt(outputDir, mtimeIndexPath, threshold = 50) {
     const cachedCount = Object.keys(index).filter(k => !k.startsWith('_')).length;
     if (cachedCount < threshold) return { recovered: false, cachedCount, dbRows: -1 };
 
-    const dbRows = countDbRows(outputDir);
-    if (dbRows > 0) return { recovered: false, cachedCount, dbRows };
-
-    // Corruption confirmed: delete stale mtime-index and empty monthly DBs
-    try { fs.unlinkSync(mtimeIndexPath); } catch { /* ignore */ }
-    for (const { path: p } of listMonthlyDbs(outputDir)) {
-      try { fs.unlinkSync(p); } catch { /* ignore */ }
+    // Single listMonthlyDbs call: derive both dbRows and existingMonths
+    const monthly = listMonthlyDbs(outputDir);
+    let dbRows = 0;
+    const existingMonths = new Set();
+    for (const { year, month, path: p } of monthly) {
+      existingMonths.add(toMonthKey(year, month));
+      try {
+        const db = openDb(p);
+        dbRows += db.prepare('SELECT COUNT(*) AS n FROM token_entries').get()?.n ?? 0;
+        db.close();
+      } catch { /* skip unreadable DB */ }
     }
-    return { recovered: true, cachedCount, dbRows: 0 };
+
+    // Case 1: DB completely empty — nuke mtime-index + all empty DBs
+    if (dbRows === 0) {
+      try { fs.unlinkSync(mtimeIndexPath); } catch { /* ignore */ }
+      for (const { path: p } of monthly) { try { fs.unlinkSync(p); } catch { /* ignore */ } }
+      return { recovered: true, cachedCount, dbRows: 0, existingMonths };
+    }
+
+    // Case 2: Partial loss — collect {key, month} pairs, then remove those in missing months
+    const entryMonths = [];
+    const coveredMonths = new Set();
+    for (const [key, val] of Object.entries(index)) {
+      if (key.startsWith('_')) continue;
+      const mtimeMs = typeof val === 'number' ? val : null;
+      if (!mtimeMs) continue;
+      const d = new Date(mtimeMs);
+      const month = toMonthKey(d.getUTCFullYear(), d.getUTCMonth() + 1);
+      entryMonths.push({ key, month });
+      coveredMonths.add(month);
+    }
+    const missingMonths = [...coveredMonths].filter(m => !existingMonths.has(m));
+    if (missingMonths.length === 0) return { recovered: false, cachedCount, dbRows, existingMonths };
+
+    const missingSet = new Set(missingMonths);
+    let removed = 0;
+    for (const { key, month } of entryMonths) {
+      if (missingSet.has(month)) { delete index[key]; removed++; }
+    }
+
+    if (removed > 0) {
+      try { fs.writeFileSync(mtimeIndexPath, JSON.stringify(index)); } catch { /* best effort */ }
+    }
+    return { recovered: true, cachedCount, dbRows, missingMonths, removedEntries: removed, existingMonths };
   } catch { return { recovered: false, cachedCount: 0, dbRows: 0 }; }
 }
