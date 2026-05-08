@@ -508,16 +508,19 @@ async function main() {
   }
 
   const appendToMonthly = (scope, usage) => {
-    if (!dbModule || !usage) return;
-    try { dbModule.appendUsageMonthly(OUTPUT, scope, usage); } catch (e) {
+    if (!dbModule || !usage) return false;
+    try { dbModule.appendUsageMonthly(OUTPUT, scope, usage); return true; } catch (e) {
       console.warn('oh-my-hi: SQLite append failed —', e.message);
+      return false;
     }
   };
 
   const syncDb = (scopeData) => {
+    let ok = true;
     for (const [scope, sdata] of Object.entries(scopeData || {})) {
-      if (sdata?.usage) appendToMonthly(scope, sdata.usage);
+      if (sdata?.usage) if (!appendToMonthly(scope, sdata.usage)) ok = false;
     }
+    return ok;
   };
 
   const getDbCtxNames = () => {
@@ -532,6 +535,7 @@ async function main() {
       return r ? { from: r.earliest, to: r.latest } : null;
     } catch { return null; }
   };
+
 
   // ── One-time upgrade: remove legacy JS data files ──
   cleanupLegacyFiles(OUTPUT);
@@ -666,7 +670,11 @@ async function main() {
     console.log('  [4/4] loading full history (this may take a moment)...');
     // cachePath: saves mtime-index (no seg-*.json.gz — collectAllScopes no longer calls saveTranscriptCache)
     const phase2ScopeData = await collectAllScopes(scopes, { days: 0, cache, cachePath: CACHE_PATH, progress: true });
-    syncDb(phase2ScopeData); // seed full history into monthly SQLite files
+    // If SQLite write fails, delete mtime-index so next run re-parses transcripts
+    if (!syncDb(phase2ScopeData)) {
+      try { fs.unlinkSync(path.join(OUTPUT, 'cache', 'mtime-index.json')); } catch { /* ignore */ }
+      console.warn('oh-my-hi: SQLite write failed — mtime cache cleared, will retry on next run');
+    }
     const dbCtxNames = getDbCtxNames();
     const phase2Data = buildDataObject(scopes, phase2ScopeData, systemLocale, dbCtxNames, { _firstRun: true, _dateRange: getDbDateRange(), modelPricing, pricingFetchedAt });
     writeDataJs(phase2Data, dataPath);
@@ -681,6 +689,17 @@ async function main() {
 
     // Incremental usage: parse only new/changed transcript files, append to monthly SQLite
     if (dbModule) {
+      // Pre-flight integrity check: detect stale mtime-index (transcripts "cached" but
+      // SQLite empty — happens when native bindings were broken on first run).
+      // Auto-recover by clearing the stale index + empty DBs so re-parse runs now.
+      const recovered = dbModule.recoverIfCorrupt(OUTPUT, path.join(OUTPUT, 'cache', 'mtime-index.json'));
+      if (recovered.recovered) {
+        console.warn(
+          `oh-my-hi: DB integrity issue detected — ${recovered.cachedCount} transcript(s) in mtime-index but DB empty.` +
+          '\n  Clearing stale cache and rebuilding from scratch...'
+        );
+      }
+
       const mtimeIndex = loadMtimeIndex(CACHE_PATH);
       const stubCache = Object.fromEntries(Object.entries(mtimeIndex).map(([fp, mtimeMs]) => [fp, { mtimeMs, size: 0, result: null }]));
       stubCache._parsed = 0;
@@ -716,12 +735,18 @@ async function main() {
             }
           }
         }
+        let dbWriteOk = true;
         for (const [scopeId, usage] of Object.entries(newByScope)) {
           if (usage.tokenEntries.length > 0 || usage.skills.length > 0) {
-            appendToMonthly(scopeId, usage);
+            if (!appendToMonthly(scopeId, usage)) dbWriteOk = false;
           }
         }
-        saveMtimeIndex(CACHE_PATH, stubCache);
+        // Only cache mtime if SQLite write succeeded — failed writes must be retried next run
+        if (dbWriteOk) {
+          saveMtimeIndex(CACHE_PATH, stubCache);
+        } else {
+          console.warn('oh-my-hi: SQLite write failed — skipping mtime cache so next run retries');
+        }
         console.log(`  transcripts: ${stubCache._parsed} new file(s) parsed`);
       }
     }

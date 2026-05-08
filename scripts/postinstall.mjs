@@ -47,3 +47,23 @@ if (probe.status !== 0) {
     console.warn('oh-my-hi: rebuild failed — monthly usage data will be unavailable:', rebuildErr.message);
   }
 }
+
+// ── esbuild: reinstall platform binary if missing (optional dep skipped) ─────
+const esbuildProbe = spawnSync(process.execPath, ['-e', "require('esbuild')"], {
+  cwd: ROOT,
+  encoding: 'utf8',
+  env: { ...process.env, NODE_PATH: resolve(ROOT, 'node_modules') },
+});
+if (esbuildProbe.status !== 0) {
+  console.warn('oh-my-hi: esbuild binary missing — reinstalling with optional deps…');
+  try {
+    execFileSync('npm', ['install', 'esbuild', '--include=optional'], {
+      cwd: ROOT,
+      stdio: 'inherit',
+      shell: process.platform === 'win32',
+    });
+    console.log('oh-my-hi: esbuild reinstall complete');
+  } catch (esbuildErr) {
+    console.warn('oh-my-hi: esbuild reinstall failed — CSS/JS minification unavailable:', esbuildErr.message);
+  }
+}

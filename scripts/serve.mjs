@@ -385,7 +385,9 @@ function listen(startPort = PREFERRED_PORT, { open = false } = {}) {
 }
 
 // Invoked directly: node scripts/serve.mjs [--open]
-if (import.meta.url === `file://${process.argv[1]}`) {
+// Compare via __filename (fileURLToPath) — import.meta.url percent-encodes spaces
+// (e.g. "Mobile%20Documents") while process.argv[1] keeps the raw path.
+if (__filename === path.resolve(process.argv[1])) {
   listen(PREFERRED_PORT, { open: process.argv.includes('--open') });
 }
 

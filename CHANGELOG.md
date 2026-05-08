@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.11.8] - 2026-05-08
+
+### Fixed
+- **`serve.mjs`: server never starts on paths with spaces** — `import.meta.url` percent-encodes spaces (e.g. `Mobile%20Documents`) while `process.argv[1]` keeps the raw path, causing the direct-invocation guard to always fail. Fixed by comparing `__filename` (`fileURLToPath` result) against `path.resolve(process.argv[1])`. Affected any user whose Claude config directory contains spaces (e.g. macOS iCloud Drive).
+- **`postinstall.mjs`: esbuild platform binary missing after install** — `@esbuild/darwin-arm64` and equivalent platform packages are optional dependencies that can be skipped. Added a load probe + `npm install esbuild --include=optional` recovery, matching the existing `better-sqlite3` pattern.
+- **mtime-index poisoning on SQLite write failure** — if `appendUsageMonthly` threw (broken native bindings, ABI mismatch, etc.), transcripts were still marked as processed in `mtime-index.json`. Subsequent runs skipped re-parsing, leaving the DB permanently empty while the cache claimed all data was present. Fixed in two ways: (1) `saveMtimeIndex` is now skipped when any SQLite write fails; (2) a pre-flight `recoverIfCorrupt` check at Normal-mode entry detects stale mtime-index (≥50 cached entries, 0 DB rows), auto-deletes the index and empty DB files, and triggers a full re-parse in the same run.
+
+### Added
+- **`db.mjs`: `countDbRows(outputDir)`** — counts total `token_entries` rows across all monthly DBs; used by the integrity check.
+- **`db.mjs`: `recoverIfCorrupt(outputDir, mtimeIndexPath)`** — detects and auto-recovers stale mtime-index / empty DB state. Returns `{ recovered, cachedCount, dbRows }` for testability.
+- **Tests**: `countDbRows` (3 cases) and `recoverIfCorrupt` (5 cases) unit tests in `test/db.test.mjs`.
+
 ## [0.11.7] - 2026-05-08
 
 ### Fixed

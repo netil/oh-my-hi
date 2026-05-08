@@ -693,3 +693,55 @@ export function queryDateRange(db) {
   const row = db.prepare('SELECT MIN(timestamp) AS earliest, MAX(timestamp) AS latest FROM token_entries').get();
   return row?.earliest != null ? { earliest: row.earliest, latest: row.latest } : null;
 }
+
+/**
+ * Count total token_entries rows across all monthly DBs in outputDir.
+ * Returns 0 if no DBs exist or all are empty. Never throws.
+ */
+export function countDbRows(outputDir) {
+  try {
+    const dbs = listMonthlyDbs(outputDir);
+    let total = 0;
+    for (const { path: p } of dbs) {
+      try {
+        const db = openDb(p);
+        const r = db.prepare('SELECT COUNT(*) as n FROM token_entries').get();
+        total += r?.n ?? 0;
+        db.close();
+      } catch { /* skip unreadable DB */ }
+    }
+    return total;
+  } catch { return 0; }
+}
+
+/**
+ * Detect and auto-recover stale mtime-index: if mtime-index has ≥50 entries
+ * but the DB is empty, a previous run cached transcripts without writing to
+ * SQLite (e.g. broken native bindings). Deletes the mtime-index and empty DBs
+ * so the next loadMtimeIndex call returns empty, triggering a full re-parse.
+ *
+ * @param {string} outputDir  - e.g. path.join(ROOT, 'output')
+ * @param {string} mtimeIndexPath - absolute path to mtime-index.json
+ * @param {number} [threshold=50] - minimum cached count before check fires
+ * @returns {{ recovered: boolean, cachedCount: number, dbRows: number }}
+ */
+export function recoverIfCorrupt(outputDir, mtimeIndexPath, threshold = 50) {
+  try {
+    if (!fs.existsSync(mtimeIndexPath)) return { recovered: false, cachedCount: 0, dbRows: 0 };
+
+    let index;
+    try { index = JSON.parse(fs.readFileSync(mtimeIndexPath, 'utf8')); } catch { return { recovered: false, cachedCount: 0, dbRows: 0 }; }
+    const cachedCount = Object.keys(index).filter(k => !k.startsWith('_')).length;
+    if (cachedCount < threshold) return { recovered: false, cachedCount, dbRows: -1 };
+
+    const dbRows = countDbRows(outputDir);
+    if (dbRows > 0) return { recovered: false, cachedCount, dbRows };
+
+    // Corruption confirmed: delete stale mtime-index and empty monthly DBs
+    try { fs.unlinkSync(mtimeIndexPath); } catch { /* ignore */ }
+    for (const { path: p } of listMonthlyDbs(outputDir)) {
+      try { fs.unlinkSync(p); } catch { /* ignore */ }
+    }
+    return { recovered: true, cachedCount, dbRows: 0 };
+  } catch { return { recovered: false, cachedCount: 0, dbRows: 0 }; }
+}

@@ -15,6 +15,8 @@ import {
   appendUsageMonthly,
   getMonthlyDbPath,
   splitLegacyDb,
+  countDbRows,
+  recoverIfCorrupt,
 } from '../scripts/db.mjs';
 
 function freshDb() {
@@ -608,5 +610,117 @@ describe('splitLegacyDb — legacy migration', () => {
       legacy.close();
       cleanDir(out);
     }
+  });
+});
+
+// ── DB Integrity Checks ──────────────────────────────────────────────────────
+
+describe('countDbRows', () => {
+  it('returns 0 when no monthly DBs exist', () => {
+    const out = tempDir();
+    try {
+      assert.equal(countDbRows(out), 0);
+    } finally { cleanDir(out); }
+  });
+
+  it('returns 0 for empty monthly DB', () => {
+    const out = tempDir();
+    try {
+      appendUsageMonthly(out, 'global', {
+        tokenEntries: [], promptStats: [], skills: [], agents: [], mcpCalls: [], latencyEntries: [],
+      });
+      assert.equal(countDbRows(out), 0);
+    } finally { cleanDir(out); }
+  });
+
+  it('counts rows across monthly DBs', () => {
+    const out = tempDir();
+    try {
+      const entry = (ts) => ({ sessionId: 's1', timestamp: ts, model: 'claude-sonnet-4-6',
+        inputTokens: 100, outputTokens: 10, cacheReadTokens: 0, cacheWriteTokens: 0 });
+      // Two entries in different months
+      appendUsageMonthly(out, 'global', { tokenEntries: [entry(new Date('2026-04-01').getTime())], promptStats: [], skills: [], agents: [], mcpCalls: [], latencyEntries: [] });
+      appendUsageMonthly(out, 'global', { tokenEntries: [entry(new Date('2026-05-01').getTime())], promptStats: [], skills: [], agents: [], mcpCalls: [], latencyEntries: [] });
+      assert.equal(countDbRows(out), 2);
+    } finally { cleanDir(out); }
+  });
+});
+
+describe('recoverIfCorrupt', () => {
+  function fakeMtimeIndex(mtimeIndexPath, count) {
+    fs.mkdirSync(path.dirname(mtimeIndexPath), { recursive: true });
+    const index = { _base: '/fake', _schemaVersion: 2 };
+    for (let i = 0; i < count; i++) index[`file${i}.jsonl`] = Date.now();
+    fs.writeFileSync(mtimeIndexPath, JSON.stringify(index), 'utf8');
+  }
+
+  it('returns recovered=false when mtime-index does not exist', () => {
+    const out = tempDir();
+    const mtimePath = path.join(out, 'cache', 'mtime-index.json');
+    try {
+      const r = recoverIfCorrupt(out, mtimePath);
+      assert.equal(r.recovered, false);
+    } finally { cleanDir(out); }
+  });
+
+  it('returns recovered=false when cached count is below threshold', () => {
+    const out = tempDir();
+    const mtimePath = path.join(out, 'cache', 'mtime-index.json');
+    try {
+      fakeMtimeIndex(mtimePath, 10); // below default threshold of 50
+      const r = recoverIfCorrupt(out, mtimePath);
+      assert.equal(r.recovered, false);
+      assert.ok(fs.existsSync(mtimePath), 'should not delete mtime-index below threshold');
+    } finally { cleanDir(out); }
+  });
+
+  it('returns recovered=false when DB has rows (healthy state)', () => {
+    const out = tempDir();
+    const mtimePath = path.join(out, 'cache', 'mtime-index.json');
+    try {
+      fakeMtimeIndex(mtimePath, 60);
+      const entry = { sessionId: 's1', timestamp: Date.now(), model: 'claude-sonnet-4-6',
+        inputTokens: 100, outputTokens: 10, cacheReadTokens: 0, cacheWriteTokens: 0 };
+      appendUsageMonthly(out, 'global', { tokenEntries: [entry], promptStats: [], skills: [], agents: [], mcpCalls: [], latencyEntries: [] });
+      const r = recoverIfCorrupt(out, mtimePath);
+      assert.equal(r.recovered, false);
+      assert.ok(fs.existsSync(mtimePath), 'should not delete mtime-index when DB is healthy');
+    } finally { cleanDir(out); }
+  });
+
+  it('detects and recovers corruption: mtime-index populated but DB empty', () => {
+    const out = tempDir();
+    const mtimePath = path.join(out, 'cache', 'mtime-index.json');
+    try {
+      // Simulate: 60 transcripts "processed" in mtime-index but DB has 0 rows
+      fakeMtimeIndex(mtimePath, 60);
+      // Create an empty monthly DB (schema only, no data)
+      appendUsageMonthly(out, 'global', { tokenEntries: [], promptStats: [], skills: [], agents: [], mcpCalls: [], latencyEntries: [] });
+      assert.equal(countDbRows(out), 0, 'DB should be empty before recovery');
+
+      const r = recoverIfCorrupt(out, mtimePath);
+      assert.equal(r.recovered, true, 'should detect corruption');
+      assert.equal(r.cachedCount, 60);
+      assert.equal(r.dbRows, 0);
+      assert.ok(!fs.existsSync(mtimePath), 'mtime-index should be deleted after recovery');
+    } finally { cleanDir(out); }
+  });
+
+  it('deletes empty monthly DB files on recovery', () => {
+    const out = tempDir();
+    const mtimePath = path.join(out, 'cache', 'mtime-index.json');
+    try {
+      fakeMtimeIndex(mtimePath, 60);
+      // Create an empty monthly DB (schema-only, 0 rows) by opening it directly
+      const dbPath = getMonthlyDbPath(out, 2026, 5);
+      fs.mkdirSync(path.dirname(dbPath), { recursive: true });
+      const emptyDb = openDb(dbPath);
+      emptyDb.close();
+      assert.ok(fs.existsSync(dbPath), 'DB file should exist before recovery');
+
+      recoverIfCorrupt(out, mtimePath);
+      assert.ok(!fs.existsSync(dbPath), 'DB file should be deleted after recovery');
+      assert.ok(!fs.existsSync(mtimePath), 'mtime-index should be deleted after recovery');
+    } finally { cleanDir(out); }
   });
 });
