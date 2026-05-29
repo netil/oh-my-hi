@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.11.11] - 2026-05-29
+
+### Fixed
+- **`--enable-auto` Stop hook was not seamless** — the hook ran `--data-only` inline, blocking session end and printing output to the terminal. Now uses `--_auto-refresh` which immediately spawns a detached background process (stdout/stderr → `output/auto-refresh.log`) and exits, making session end completely transparent to the user.
+
 ## [0.11.10] - 2026-05-29
 
 ### Fixed

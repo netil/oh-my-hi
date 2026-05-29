@@ -132,7 +132,10 @@ describe('Plugin — Parameter Behavior', () => {
       const settings = JSON.parse(fs.readFileSync(settingsPath, 'utf-8'));
       const stopHooks = settings.hooks?.Stop || [];
       const hasHook = stopHooks.some(entry =>
-        entry.hooks?.some(h => h.command?.includes('oh-my-hi') && h.command?.includes('--data-only'))
+        entry.hooks?.some(h =>
+          h.command?.includes('oh-my-hi') &&
+          (h.command?.includes('--_auto-refresh') || h.command?.includes('--data-only'))
+        )
       );
       assert.ok(hasHook, 'Stop hook should be registered');
     }

@@ -390,7 +390,9 @@ async function runUpdate() {
 
 // ── Auto-refresh hook management ──
 const SETTINGS_PATH = path.join(CLAUDE_CONFIG_DIR, 'settings.json');
-const AUTO_HOOK_CMD = `node "${path.join(ROOT, 'scripts', 'generate-dashboard.mjs')}" --data-only`;
+// Stop hook runs --_auto-refresh which immediately spawns a detached child and exits.
+// The detached child does the actual --data-only work silently in the background.
+const AUTO_HOOK_CMD = `node "${path.join(ROOT, 'scripts', 'generate-dashboard.mjs')}" --_auto-refresh`;
 
 /** Returns true if version a is greater than version b (semver, numeric comparison) */
 function semverGt(a, b) {
@@ -416,7 +418,10 @@ function hasAutoHook(settings) {
   const stopHooks = settings.hooks?.Stop;
   if (!Array.isArray(stopHooks)) return false;
   return stopHooks.some(entry =>
-    entry.hooks?.some(h => h.command?.includes('oh-my-hi') && h.command?.includes('--data-only'))
+    entry.hooks?.some(h =>
+      h.command?.includes('oh-my-hi') &&
+      (h.command?.includes('--_auto-refresh') || h.command?.includes('--data-only'))
+    )
   );
 }
 
@@ -444,7 +449,10 @@ function removeAutoHook() {
   }
   if (settings.hooks?.Stop) {
     settings.hooks.Stop = settings.hooks.Stop.filter(entry =>
-      !entry.hooks?.some(h => h.command?.includes('oh-my-hi') && h.command?.includes('--data-only'))
+      !entry.hooks?.some(h =>
+        h.command?.includes('oh-my-hi') &&
+        (h.command?.includes('--_auto-refresh') || h.command?.includes('--data-only'))
+      )
     );
     if (settings.hooks.Stop.length === 0) delete settings.hooks.Stop;
     if (Object.keys(settings.hooks).length === 0) delete settings.hooks;
@@ -467,6 +475,21 @@ function showStatus() {
 if (args.includes('--enable-auto')) { addAutoHook(); process.exit(0); }
 if (args.includes('--disable-auto')) { removeAutoHook(); process.exit(0); }
 if (args.includes('--status')) { showStatus(); process.exit(0); }
+
+// Stop hook entry point: spawn a detached background child and exit immediately.
+// This keeps the session-end seamless — no terminal output, no blocking.
+if (args.includes('--_auto-refresh')) {
+  const logFile = path.join(OUTPUT, 'auto-refresh.log');
+  fs.mkdirSync(path.dirname(logFile), { recursive: true });
+  const out = fs.openSync(logFile, 'a');
+  const child = spawn(process.execPath, [__filename, '--data-only'], {
+    detached: true,
+    stdio: ['ignore', out, out],
+    env: { ...process.env },
+  });
+  child.unref();
+  process.exit(0);
+}
 
 const extraPaths = args.filter(a => !a.startsWith('-'));
 

@@ -10,7 +10,7 @@
     {
       "name": "oh-my-hi",
       "description": "Oh, so that's what Claude's been doing! \u2014 Visual dashboard for Claude Code harness. Usage/token analysis of skills, agents, plugins, hooks, memory, MCP servers, rules, and principles.",
-      "version": "0.11.10",
+      "version": "0.11.11",
       "author": {
         "name": "Jae Sung Park",
         "email": "alberto.park@gmail.com"
