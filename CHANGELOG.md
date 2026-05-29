@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.11.10] - 2026-05-29
+
+### Fixed
+- **`db.mjs`: `appendUsageMonthly` silently swallowed errors** — exceptions from `openDb` (e.g. native ABI mismatch) were caught and logged internally but never re-thrown, so callers always received a successful return value. This prevented `appendToMonthly` from detecting write failures and caused `mtime-index.json` to be saved even when no data reached the DB. Fixed by re-throwing after logging.
+- **`db.mjs`: orphaned WAL/SHM files not cleaned up** — `listMonthlyDbs` now removes `*.sqlite-wal` and `*.sqlite-shm` files that have no corresponding main `.sqlite` file. These orphaned files accumulate when a DB open fails mid-write, cluttering the `db/` directory and confusing integrity checks.
+
+### Added
+- **Tests**: `appendUsageMonthly — error propagation` (1 case) and `listMonthlyDbs — orphaned WAL/SHM cleanup` (2 cases) in `test/db.test.mjs`.
+
 ## [0.11.9] - 2026-05-08
 
 ### Fixed

@@ -14,6 +14,7 @@ import {
   queryUsageMultiDb,
   appendUsageMonthly,
   getMonthlyDbPath,
+  listMonthlyDbs,
   splitLegacyDb,
   countDbRows,
   recoverIfCorrupt,
@@ -721,6 +722,76 @@ describe('recoverIfCorrupt', () => {
       recoverIfCorrupt(out, mtimePath);
       assert.ok(!fs.existsSync(dbPath), 'DB file should be deleted after recovery');
       assert.ok(!fs.existsSync(mtimePath), 'mtime-index should be deleted after recovery');
+    } finally { cleanDir(out); }
+  });
+});
+
+// ── appendUsageMonthly — error propagation ────────────────────────────────────
+
+describe('appendUsageMonthly — error propagation', () => {
+  it('throws when openDb fails (error is not swallowed)', () => {
+    const out = tempDir();
+    try {
+      const dbPath = getMonthlyDbPath(out, 2026, 1);
+      fs.mkdirSync(path.dirname(dbPath), { recursive: true });
+      // Write a non-SQLite file at the DB path so openDb throws
+      fs.writeFileSync(dbPath, 'not a sqlite file');
+      const entry = {
+        sessionId: 's1', timestamp: Date.UTC(2026, 0, 15), model: 'm',
+        inputTokens: 1, outputTokens: 1, cacheRead: 0, cacheCreation: 0, rawInput: 0,
+      };
+      assert.throws(
+        () => appendUsageMonthly(out, 'global', { tokenEntries: [entry] }),
+        (e) => e instanceof Error,
+        'appendUsageMonthly must throw on DB open failure'
+      );
+    } finally { cleanDir(out); }
+  });
+});
+
+// ── listMonthlyDbs — orphaned WAL/SHM cleanup ────────────────────────────────
+
+describe('listMonthlyDbs — orphaned WAL/SHM cleanup', () => {
+  it('removes orphaned WAL file that has no corresponding .sqlite', () => {
+    const out = tempDir();
+    try {
+      const dbDir = path.join(out, 'db', '2026');
+      fs.mkdirSync(dbDir, { recursive: true });
+      // Create orphaned WAL/SHM (no main .sqlite)
+      const orphanWal = path.join(dbDir, '2026-02.sqlite-wal');
+      const orphanShm = path.join(dbDir, '2026-02.sqlite-shm');
+      fs.writeFileSync(orphanWal, '');
+      fs.writeFileSync(orphanShm, '');
+      // Create a valid monthly DB
+      const validDb = openDb(path.join(dbDir, '2026-03.sqlite'));
+      validDb.close();
+
+      const dbs = listMonthlyDbs(out);
+      assert.equal(dbs.length, 1, 'only the valid DB is listed');
+      assert.equal(dbs[0].month, 3, 'listed DB is 2026-03');
+      assert.ok(!fs.existsSync(orphanWal), 'orphaned WAL should be deleted');
+      assert.ok(!fs.existsSync(orphanShm), 'orphaned SHM should be deleted');
+    } finally { cleanDir(out); }
+  });
+
+  it('does not remove WAL/SHM that belongs to an existing .sqlite', () => {
+    const out = tempDir();
+    try {
+      const dbDir = path.join(out, 'db', '2026');
+      fs.mkdirSync(dbDir, { recursive: true });
+      const mainPath = path.join(dbDir, '2026-04.sqlite');
+      const walPath = path.join(dbDir, '2026-04.sqlite-wal');
+      const shmPath = path.join(dbDir, '2026-04.sqlite-shm');
+      // Create a real DB (WAL mode creates -wal/-shm automatically on write)
+      const db = openDb(mainPath);
+      db.close();
+      // Manually create companion files to simulate WAL mode
+      fs.writeFileSync(walPath, '');
+      fs.writeFileSync(shmPath, '');
+
+      listMonthlyDbs(out);
+      assert.ok(fs.existsSync(walPath), 'WAL belonging to existing .sqlite must be preserved');
+      assert.ok(fs.existsSync(shmPath), 'SHM belonging to existing .sqlite must be preserved');
     } finally { cleanDir(out); }
   });
 });

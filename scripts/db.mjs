@@ -201,7 +201,16 @@ export function listMonthlyDbs(outputDir) {
     if (!/^\d{4}$/.test(yearStr)) continue;
     const yearPath = path.join(dbDir, yearStr);
     if (!fs.statSync(yearPath).isDirectory()) continue;
-    for (const file of fs.readdirSync(yearPath).sort()) {
+    const files = fs.readdirSync(yearPath);
+    const mainFiles = new Set(files.filter(f => /^(\d{4})-(\d{2})\.sqlite$/.test(f)));
+    // Clean up orphaned WAL/SHM files that have no corresponding main .sqlite
+    for (const file of files) {
+      const m = file.match(/^((\d{4})-(\d{2})\.sqlite)-(wal|shm)$/);
+      if (m && !mainFiles.has(m[1])) {
+        try { fs.unlinkSync(path.join(yearPath, file)); } catch { /* ignore */ }
+      }
+    }
+    for (const file of files.sort()) {
       const m = file.match(/^(\d{4})-(\d{2})\.sqlite$/);
       if (!m) continue;
       results.push({
@@ -305,6 +314,7 @@ export function appendUsageMonthly(outputDir, scope, usage) {
       appendUsage(db, scope, monthUsage);
     } catch (e) {
       console.warn(`appendUsageMonthly: failed for ${key} —`, e.message);
+      throw e;
     } finally {
       try { db?.close(); } catch { /* ignore */ }
     }
