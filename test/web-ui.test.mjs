@@ -103,6 +103,18 @@ describe('Web UI — Templates', () => {
       assert.ok(js.includes('function bindBudgetActions'));
     });
 
+    it('should have budget threshold alert banner', () => {
+      assert.ok(js.includes('function renderBudgetAlertBanner'), 'banner render function');
+      assert.ok(js.includes('function computeBudgetAlerts'), 'alert computation function');
+      assert.ok(js.includes("'harness-budget-alert-dismissed'"), 'dismissal localStorage key');
+      assert.ok(js.includes('budget-alert-dismiss'), 'dismiss button class');
+    });
+
+    it('should have weekly digest card on overview', () => {
+      assert.ok(js.includes('function renderWeeklyDigestCard'), 'digest render function');
+      assert.ok(js.includes('DATA.weeklyDigest'), 'reads build-time digest from DATA');
+    });
+
     it('should have cache tips feature', () => {
       assert.ok(js.includes('function buildCacheTips'));
     });
@@ -687,6 +699,8 @@ describe('Web UI — Templates', () => {
         'tokensCost', 'tokensPrompt', 'tokensSession',
         'costTrend', 'budgetTitle', 'budgetDaily', 'budgetWeekly', 'budgetMonthly',
         'budgetSave', 'budgetClear', 'budgetExceeded', 'budgetExceededDetail', 'budgetDesc',
+        'budgetAlertWarnTitle', 'budgetAlertOverTitle', 'budgetAlertLine', 'budgetAlertDismiss',
+        'digestTitle', 'digestDesc', 'digestCost', 'digestTokens', 'digestSessions', 'digestPrevWeek', 'digestVsPrev',
         'sessionDetail', 'sessionBackToSession', 'sessionDuration', 'sessionMessages',
         'sessionModels', 'sessionInvoked', 'sessionTimeline', 'sessionTopList', 'sessionTopListHint',
         'compareToggle', 'comparePrev',
