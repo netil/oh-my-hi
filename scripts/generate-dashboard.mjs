@@ -47,6 +47,7 @@ import { parseTodos } from './parsers/todos.mjs';
 import { parseConfigFiles } from './parsers/config-files.mjs';
 import { parseUsage, savePending, mergePending, hasPending, loadMtimeIndex, saveMtimeIndex, scanTranscriptMonths } from './parsers/usage.mjs';
 import { detectScopes } from './parsers/scopes.mjs';
+import { computeWeeklyDigestsFromDb } from './digest.mjs';
 import { toMonthKey } from './util.mjs';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -719,6 +720,12 @@ async function main() {
       try {
         const existingData = JSON.parse(fs.readFileSync(dataPath, 'utf-8'));
         existingData.generatedAt = new Date().toISOString();
+        // Refresh the weekly digest (cheap: 14-day SQLite query per scope)
+        if (dbModule) {
+          const digestScopes = Object.keys(existingData.scopeData || { global: true });
+          const digest = computeWeeklyDigestsFromDb(dbModule, OUTPUT, digestScopes, existingData.modelPricing || null);
+          if (Object.keys(digest).length > 0) existingData.weeklyDigest = digest;
+        }
         if (!existingData.pricingFetchedAt && fs.existsSync(PRICING_CACHE_FILE)) {
           try {
             const pc = JSON.parse(fs.readFileSync(PRICING_CACHE_FILE, 'utf-8'));
@@ -804,7 +811,8 @@ async function main() {
       try { fs.unlinkSync(path.join(OUTPUT, 'cache', 'mtime-index.json')); } catch { /* ignore */ }
     }
     const dbCtxNames = getDbCtxNames();
-    const phase2Data = buildDataObject(scopes, phase2ScopeData, systemLocale, dbCtxNames, { _firstRun: true, _dateRange: getDbDateRange(), modelPricing, pricingFetchedAt });
+    const weeklyDigest = computeWeeklyDigestsFromDb(dbModule, OUTPUT, scopes.map(s => s.id), modelPricing);
+    const phase2Data = buildDataObject(scopes, phase2ScopeData, systemLocale, dbCtxNames, { _firstRun: true, _dateRange: getDbDateRange(), modelPricing, pricingFetchedAt, weeklyDigest });
     writeDataJs(phase2Data, dataPath);
   } else {
     // Normal mode: structure scan + incremental SQLite update
@@ -908,7 +916,8 @@ async function main() {
     }
 
     const dbCtxNames = getDbCtxNames();
-    const data = buildDataObject(scopes, scopeData, systemLocale, dbCtxNames, { _dateRange: getDbDateRange(), modelPricing, pricingFetchedAt });
+    const weeklyDigest = computeWeeklyDigestsFromDb(dbModule, OUTPUT, scopes.map(s => s.id), modelPricing);
+    const data = buildDataObject(scopes, scopeData, systemLocale, dbCtxNames, { _dateRange: getDbDateRange(), modelPricing, pricingFetchedAt, weeklyDigest });
     writeDataJs(data, dataPath);
 
     if (!needsMigration && !process.env.CI) {

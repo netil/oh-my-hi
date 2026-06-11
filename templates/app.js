@@ -1124,6 +1124,9 @@ window.name = 'oh-my-hi';
     } else {
       renderCategoryOverview();
     }
+
+    // Budget threshold alert — prepended to whatever page was just rendered
+    renderBudgetAlertBanner();
   }
 
   // ── Period filter with calendar ──
@@ -2769,6 +2772,100 @@ window.name = 'oh-my-hi';
     }
   }
 
+  // ── Budget threshold alert banner ──
+  // Shown at the top of the content area on every page when spend reaches 80%
+  // (warning) or 100% (error) of a configured budget. Dismissals persist per
+  // period+threshold in localStorage, so a new day/week/month or crossing a
+  // higher threshold shows the banner again.
+  const BUDGET_ALERT_DISMISS_KEY = 'harness-budget-alert-dismissed';
+
+  function getBudgetAlertDismissals() {
+    try { return JSON.parse(localStorage.getItem(BUDGET_ALERT_DISMISS_KEY) || '{}') || {}; }
+    catch (e) { return {}; }
+  }
+
+  // Returns [{ type, labelKey, spent, budget, pct, threshold, dismissKey }]
+  // for every configured budget at >= 80% spend. Spend windows mirror
+  // renderBudgetSection: daily = today, weekly = last 7 days, monthly = last 30.
+  function computeBudgetAlerts() {
+    if (!tokenBudget) return [];
+    const entries = getUsage().tokenEntries || [];
+    if (entries.length === 0) return [];
+    const costDailyMap = {};
+    entries.forEach((e) => {
+      const dk = new Date(e.timestamp).toISOString().substring(0, 10);
+      costDailyMap[dk] = (costDailyMap[dk] || 0) + calcEntryCost(e);
+    });
+    const sumLastDays = (n) => {
+      let s = 0;
+      for (let i = 0; i < n; i++) {
+        const d = new Date(); d.setDate(d.getDate() - i);
+        s += costDailyMap[d.toISOString().substring(0, 10)] || 0;
+      }
+      return s;
+    };
+    const today = new Date().toISOString().substring(0, 10);
+    // Dismissal period keys: calendar day / week (Monday) / month — a new
+    // period produces a new key, which un-hides the banner.
+    const wd = new Date();
+    const dow = wd.getDay();
+    wd.setDate(wd.getDate() + (dow === 0 ? -6 : 1 - dow));
+    const weekKey = wd.toISOString().substring(0, 10);
+    const monthKey = today.substring(0, 7);
+    const defs = [
+      { type: 'daily', labelKey: 'budgetDaily', spent: costDailyMap[today] || 0, budget: tokenBudget.daily, periodKey: today },
+      { type: 'weekly', labelKey: 'budgetWeekly', spent: sumLastDays(7), budget: tokenBudget.weekly, periodKey: weekKey },
+      { type: 'monthly', labelKey: 'budgetMonthly', spent: sumLastDays(30), budget: tokenBudget.monthly, periodKey: monthKey },
+    ];
+    const alerts = [];
+    defs.forEach((d) => {
+      if (!d.budget) return;
+      const pct = (d.spent / d.budget) * 100;
+      if (pct < 80) return;
+      const threshold = pct >= 100 ? 100 : 80;
+      alerts.push({
+        type: d.type, labelKey: d.labelKey, spent: d.spent, budget: d.budget,
+        pct: Math.round(pct), threshold,
+        dismissKey: d.type + ':' + d.periodKey + ':' + threshold,
+      });
+    });
+    return alerts;
+  }
+
+  function renderBudgetAlertBanner() {
+    const old = document.getElementById('budget-alert-banner');
+    if (old) old.remove();
+    const dismissed = getBudgetAlertDismissals();
+    const allAlerts = computeBudgetAlerts();
+    const alerts = allAlerts.filter((a) => !dismissed[a.dismissKey]);
+    if (alerts.length === 0) return;
+    const severe = alerts.some((a) => a.threshold >= 100);
+    const banner = document.createElement('div');
+    banner.id = 'budget-alert-banner';
+    banner.className = 'budget-alert-banner ' + (severe ? 'error' : 'warning');
+    const linesHtml = alerts.map((a) =>
+      '<span class="budget-alert-line">' + t('budgetAlertLine', t(a.labelKey), fmtCost(a.spent), fmtCost(a.budget), fmtCompact(a.pct)) + '</span>'
+    ).join('');
+    banner.innerHTML = '<span class="budget-alert-icon">' + (severe ? '🚨' : '⚠️') + '</span>'
+      + '<div class="budget-alert-body">'
+      + '<span class="budget-alert-title">' + (severe ? t('budgetAlertOverTitle') : t('budgetAlertWarnTitle')) + '</span>'
+      + '<span class="budget-alert-lines">' + linesHtml + '</span>'
+      + '</div>'
+      + '<button class="budget-alert-dismiss" title="' + escapeHtml(t('budgetAlertDismiss')) + '">✕</button>';
+    banner.querySelector('.budget-alert-dismiss').addEventListener('click', () => {
+      const prev = getBudgetAlertDismissals();
+      // Keep only keys still relevant to the current periods (auto-prune),
+      // then add every alert shown in this banner.
+      const currentKeys = allAlerts.map((a) => a.dismissKey);
+      const next = {};
+      Object.keys(prev).forEach((k) => { if (currentKeys.indexOf(k) !== -1) next[k] = true; });
+      alerts.forEach((a) => { next[a.dismissKey] = true; });
+      localStorage.setItem(BUDGET_ALERT_DISMISS_KEY, JSON.stringify(next));
+      banner.remove();
+    });
+    content.insertBefore(banner, content.firstChild);
+  }
+
   function drawCostTrendCharts(costDailyMap, days) {
     const keys = Object.keys(costDailyMap).sort();
     const noData = '<div style="text-align:center;color:#6c757d;padding:20px 0;font-size:13px">' + t('noUsageData') + '</div>';
@@ -3238,6 +3335,40 @@ window.name = 'oh-my-hi';
   }
 
   // ── Overview page ──
+  // ── Weekly digest (Overview) ──
+  // Build-time summary (DATA.weeklyDigest, per scope): last 7 days' cost /
+  // tokens / sessions with % deltas vs the previous 7 days.
+  function renderWeeklyDigestCard() {
+    const digest = DATA.weeklyDigest && DATA.weeklyDigest[currentScope];
+    if (!digest || !digest.current) return '';
+    const cur = digest.current;
+    const prev = digest.previous || {};
+    const delta = digest.delta || {};
+    const deltaBadge = (d) => {
+      if (d === null || d === undefined) return '<span class="digest-delta flat">—</span>';
+      const cls = d > 0 ? 'up' : d < 0 ? 'down' : 'flat';
+      const arrow = d > 0 ? '▲' : d < 0 ? '▼' : '◆';
+      const prefix = d > 0 ? '+' : '';
+      return '<span class="digest-delta ' + cls + '" title="' + escapeHtml(t('digestVsPrev')) + '">'
+        + arrow + ' ' + prefix + fmtCompact(d) + '%</span>';
+    };
+    const metric = (label, valueHtml, d, prevHtml) =>
+      '<div class="digest-metric">'
+      + '<div class="digest-metric-label">' + label + '</div>'
+      + '<div class="digest-metric-value">' + valueHtml + '</div>'
+      + '<div class="digest-metric-sub">' + deltaBadge(d)
+      + ' <span class="digest-prev">' + t('digestPrevWeek', prevHtml) + '</span></div>'
+      + '</div>';
+    return '<div class="section">'
+      + '<div class="section-title">' + t('digestTitle')
+      + ' <span class="section-title-sub">' + t('digestDesc') + '</span></div>'
+      + '<div class="card digest-card">'
+      + metric(t('digestCost'), fmtCost(cur.cost || 0), delta.cost, fmtCost(prev.cost || 0))
+      + metric(t('digestTokens'), fmtCompact(cur.tokens || 0), delta.tokens, fmtCompact(prev.tokens || 0))
+      + metric(t('digestSessions'), fmtNum(cur.sessions || 0), delta.sessions, fmtNum(prev.sessions || 0))
+      + '</div></div>';
+  }
+
   function renderOverview() {
     let scope = DATA.scopes.find((s) => { return s.id === currentScope; });
     const scopePath = scope ? (scope.projectPath || scope.configPath || currentScope) : currentScope;
@@ -3314,6 +3445,9 @@ window.name = 'oh-my-hi';
       +   healthHtml
       +   usageBarHtml
       + '</div>';
+
+    // Weekly digest (build-time, last 7 days vs previous 7)
+    html += renderWeeklyDigestCard();
 
     // Category distribution + Daily trend chart
     html += '<div class="chart-row">'

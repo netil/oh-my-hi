@@ -2478,6 +2478,118 @@ body.dark .bb-tooltip .value {
 }
 .budget-projection-diff.over { color: #e74c3c; font-weight: 600; }
 .budget-projection-diff.under { color: #27ae60; font-weight: 600; }
+
+/* ── Budget threshold alert banner ── */
+.budget-alert-banner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  margin-bottom: 16px;
+  border-radius: var(--radius);
+  border: 1px solid;
+  font-size: 13px;
+}
+.budget-alert-banner.warning {
+  background: #fff4e6;
+  border-color: #ffd8a8;
+  color: #9c4912;
+}
+.budget-alert-banner.error {
+  background: #fdecea;
+  border-color: #f5c2bd;
+  color: #9a2620;
+}
+.budget-alert-icon {
+  flex: 0 0 auto;
+  font-size: 16px;
+}
+.budget-alert-body {
+  flex: 1;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 12px;
+  min-width: 0;
+}
+.budget-alert-title {
+  font-weight: 700;
+}
+.budget-alert-lines {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+}
+.budget-alert-line {
+  white-space: nowrap;
+}
+.budget-alert-dismiss {
+  flex: 0 0 auto;
+  background: transparent;
+  border: none;
+  color: inherit;
+  cursor: pointer;
+  font-size: 13px;
+  padding: 2px 6px;
+  border-radius: var(--radius-sm);
+  opacity: 0.7;
+}
+.budget-alert-dismiss:hover {
+  opacity: 1;
+  background: rgba(0,0,0,0.06);
+}
+body.dark .budget-alert-banner.warning {
+  background: #3a2a14;
+  border-color: #7a5220;
+  color: #ffc078;
+}
+body.dark .budget-alert-banner.error {
+  background: #3b1a18;
+  border-color: #7d2e29;
+  color: #ffa8a8;
+}
+body.dark .budget-alert-dismiss:hover {
+  background: rgba(255,255,255,0.1);
+}
+
+/* ── Weekly digest card (Overview) ── */
+.digest-card {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 16px;
+  padding: 16px;
+}
+.digest-metric {
+  min-width: 0;
+}
+.digest-metric-label {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-secondary);
+  margin-bottom: 2px;
+}
+.digest-metric-value {
+  font-size: 22px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.3;
+}
+.digest-metric-sub {
+  font-size: 11px;
+  color: var(--text-secondary);
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+}
+.digest-delta {
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+.digest-delta.up { color: #e8590c; }
+.digest-delta.down { color: #27ae60; }
+.digest-delta.flat { color: var(--text-secondary); }
 .cache-best-line line {
   stroke: #22c55e !important;
   stroke-dasharray: 6 3;
