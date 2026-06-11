@@ -450,6 +450,20 @@ describe('Web UI — Templates', () => {
       assert.ok(valLabelIdx < headValueIdx, 'value label rendered before total');
     });
 
+    it('should have daily usage anomaly section on overview', () => {
+      // Pure detection logic lives in templates/anomaly.mjs (unit-tested in
+      // test/anomaly.test.mjs); app.js renders the list and binds navigation.
+      assert.ok(js.includes('buildDailyUsageSeries'), 'daily series builder used');
+      assert.ok(js.includes('detectDailyAnomalies'), 'anomaly detector used');
+      assert.ok(js.includes("t('anomalyTitle')"), 'section title localized');
+      assert.ok(js.includes("t('anomalyVsAvg'"), 'multiplier label localized');
+      // Clicking a flagged day reuses the existing custom-date-range path
+      assert.ok(js.includes('data-action="goto-anomaly-day"'), 'row click action rendered');
+      assert.ok(js.includes("[data-action=\"goto-anomaly-day\"]"), 'click handler bound');
+      // Token trend chart marks anomalous days via x-grid lines
+      assert.ok(js.includes('anomaly-grid-line'), 'grid line class used on token trend chart');
+    });
+
     it('should render changeBadge before total (% then number order)', () => {
       const rcIdx = js.indexOf('function renderBarCard');
       const snippet = js.slice(rcIdx, rcIdx + 2200);
@@ -586,6 +600,10 @@ describe('Web UI — Templates', () => {
         'bdStartupPerSession', 'bdStartupSessions', 'bdStartupNote',
         'bdStartupClaudeMd', 'bdStartupSkills', 'bdStartupPrinciples',
         'bdStartupMcp', 'bdStartupMemory',
+        // Daily usage anomalies
+        'anomalyTitle', 'anomalyDesc', 'anomalyKindTokens', 'anomalyKindCost',
+        'anomalyKindBoth', 'anomalyVsAvg', 'anomalyMore', 'anomalyClickHint',
+        'anomalyGridLabel',
       ];
       for (const key of requiredKeys) {
         assert.ok(en[key], `missing en key: ${key}`);

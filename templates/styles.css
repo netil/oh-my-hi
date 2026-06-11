@@ -1315,6 +1315,77 @@ body.dark .stat-badge--teal {
   white-space: nowrap;
 }
 
+/* ── Anomaly List ── */
+.anomaly-list {
+  overflow: hidden;
+}
+
+.anomaly-item {
+  display: flex;
+  align-items: center;
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--border);
+  cursor: pointer;
+  transition: background var(--transition);
+  gap: 10px;
+}
+
+.anomaly-item:last-child {
+  border-bottom: none;
+}
+
+.anomaly-item:hover {
+  background: var(--bg);
+}
+
+.anomaly-item .anomaly-icon {
+  font-size: 14px;
+  width: 20px;
+  text-align: center;
+}
+
+.anomaly-item .anomaly-date {
+  font-size: 13px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.anomaly-item .anomaly-kind {
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 10px;
+  font-weight: 500;
+  background: #fee2e2;
+  color: #dc2626;
+}
+
+body.dark .anomaly-item .anomaly-kind {
+  background: rgba(220, 38, 38, 0.18);
+  color: #f87171;
+}
+
+.anomaly-item .anomaly-value {
+  flex: 1;
+  text-align: right;
+  font-size: 13px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.anomaly-item .anomaly-mult {
+  font-size: 12px;
+  color: #dc2626;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.anomaly-more {
+  padding: 8px 16px;
+  font-size: 12px;
+  color: var(--text-secondary);
+  text-align: center;
+}
+
 /* ── Activity Heatmap ── */
 .heatmap-container {
   background: var(--card-bg);
@@ -2509,6 +2580,16 @@ body.dark .bb-tooltip .value {
   font-weight: 600;
   text-anchor: start !important;
   transform: translateX(-95%);
+}
+.anomaly-grid-line line {
+  stroke: #dc2626 !important;
+  stroke-dasharray: 4 3;
+  stroke-width: 1.2;
+}
+.anomaly-grid-line text {
+  fill: #dc2626 !important;
+  font-size: 11px;
+  font-weight: 600;
 }
 
 .cost-trend-grid {
