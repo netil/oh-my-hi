@@ -871,6 +871,79 @@ window.name = 'oh-my-hi';
       + (entry.cacheCreation || 0) * p.cacheCreation) / 1e6;
   }
 
+  // ── Usage export (CSV / JSON) ──
+  // Client-side export of the currently filtered token entries via Blob +
+  // anchor click — works on file:// and static hosting, no server required.
+  // serve.mjs produces the same rows at /api/usage?format=csv|json for
+  // scripting use; keep columns and escaping in sync with scripts/export.mjs.
+  const EXPORT_COLUMNS = [
+    'timestamp', 'scope', 'sessionId', 'model', 'context', 'contextName',
+    'inputTokens', 'outputTokens', 'cacheRead', 'cacheWrite', 'cost',
+  ];
+
+  /** RFC 4180 field escaping: quote when the value contains `"`, `,`, CR or LF. */
+  function csvEscape(value) {
+    if (value == null) return '';
+    const s = String(value);
+    return /[",\n\r]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+  }
+
+  function buildUsageExportRows(entries) {
+    return entries.map((e) => {
+      const ts = Number(e.timestamp) || new Date(e.timestamp).getTime();
+      return {
+        timestamp: ts > 0 ? new Date(ts).toISOString() : '',
+        scope: currentScope,
+        sessionId: e.sessionId || '',
+        model: e.model || '',
+        context: e.context || '',
+        contextName: e.contextName || '',
+        inputTokens: e.rawInput || 0,
+        outputTokens: e.outputTokens || 0,
+        cacheRead: e.cacheRead || 0,
+        cacheWrite: e.cacheCreation || 0,
+        cost: Math.round(calcEntryCost(e) * 1e6) / 1e6,
+      };
+    });
+  }
+
+  function usageRowsToCsv(rows) {
+    const lines = [EXPORT_COLUMNS.map(csvEscape).join(',')];
+    rows.forEach((row) => {
+      lines.push(EXPORT_COLUMNS.map((c) => csvEscape(row[c])).join(','));
+    });
+    return lines.join('\r\n') + '\r\n';
+  }
+
+  function exportUsageData(format) {
+    const usage = getUsage();
+    const days = customDateRange ? 0 : currentPeriod;
+    const entries = filterByPeriod(usage.tokenEntries || [], 'timestamp', days);
+    const rows = buildUsageExportRows(entries);
+    const isCsv = format === 'csv';
+    const body = isCsv ? usageRowsToCsv(rows) : JSON.stringify(rows, null, 2);
+    const now = new Date();
+    const stamp = String(now.getFullYear())
+      + String(now.getMonth() + 1).padStart(2, '0')
+      + String(now.getDate()).padStart(2, '0');
+    const blob = new Blob([body], { type: isCsv ? 'text/csv;charset=utf-8' : 'application/json;charset=utf-8' });
+    const href = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = href;
+    a.download = 'oh-my-hi-usage-' + stamp + '.' + (isCsv ? 'csv' : 'json');
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => { URL.revokeObjectURL(href); }, 1000);
+  }
+
+  function renderExportButtons() {
+    return '<div class="export-actions" title="' + escapeHtml(t('exportTooltip')) + '">'
+      + '<button type="button" class="export-btn" data-export="csv">⬇ ' + t('exportCsv') + '</button>'
+      + '<button type="button" class="export-btn" data-export="json">⬇ ' + t('exportJson') + '</button>'
+      + '</div>';
+  }
+
   // F2: Efficiency aggregation over tokenEntries.
   // Returns per-item stats for a given context type ('skill' or 'agent').
   // Cached per scope/entries-reference to avoid recomputing across renders.
@@ -1437,7 +1510,7 @@ window.name = 'oh-my-hi';
     }
 
     let html = '<div class="page-header">'
-      + '<h1>🪙 ' + t('tokensTitle') + '</h1>'
+      + '<div class="page-header-row"><h1>🪙 ' + t('tokensTitle') + '</h1>' + renderExportButtons() + '</div>'
       + '<div class="page-desc">' + t('tokensDesc') + '</div>'
       + '</div>'
       + renderPeriodFilter()
@@ -1597,7 +1670,7 @@ window.name = 'oh-my-hi';
     const changeOutputCost = calcTokenChange(allTokenEntries, days, (e) => { const k = resolvePricingKey(e.model); return k ? (e.outputTokens || 0) * MODEL_PRICING[k].output / 1e6 : 0; });
     const changeCacheCost  = calcTokenChange(allTokenEntries, days, (e) => { const k = resolvePricingKey(e.model); return k ? ((e.cacheRead || 0) * MODEL_PRICING[k].cacheRead + (e.cacheCreation || 0) * MODEL_PRICING[k].cacheCreation) / 1e6 : 0; });
 
-    let html = '<div class="page-header"><h1>💰 ' + t('tokensCost') + '</h1></div>'
+    let html = '<div class="page-header"><div class="page-header-row"><h1>💰 ' + t('tokensCost') + '</h1>' + renderExportButtons() + '</div></div>'
       + renderPeriodFilter()
       + '<div class="overview-hero solo">'
       + renderBarCard({
@@ -1823,7 +1896,7 @@ window.name = 'oh-my-hi';
     const fmtDur = (ms) => ms >= 3600000 ? (ms / 3600000).toFixed(1) + t('unitHour') : ms >= 60000 ? (ms / 60000).toFixed(0) + t('unitMin') : (ms / 1000).toFixed(0) + 's';
     const bmMap = _loadBm();
 
-    let html = '<div class="page-header"><h1>📋 ' + t('tokensSession') + '</h1></div>'
+    let html = '<div class="page-header"><div class="page-header-row"><h1>📋 ' + t('tokensSession') + '</h1>' + renderExportButtons() + '</div></div>'
       + renderPeriodFilter();
 
     if (sessions.length > 0) {
@@ -7193,6 +7266,10 @@ window.name = 'oh-my-hi';
 
   // ── Content action binding ──
   function bindContentActions() {
+    // Usage export buttons (CSV / JSON)
+    content.querySelectorAll('[data-export]').forEach((el) => {
+      el.addEventListener('click', () => { exportUsageData(el.dataset.export); });
+    });
     content.querySelectorAll('[data-action="goto-detail"]').forEach((el) => {
       el.addEventListener('click', () => {
         const cat = el.dataset.category;

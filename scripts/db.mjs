@@ -372,6 +372,14 @@ export function splitLegacyDb(legacyDb, outputDir) {
 
 // ── Multi-DB query helpers ─────────────────────────────────────────────────
 
+/** Query only token entries across multiple DBs, sorted by timestamp (usage export). */
+export function queryTokenEntriesMultiDb(dbs, scope, from, to) {
+  const entries = [];
+  for (const db of dbs) entries.push(...queryTokenEntries(db, scope, from, to));
+  entries.sort((a, b) => a.timestamp - b.timestamp);
+  return entries;
+}
+
 /** Query and merge usage data from multiple DB instances (for date-spanning queries). */
 export function queryUsageMultiDb(dbs, scope, from, to) {
   const merged = { tokenEntries: [], promptStats: [], latencyEntries: [], skills: [], agents: [], mcpCalls: [] };
@@ -617,22 +625,19 @@ export function appendUsage(db, scope, usage) {
 // ── Query operations ───────────────────────────────────────────────────────
 
 /**
- * Query usage data for a scope within [from, to] (ms epoch).
- * Returns the same shape the browser expects from data-usage.js.
+ * Query token entries only for a scope within [from, to] (ms epoch).
+ * Returns the camelCase entry shape the browser expects.
  */
-export function queryUsage(db, scope, from, to) {
+export function queryTokenEntries(db, scope, from, to) {
   const fromMs = Number.isFinite(from) ? from : 0;
   const toMs = Number.isFinite(to) ? to : Number.MAX_SAFE_INTEGER;
-
-  const tokenRows = db.prepare(`
+  return db.prepare(`
     SELECT session_id, timestamp, model, input_tokens, output_tokens,
            cache_read, cache_creation, raw_input, context, context_name
     FROM token_entries
     WHERE scope = ? AND timestamp BETWEEN ? AND ?
     ORDER BY timestamp
-  `).all(scope, fromMs, toMs);
-
-  const tokenEntries = tokenRows.map(r => ({
+  `).all(scope, fromMs, toMs).map(r => ({
     sessionId: r.session_id,
     timestamp: r.timestamp,
     model: r.model,
@@ -644,6 +649,17 @@ export function queryUsage(db, scope, from, to) {
     context: r.context,
     contextName: r.context_name,
   }));
+}
+
+/**
+ * Query usage data for a scope within [from, to] (ms epoch).
+ * Returns the same shape the browser expects from data-usage.js.
+ */
+export function queryUsage(db, scope, from, to) {
+  const fromMs = Number.isFinite(from) ? from : 0;
+  const toMs = Number.isFinite(to) ? to : Number.MAX_SAFE_INTEGER;
+
+  const tokenEntries = queryTokenEntries(db, scope, fromMs, toMs);
 
   const promptStats = db.prepare(`
     SELECT session_id, timestamp, char_len, preview

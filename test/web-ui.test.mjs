@@ -64,6 +64,14 @@ describe('Web UI — Templates', () => {
       }
     });
 
+    it('should wire client-side usage export (CSV/JSON via Blob download)', () => {
+      for (const fn of ['exportUsageData', 'buildUsageExportRows', 'usageRowsToCsv', 'csvEscape', 'renderExportButtons']) {
+        assert.ok(js.includes(`function ${fn}`), `missing function: ${fn}`);
+      }
+      assert.ok(js.includes("querySelectorAll('[data-export]')"), 'export buttons must be bound in bindContentActions');
+      assert.ok(js.includes('new Blob('), 'client-side export must use Blob download (works on file://)');
+    });
+
     it('should handle all hash routes in applyHash', () => {
       const routes = ['overview', 'structure', 'tokens', 'tokens-cost', 'tokens-prompt', 'tokens-session', 'session', 'help'];
       for (const route of routes) {
