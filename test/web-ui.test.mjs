@@ -203,10 +203,11 @@ describe('Web UI — Templates', () => {
     it('should skip renderContent on theme toggle for CSS-only views', () => {
       // Theme toggle is cheap on pages where theming flows through CSS vars
       // alone — no point re-running render*() + bb.generate. Only overview /
-      // context / structure compute colors in JS and still need a rebuild.
+      // structure compute colors in JS and still need a rebuild.
+      // context is now purely CSS-variable driven and no longer needs a rebuild.
       assert.ok(js.includes('THEME_REBUILD_VIEWS'), 'theme rebuild allowlist exists');
       assert.ok(js.includes('overview: 1') || js.includes("overview:1"), 'overview listed');
-      assert.ok(js.includes('context: 1') || js.includes("context:1"), 'context listed');
+      assert.ok(!js.includes('context: 1') && !js.includes("context:1"), 'context not listed (CSS-only themed)');
       assert.ok(js.includes('structure: 1') || js.includes("structure:1"), 'structure listed');
       // Theme button handler still calls setBbDarkTheme unconditionally so the
       // CSS swap happens even when the rebuild is skipped.
@@ -304,14 +305,15 @@ describe('Web UI — Templates', () => {
     });
 
     it('should hide timeline nav buttons in example mode', () => {
-      // cw-tl-nav starts hidden (display:none) since default is example mode.
-      // Session mode toggles it to display:flex.
+      // cw-tl-nav starts hidden since default is example mode.
+      // Initial display:none comes from the .cw-nav-overlay CSS class;
+      // session mode overrides it to display:flex via JS.
       assert.ok(js.includes('id="cw-tl-nav"'), 'timeline nav container exists');
       assert.ok(js.includes('id="cw-tl-top"'), 'top scroll button exists');
       assert.ok(js.includes('id="cw-tl-bottom"'), 'bottom scroll button exists');
-      // Initial state is display:none (hidden in example mode)
-      const navMatch = js.match(/id="cw-tl-nav"[^>]*style="[^"]*display:\s*none/);
-      assert.ok(navMatch, 'cw-tl-nav starts with display:none');
+      // Initial hidden state is via the cw-nav-overlay CSS class (display:none in styles.css)
+      const navHasClass = js.match(/id="cw-tl-nav"[^>]*class="[^"]*cw-nav-overlay/);
+      assert.ok(navHasClass, 'cw-tl-nav uses cw-nav-overlay class for initial hidden state');
       // setMode toggles visibility
       assert.ok(js.includes("tlNav.style.display = 'flex'"), 'session mode shows nav');
       assert.ok(js.includes("tlNav.style.display = 'none'"), 'example mode hides nav');

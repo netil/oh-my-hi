@@ -305,86 +305,6 @@ function compactCache(cachePath, cache) {
   }
 }
 
-// ── Pending Files (lightweight auto-refresh) ──
-
-/**
- * Derive pending directory from cachePath.
- * "output/transcript-cache.json" → "output/pending/"
- */
-function pendingDir(cachePath) {
-  return path.join(path.dirname(cachePath), 'pending');
-}
-
-/**
- * Save newly parsed entries as a plain JSON pending file (no gzip, no minification).
- * Designed for fast writes during session-end hooks.
- */
-export function savePending(cachePath, cache) {
-  if (!cachePath) return;
-  try {
-    const newEntries = {};
-    for (const [key, entry] of Object.entries(cache)) {
-      if (key.startsWith('_') || !entry?._new) continue;
-      const { _new, ...clean } = entry;
-      newEntries[key] = clean;
-    }
-    if (Object.keys(newEntries).length === 0) return;
-
-    const dir = pendingDir(cachePath);
-    fs.mkdirSync(dir, { recursive: true });
-    const ts = new Date().toISOString().replace(/[-:]/g, '').replace('T', '-').slice(0, 15);
-    fs.writeFileSync(path.join(dir, `${ts}.json`), JSON.stringify(newEntries), 'utf8');
-
-    // Clean _new flags
-    for (const key of Object.keys(cache)) {
-      if (cache[key]?._new) delete cache[key]._new;
-    }
-  } catch { /* best effort */ }
-}
-
-/**
- * Merge all pending files into the cache object.
- * Returns the number of pending files merged.
- */
-export function mergePending(cachePath, cache) {
-  if (!cachePath) return 0;
-  const dir = pendingDir(cachePath);
-  if (!fs.existsSync(dir)) return 0;
-
-  const files = fs.readdirSync(dir).filter(f => f.endsWith('.json')).sort();
-  if (files.length === 0) return 0;
-
-  for (const f of files) {
-    try {
-      const data = JSON.parse(fs.readFileSync(path.join(dir, f), 'utf8'));
-      for (const [key, entry] of Object.entries(data)) {
-        cache[key] = { ...entry, _new: true };
-      }
-    } catch { /* skip corrupt */ }
-  }
-
-  // Remove pending files after merge
-  for (const f of files) {
-    try { fs.unlinkSync(path.join(dir, f)); } catch { /* best effort */ }
-  }
-  // Remove pending dir if empty
-  try { fs.rmdirSync(dir); } catch { /* not empty or already gone */ }
-
-  return files.length;
-}
-
-/**
- * Check if there are pending files waiting to be merged.
- */
-export function hasPending(cachePath) {
-  if (!cachePath) return false;
-  const dir = pendingDir(cachePath);
-  if (!fs.existsSync(dir)) return false;
-  try {
-    return fs.readdirSync(dir).some(f => f.endsWith('.json'));
-  } catch { return false; }
-}
-
 // ── Mtime Index (lightweight change detection without full cache load) ──
 
 /**
@@ -396,13 +316,18 @@ function mtimeIndexPath(cachePath) {
 
 /**
  * Find longest common directory prefix across all paths.
+ * Returns '' when paths share no common directory (filesystem root reached).
+ * Exported for tests.
  */
-function commonPrefix(paths) {
+export function commonPrefix(paths) {
   if (paths.length === 0) return '';
   let prefix = path.dirname(paths[0]);
   for (const p of paths) {
-    while (prefix && !p.startsWith(prefix + '/')) {
-      prefix = path.dirname(prefix);
+    while (prefix && !p.startsWith(prefix + path.sep)) {
+      const parent = path.dirname(prefix);
+      // Loop guard: dirname of a root ('/', 'C:\\') is itself — no common dir
+      if (parent === prefix) return '';
+      prefix = parent;
     }
   }
   return prefix;
@@ -445,7 +370,8 @@ export function saveMtimeIndex(cachePath, cache) {
     const base = commonPrefix(entries.map(e => e[0]));
     const index = { _base: base, _schemaVersion: CACHE_SCHEMA_VERSION };
     for (const [absPath, mtimeMs] of entries) {
-      index[absPath.slice(base.length + 1)] = mtimeMs;
+      // No common prefix → store absolute paths (loadMtimeIndex handles _base: '')
+      index[base ? absPath.slice(base.length + 1) : absPath] = mtimeMs;
     }
     const fp = mtimeIndexPath(cachePath);
     fs.mkdirSync(path.dirname(fp), { recursive: true });

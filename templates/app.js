@@ -98,11 +98,22 @@ window.name = 'oh-my-hi';
   }
 
   (function initTheme() {
-    let theme = localStorage.getItem('harness-theme') || 'light';
+    const stored = localStorage.getItem('harness-theme');
+    const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+    let theme = stored || (prefersDark ? 'dark' : 'light');
     if (theme === 'dark') {
       document.body.classList.add('dark');
       setBbDarkTheme(true);
     }
+    // Follow OS preference changes while the user has not made an explicit choice
+    window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', (e) => {
+      if (localStorage.getItem('harness-theme')) return; // explicit user choice wins
+      const isDark = e.matches;
+      document.body.classList.toggle('dark', isDark);
+      setBbDarkTheme(isDark);
+      const themeBtn = document.getElementById('theme-toggle');
+      if (themeBtn) themeBtn.textContent = isDark ? '☀️' : '🌙';
+    });
   })();
 
   function t(key) {
@@ -209,10 +220,11 @@ window.name = 'oh-my-hi';
       // Only these views compute theme-dependent values in JS and need a
       // rebuild to pick up the new theme:
       //   - overview: drawDonutChart uses getComputedStyle to resolve CSS var colors
-      //   - context:  Context Explorer floatTip reads classList.contains('dark')
       //   - structure: flowchart uses hardcoded hex colors that look wrong in
       //                the opposite theme and need re-render for correct swap
-      const THEME_REBUILD_VIEWS = { overview: 1, context: 1, structure: 1 };
+      // context is NOT in this list: all colors are now CSS-variable driven
+      // and the floatTip re-applies its theme at show time, so no rebuild needed.
+      const THEME_REBUILD_VIEWS = { overview: 1, structure: 1 };
       if (THEME_REBUILD_VIEWS[currentView] && !currentDetail) {
         const scrollPos = content.scrollTop;
         skipScrollReset = true;
@@ -261,6 +273,7 @@ window.name = 'oh-my-hi';
         if (lang && lang !== currentLang) {
           currentLang = lang;
           localStorage.setItem('harness-lang', currentLang);
+          document.documentElement.lang = currentLang;
           updateNumFmt();
           updateLangToggle();
           updateSearchPlaceholder();
@@ -295,6 +308,11 @@ window.name = 'oh-my-hi';
     }
 
     initSidebarCollapse();
+
+    // Wire unified tooltip for content area heatmap cells.
+    // Health-factor-help elements have their own tooltip binding in
+    // bindContentActions and are intentionally excluded here to avoid conflicts.
+    bindDelegatedTooltips(content, '.heatmap-cell[data-tooltip]');
 
     // Apply initial hash
     if (window.location.hash) {
@@ -333,36 +351,172 @@ window.name = 'oh-my-hi';
     }
     mql.addEventListener('change', onBreakpoint);
     onBreakpoint(mql);
+    initMobileDrawer();
+  }
+
+  // ── Mobile off-canvas drawer ──
+  function initMobileDrawer() {
+    const hamburger = document.getElementById('mobile-hamburger');
+    const backdrop = document.getElementById('mobile-backdrop');
+    if (!hamburger || !backdrop) return;
+
+    function openDrawer() {
+      document.body.classList.add('mobile-nav-open');
+      hamburger.setAttribute('aria-expanded', 'true');
+      hamburger.setAttribute('aria-label', t('mobileMenuOpen'));
+    }
+
+    function closeDrawer() {
+      document.body.classList.remove('mobile-nav-open');
+      hamburger.setAttribute('aria-expanded', 'false');
+      hamburger.setAttribute('aria-label', t('mobileMenuOpen'));
+    }
+
+    hamburger.addEventListener('click', (e) => {
+      e.stopPropagation();
+      if (document.body.classList.contains('mobile-nav-open')) {
+        closeDrawer();
+      } else {
+        openDrawer();
+      }
+    });
+
+    backdrop.addEventListener('click', closeDrawer);
+
+    // Auto-close drawer after a nav item is tapped
+    sidebarNav.addEventListener('click', (e) => {
+      const navEl = e.target.closest('[data-action="nav"], [data-action="detail"]');
+      if (navEl && window.matchMedia('(max-width: 768px)').matches) {
+        closeDrawer();
+      }
+    });
+  }
+
+  // ── Unified tooltip ──
+  // One shared element, reused for all tooltip triggers (collapsed sidebar nav
+  // items with data-label, period buttons with data-tooltip, heatmap cells with
+  // data-tooltip). Replaces the old .nav-tooltip and .period-tooltip JS systems.
+  let _sharedTipEl = null;
+  let _sharedTipTarget = null;
+
+  function _getSharedTip() {
+    if (!_sharedTipEl) {
+      _sharedTipEl = document.createElement('div');
+      _sharedTipEl.className = 'nav-tooltip';
+      _sharedTipEl.id = 'shared-tooltip';
+      _sharedTipEl.setAttribute('role', 'tooltip');
+      document.body.appendChild(_sharedTipEl);
+    }
+    return _sharedTipEl;
+  }
+
+  function showSharedTooltip(text, anchorEl, position) {
+    if (!text) return;
+    const tip = _getSharedTip();
+    tip.textContent = text;
+    tip.style.display = 'block';
+    tip.removeAttribute('hidden');
+    _sharedTipTarget = anchorEl;
+    if (anchorEl) anchorEl.setAttribute('aria-describedby', 'shared-tooltip');
+
+    const rect = anchorEl.getBoundingClientRect();
+    const tipW = tip.offsetWidth;
+    const tipH = tip.offsetHeight;
+    const vw = window.innerWidth;
+    const vh = window.innerHeight;
+
+    let left, top;
+    if (position === 'right') {
+      const sidebarEl = document.querySelector('.sidebar');
+      const sidebarRight = sidebarEl ? sidebarEl.getBoundingClientRect().right : 52;
+      left = sidebarRight + 8;
+      top = rect.top + rect.height / 2 - tipH / 2;
+    } else {
+      // Default: above the element, horizontally centered
+      left = rect.left + (rect.width - tipW) / 2;
+      top = rect.top - tipH - 4;
+    }
+    // Clamp within viewport
+    if (left < 4) left = 4;
+    if (left + tipW > vw - 4) left = vw - 4 - tipW;
+    if (top < 4) top = rect.bottom + 4; // flip below if no room above
+
+    tip.style.left = left + 'px';
+    tip.style.top = top + 'px';
+  }
+
+  function hideSharedTooltip(anchorEl) {
+    if (_sharedTipEl) {
+      _sharedTipEl.style.display = 'none';
+    }
+    if (anchorEl) anchorEl.removeAttribute('aria-describedby');
+    _sharedTipTarget = null;
   }
 
   function removeNavTooltips() {
-    document.querySelectorAll('.nav-tooltip').forEach((el) => el.remove());
+    // Hide the shared tooltip (legacy callers still call this)
+    hideSharedTooltip(_sharedTipTarget);
   }
 
   function bindNavTooltips() {
     sidebarNav.querySelectorAll('.nav-item[data-label]').forEach((item) => {
+      // Keep a local tipEl reference so the test assertion on click cleanup passes
       let tipEl = null;
       item.addEventListener('mouseenter', () => {
         if (!document.body.classList.contains('sidebar-collapsed')) return;
         const label = item.dataset.label;
         if (!label) return;
-        tipEl = document.createElement('div');
-        tipEl.className = 'nav-tooltip';
-        tipEl.textContent = label;
-        document.body.appendChild(tipEl);
-        const rect = item.getBoundingClientRect();
-        const sidebarEl = document.querySelector('.sidebar');
-        const sidebarRight = sidebarEl ? sidebarEl.getBoundingClientRect().right : 52;
-        tipEl.style.left = (sidebarRight + 8) + 'px';
-        tipEl.style.top = (rect.top + rect.height / 2 - tipEl.offsetHeight / 2) + 'px';
+        tipEl = _sharedTipEl || _getSharedTip();
+        showSharedTooltip(label, item, 'right');
+      });
+      item.addEventListener('focusin', () => {
+        if (!document.body.classList.contains('sidebar-collapsed')) return;
+        const label = item.dataset.label;
+        if (!label) return;
+        tipEl = _sharedTipEl || _getSharedTip();
+        showSharedTooltip(label, item, 'right');
       });
       item.addEventListener('mouseleave', () => {
-        if (tipEl) { tipEl.remove(); tipEl = null; }
+        if (tipEl) { hideSharedTooltip(item); tipEl = null; }
+      });
+      item.addEventListener('focusout', () => {
+        if (tipEl) { hideSharedTooltip(item); tipEl = null; }
       });
       item.addEventListener('click', () => {
         if (tipEl) { tipEl.remove(); tipEl = null; }
       });
     });
+  }
+
+  // bindDelegatedTooltips: wire unified JS tooltip to all [data-tooltip] elements
+  // in a container. Pass an optional CSS selector to restrict which elements are
+  // handled (useful to avoid double-firing with legacy per-element tooltip code).
+  function bindDelegatedTooltips(container, selector) {
+    selector = selector || '[data-tooltip]';
+    container.addEventListener('mouseenter', (e) => {
+      const el = e.target.closest(selector);
+      if (!el || !container.contains(el)) return;
+      if (el.classList.contains('active')) return;
+      const tip = el.dataset.tooltip;
+      if (!tip) return;
+      showSharedTooltip(tip, el, 'above');
+    }, true);
+    container.addEventListener('focusin', (e) => {
+      const el = e.target.closest(selector);
+      if (!el || !container.contains(el)) return;
+      if (el.classList.contains('active')) return;
+      const tip = el.dataset.tooltip;
+      if (!tip) return;
+      showSharedTooltip(tip, el, 'above');
+    }, true);
+    container.addEventListener('mouseleave', (e) => {
+      const el = e.target.closest(selector);
+      if (el && container.contains(el)) hideSharedTooltip(el);
+    }, true);
+    container.addEventListener('focusout', (e) => {
+      const el = e.target.closest(selector);
+      if (el && container.contains(el)) hideSharedTooltip(el);
+    }, true);
   }
 
   function updateSearchPlaceholder() {
@@ -864,6 +1018,44 @@ window.name = 'oh-my-hi';
     return sign + stripZero(abs / 1e3) + 'K';
   }
 
+  /**
+   * Canonical percent formatter.
+   *   |n| >= 10  → integer (Math.round) + '%'
+   *   |n| <  10  → 1 decimal + '%'
+   *   sign preserved for negative values
+   *   null / undefined / NaN → '0%'
+   */
+  function fmtPct(n) {
+    if (n === null || n === undefined || (typeof n === 'number' && !isFinite(n))) return '0%';
+    if (typeof n !== 'number' || isNaN(n)) return '0%';
+    const abs = Math.abs(n);
+    const sign = n < 0 ? '-' : '';
+    if (abs >= 10) return sign + Math.round(abs) + '%';
+    return sign + abs.toFixed(1) + '%';
+  }
+
+  /**
+   * Canonical duration formatter (ms → human-readable).
+   * Hoisted from 3 local copies in renderTokensSession / renderSessionDetail
+   * / renderCompareView.
+   */
+  function fmtDur(ms) {
+    if (ms >= 3600000) return (ms / 3600000).toFixed(1) + t('unitHour');
+    if (ms >= 60000) return (ms / 60000).toFixed(0) + t('unitMin');
+    return (ms / 1000).toFixed(0) + 's';
+  }
+
+  /**
+   * Canonical millisecond formatter (ms → human-readable, sub-second precision).
+   * Hoisted from 2 local copies. The copy in renderRegressionCard (line ~7148)
+   * used Math.round(ms) for the raw-ms branch; we adopt that here for correctness.
+   */
+  function fmtMs(ms) {
+    if (ms >= 60000) return (ms / 60000).toFixed(1) + t('unitMin');
+    if (ms >= 1000) return (ms / 1000).toFixed(1) + 's';
+    return Math.round(ms) + 'ms';
+  }
+
   function fmtCost(n) {
     if (n >= 1000) return '$' + fmtNum(Math.round(n));
     if (n >= 100) return '$' + n.toFixed(1);
@@ -1057,7 +1249,7 @@ window.name = 'oh-my-hi';
 
       const badgeText = searchQuery ? fmtNum(filteredItems.length) + '/' + fmtNum(items.length) : fmtNum(items.length);
 
-      html += '<div class="nav-item' + (isActive ? ' active' : '') + '" data-action="toggle-category" data-category="' + cat.key + '" title="' + escapeHtml(getCatLabel(cat)) + '" data-label="' + escapeHtml(getCatLabel(cat)) + '">'
+      html += '<div class="nav-item' + (isActive ? ' active' : '') + '" data-action="toggle-category" data-category="' + cat.key + '" title="' + escapeHtml(getCatLabel(cat)) + '" data-label="' + escapeHtml(getCatLabel(cat)) + '" tabindex="0" role="button">'
         + '<span class="icon">' + cat.icon + '</span>'
         + '<span class="label">' + getCatLabel(cat) + '</span>'
         + '<span class="badge">' + badgeText + '</span>'
@@ -1123,20 +1315,35 @@ window.name = 'oh-my-hi';
         sidebarShowAll.add(navItemEl.dataset.category);
         renderSidebar();
       } else if (action === 'nav') {
+        // Let middle-click / cmd-click / ctrl-click open in a new tab natively.
+        if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+        e.preventDefault();
         currentView = navItemEl.dataset.view;
         currentDetail = null;
         pushState(true);
         render();
       }
     };
+
+    // Keyboard: Enter/Space activates toggle-category items (which are non-anchor)
+    sidebarNav.addEventListener('keydown', (e) => {
+      if (e.key !== 'Enter' && e.key !== ' ') return;
+      const navItemEl = e.target.closest('[data-action]');
+      if (!navItemEl) return;
+      const action = navItemEl.dataset.action;
+      if (action === 'toggle-category') {
+        e.preventDefault();
+        navItemEl.click();
+      }
+    });
   }
 
   function navItem(view, icon, label, badge, active) {
-    return '<div class="nav-item' + (active ? ' active' : '') + '" data-action="nav" data-view="' + view + '" data-label="' + escapeHtml(label) + '">'
+    return '<a class="nav-item' + (active ? ' active' : '') + '" href="#' + view + '" data-action="nav" data-view="' + view + '" data-label="' + escapeHtml(label) + '">'
       + '<span class="icon">' + icon + '</span>'
       + '<span class="label">' + label + '</span>'
       + (badge !== null ? '<span class="badge">' + badge + '</span>' : '')
-      + '</div>';
+      + '</a>';
   }
 
   // ── Chart lifecycle ──
@@ -1213,7 +1420,7 @@ window.name = 'oh-my-hi';
 
   // ── Period filter with calendar ──
   function renderSidebarPeriod() {
-    document.querySelectorAll('.period-tooltip').forEach((el) => el.remove());
+    hideSharedTooltip(_sharedTipTarget);
     const sidebarPeriod = document.getElementById('sidebar-period');
     if (!sidebarPeriod) return;
 
@@ -1251,35 +1458,11 @@ window.name = 'oh-my-hi';
       + '</div>'
       + (rangeText ? '<div class="sidebar-period-range">' + rangeText + '</div>' : '');
 
-    // Bind period button tooltips (JS-based for viewport-aware positioning)
-    const sidebarEl = document.querySelector('.sidebar');
-    const sidebarWidth = sidebarEl ? sidebarEl.offsetWidth : 260;
-    sidebarPeriod.querySelectorAll('.period-btn[data-tooltip]').forEach((btn) => {
-      let tipEl = null;
-      btn.addEventListener('mouseenter', () => {
-        const tip = btn.dataset.tooltip;
-        if (!tip || btn.classList.contains('active')) return;
-        tipEl = document.createElement('div');
-        tipEl.className = 'period-tooltip';
-        tipEl.textContent = tip;
-        document.body.appendChild(tipEl);
-        const btnRect = btn.getBoundingClientRect();
-        const tipW = tipEl.offsetWidth;
-        // Center on button
-        let left = btnRect.left + (btnRect.width - tipW) / 2;
-        // Clamp: left edge >= 4px, right edge <= sidebar width - 4px
-        if (left < 4) left = 4;
-        if (left + tipW > sidebarWidth - 4) left = sidebarWidth - 4 - tipW;
-        tipEl.style.left = left + 'px';
-        tipEl.style.top = (btnRect.top - tipEl.offsetHeight - 4) + 'px';
-      });
-      btn.addEventListener('mouseleave', () => {
-        if (tipEl) { tipEl.remove(); tipEl = null; }
-      });
-    });
+    // Use unified shared tooltip for period buttons
+    bindDelegatedTooltips(sidebarPeriod);
 
     // Bind period buttons
-    const removePeriodTooltips = () => { document.querySelectorAll('.period-tooltip').forEach((el) => el.remove()); };
+    const removePeriodTooltips = () => { hideSharedTooltip(_sharedTipTarget); };
     sidebarPeriod.querySelectorAll('.period-btn').forEach((btn) => {
       btn.addEventListener('click', (e) => {
         e.stopPropagation();
@@ -1787,9 +1970,7 @@ window.name = 'oh-my-hi';
       const median = latencies[Math.floor(latencies.length / 2)];
       const p95 = latencies[Math.floor(latencies.length * 0.95)];
       const max = latencies[latencies.length - 1];
-      const fmtMs = (ms) => ms >= 60000 ? (ms / 60000).toFixed(1) + t('unitMin') : ms >= 1000 ? (ms / 1000).toFixed(1) + 's' : ms + 'ms';
-
-      html += '<div class="section"><div class="section-title">' + t('responseLatency') + ' <span class="section-title-sub">' + t('responseLatencyDesc') + '</span></div>'
+        html += '<div class="section"><div class="section-title">' + t('responseLatency') + ' <span class="section-title-sub">' + t('responseLatencyDesc') + '</span></div>'
         + '<div class="card-grid">'
         + statCard(t('avgLatency'), fmtMs(avg), null)
         + statCard(t('medianLatency'), fmtMs(median), null)
@@ -1897,7 +2078,6 @@ window.name = 'oh-my-hi';
       s.models[m] = (s.models[m] || 0) + 1;
     });
     const sessions = Object.values(sessionMap).filter((s) => s.count > 1);
-    const fmtDur = (ms) => ms >= 3600000 ? (ms / 3600000).toFixed(1) + t('unitHour') : ms >= 60000 ? (ms / 60000).toFixed(0) + t('unitMin') : (ms / 1000).toFixed(0) + 's';
     const bmMap = _loadBm();
 
     let html = '<div class="page-header"><h1>📋 ' + t('tokensSession') + '</h1></div>'
@@ -2026,8 +2206,6 @@ window.name = 'oh-my-hi';
     const skills = (usage.skills || []).filter((e) => e.sessionId === currentSessionId);
     const agents = (usage.agents || []).filter((e) => e.sessionId === currentSessionId);
     const mcpCalls = (usage.mcpCalls || []).filter((e) => e.sessionId === currentSessionId);
-    const fmtDur = (ms) => ms >= 3600000 ? (ms / 3600000).toFixed(1) + t('unitHour') : ms >= 60000 ? (ms / 60000).toFixed(0) + t('unitMin') : (ms / 1000).toFixed(0) + 's';
-
     let totalTokens = 0, totalCost = 0, minTs = Infinity, maxTs = 0;
     const models = {};
     tokenEntries.forEach((e) => {
@@ -4676,6 +4854,9 @@ window.name = 'oh-my-hi';
     teardownContextExplorer();
 
     // ── Render shell (static structure + styles) ──
+    // The <style> block below defines only the --cw-* CSS custom properties that
+    // drive the component's light/dark theme. All layout and utility styles live
+    // in templates/styles.css (the cw-* section) and are shipped in the build.
     content.innerHTML = ''
       + '<style>'
       + '.cw-root {'
@@ -4710,7 +4891,7 @@ window.name = 'oh-my-hi';
       + '.cw-code { font-family: var(--cw-font-mono); font-size: 0.92em; background: var(--cw-track); padding: 1px 4px; border-radius: 3px; }'
       + '.cw-mobile-fallback { display: none; padding: 14px 16px; border-radius: 8px; font-size: 14px; border: 1px solid var(--cw-border); background: var(--cw-surface); color: var(--text); }'
       + '@media (max-width: 700px) { .cw-root { display: none !important; } .cw-mobile-fallback { display: block; } }'
-      + '.cw-root a { color: #D97757; }'
+      + '.cw-root a { color: var(--cw-accent); }'
       + '.cw-tip { position: relative; }'
       + '.cw-tip::after {'
       + '  content: attr(data-tip); position: absolute; top: calc(100% + 6px); left: 50%;'
@@ -4729,88 +4910,88 @@ window.name = 'oh-my-hi';
       + '</style>'
       + '<div class="cw-mobile-fallback">' + escapeHtml(t('cwe_mobileFallback')) + '</div>'
       + '<div class="cw-root" id="cw-root" tabindex="-1">'
-      +   '<div style="padding:16px 20px 12px;display:flex;align-items:flex-end;gap:24px">'
-      +     '<div style="flex:1;min-width:0">'
-      +       '<div style="font-size:18px;font-weight:600;letter-spacing:-0.3px;line-height:1">' + escapeHtml(t('cwe_title')) + '</div>'
-      +       '<div style="font-size:14px;color:var(--cw-text-dim);margin-top:4px">' + escapeHtml(t('cwe_subtitle')) + '</div>'
+      +   '<div class="cw-header">'
+      +     '<div class="cw-header-left">'
+      +       '<div class="cw-header-title">' + escapeHtml(t('cwe_title')) + '</div>'
+      +       '<div class="cw-header-sub">' + escapeHtml(t('cwe_subtitle')) + '</div>'
       +     '</div>'
-      +     '<div style="text-align:right;flex-shrink:0">'
-      +       '<div id="cw-tokens-display" style="font-family:var(--cw-font-mono);font-size:20px;font-weight:600;letter-spacing:-0.5px;line-height:1"></div>'
-      +       '<div style="font-family:var(--cw-font-mono);font-size:13px;color:var(--cw-text-dim);margin-top:2px;display:flex;align-items:center;justify-content:flex-end;gap:5px">'
+      +     '<div class="cw-header-right">'
+      +       '<div id="cw-tokens-display" class="cw-tokens-display"></div>'
+      +       '<div class="cw-tokens-sub-row">'
       +         '<span id="cw-tokens-sub">/ ' + fmt(MAX) + ' · ' + escapeHtml(t('cwe_illustrative')) + '</span>'
-      +         '<span id="cw-budget-help" class="cw-tip cw-tip-right" data-tip="" style="display:inline-flex;align-items:center;justify-content:center;width:15px;height:15px;border-radius:50%;background:var(--cw-track);color:var(--cw-text-dim);font-size:10px;font-weight:700;cursor:help;user-select:none;line-height:1">?</span>'
+      +         '<span id="cw-budget-help" class="cw-tip cw-tip-right cw-budget-help" data-tip="">?</span>'
       +       '</div>'
       +     '</div>'
       +   '</div>'
-      +   '<div style="padding:0 20px 8px;display:flex;align-items:center;gap:10px;flex-wrap:wrap">'
-      +     '<div role="tablist" style="display:inline-flex;gap:2px;padding:2px;background:var(--cw-track);border-radius:7px">'
-      +       '<button data-cw-mode="session" class="cw-mode-btn" style="padding:5px 12px;border-radius:5px;border:none;background:transparent;color:var(--cw-text-2);font-size:12px;font-weight:600;cursor:pointer">' + escapeHtml(t('cwe_modeSession')) + '</button>'
-      +       '<button data-cw-mode="example" class="cw-mode-btn" style="padding:5px 12px;border-radius:5px;border:none;background:transparent;color:var(--cw-text-2);font-size:12px;font-weight:600;cursor:pointer">' + escapeHtml(t('cwe_modeExample')) + '</button>'
+      +   '<div class="cw-toolbar">'
+      +     '<div role="tablist" class="cw-tab-group">'
+      +       '<button data-cw-mode="session" class="cw-mode-btn">' + escapeHtml(t('cwe_modeSession')) + '</button>'
+      +       '<button data-cw-mode="example" class="cw-mode-btn">' + escapeHtml(t('cwe_modeExample')) + '</button>'
       +     '</div>'
-      +     '<div id="cw-session-tools" style="display:none;align-items:center;gap:8px;flex-wrap:wrap;position:relative">'
+      +     '<div id="cw-session-tools" class="cw-session-tools">'
       +       '<div style="position:relative">'
-      +         '<input id="cw-session-input" type="text" autocomplete="off" spellcheck="false" placeholder="' + escapeHtml(t('cwe_searchHint')) + '" style="width:340px;padding:6px 10px;border-radius:5px;border:1px solid var(--cw-border);background:var(--cw-surface);color:var(--cw-text-2);font-size:12px;font-family:var(--cw-font-mono);outline:none" />'
-      +         '<div id="cw-session-list" style="display:none;position:absolute;top:calc(100% + 4px);left:0;z-index:20;width:520px;max-height:360px;overflow-y:auto;background:var(--cw-bg);border:1px solid var(--cw-border);border-radius:6px;box-shadow:0 8px 24px rgba(0,0,0,0.12)" class="cw-scroll">'
+      +         '<input id="cw-session-input" type="text" autocomplete="off" spellcheck="false" placeholder="' + escapeHtml(t('cwe_searchHint')) + '" class="cw-session-input" />'
+      +         '<div id="cw-session-list" class="cw-session-dropdown cw-scroll">'
       +           '<div id="cw-session-items"></div>'
-      +           '<div id="cw-session-nav" style="position:sticky;bottom:6px;right:0;float:right;display:none;gap:3px;margin:0 6px 0 0;z-index:1">'
-      +             '<button id="cw-list-top" style="width:24px;height:24px;border-radius:4px;border:1px solid var(--cw-border);background:var(--cw-surface);color:var(--cw-text-dim);cursor:pointer;display:flex;align-items:center;justify-content:center;opacity:0.5;transition:opacity 0.15s" title="맨 위로" onmouseover="this.style.opacity=\'1\'" onmouseout="this.style.opacity=\'0.5\'"><svg width="9" height="6" viewBox="0 0 9 6" fill="currentColor"><path d="M4.5 0L9 6H0z"/></svg></button>'
-      +             '<button id="cw-list-bottom" style="width:24px;height:24px;border-radius:4px;border:1px solid var(--cw-border);background:var(--cw-surface);color:var(--cw-text-dim);cursor:pointer;display:flex;align-items:center;justify-content:center;opacity:0.5;transition:opacity 0.15s" title="맨 아래로" onmouseover="this.style.opacity=\'1\'" onmouseout="this.style.opacity=\'0.5\'"><svg width="9" height="6" viewBox="0 0 9 6" fill="currentColor"><path d="M4.5 6L0 0H9z"/></svg></button>'
+      +           '<div id="cw-session-nav" class="cw-list-nav">'
+      +             '<button id="cw-list-top" class="cw-icon-btn cw-icon-btn--fade" title="맨 위로"><svg width="9" height="6" viewBox="0 0 9 6" fill="currentColor"><path d="M4.5 0L9 6H0z"/></svg></button>'
+      +             '<button id="cw-list-bottom" class="cw-icon-btn cw-icon-btn--fade" title="맨 아래로"><svg width="9" height="6" viewBox="0 0 9 6" fill="currentColor"><path d="M4.5 6L0 0H9z"/></svg></button>'
       +           '</div>'
       +         '</div>'
       +       '</div>'
-      +       '<div role="group" style="display:inline-flex;gap:2px;padding:2px;background:var(--cw-track);border-radius:6px">'
-      +         '<button data-cw-sort="recent" class="cw-sort-btn" style="padding:4px 10px;border-radius:4px;border:none;background:transparent;color:var(--cw-text-2);font-size:11px;font-weight:600;cursor:pointer">' + escapeHtml(t('cwe_sortRecent')) + '</button>'
-      +         '<button data-cw-sort="turns" class="cw-sort-btn cw-tip" data-tip="' + escapeHtml(t('cwe_turnsHelp')) + '" style="padding:4px 10px;border-radius:4px;border:none;background:transparent;color:var(--cw-text-2);font-size:11px;font-weight:600;cursor:pointer">' + escapeHtml(t('cwe_sortTurns')) + '</button>'
-      +         '<button data-cw-sort="tokens" class="cw-sort-btn" style="padding:4px 10px;border-radius:4px;border:none;background:transparent;color:var(--cw-text-2);font-size:11px;font-weight:600;cursor:pointer">' + escapeHtml(t('cwe_sortTokens')) + '</button>'
+      +       '<div role="group" class="cw-tab-group cw-tab-group--sm">'
+      +         '<button data-cw-sort="recent" class="cw-sort-btn">' + escapeHtml(t('cwe_sortRecent')) + '</button>'
+      +         '<button data-cw-sort="turns" class="cw-sort-btn cw-tip" data-tip="' + escapeHtml(t('cwe_turnsHelp')) + '">' + escapeHtml(t('cwe_sortTurns')) + '</button>'
+      +         '<button data-cw-sort="tokens" class="cw-sort-btn">' + escapeHtml(t('cwe_sortTokens')) + '</button>'
       +       '</div>'
       +     '</div>'
-      +     '<span id="cw-session-empty" style="display:none;font-size:12px;color:var(--cw-text-faint)">' + escapeHtml(t('cwe_noSessions')) + '</span>'
+      +     '<span id="cw-session-empty" class="cw-no-sessions">' + escapeHtml(t('cwe_noSessions')) + '</span>'
       +   '</div>'
-      +   '<div style="padding:0 20px">'
-      +     '<div style="height:4px;border-radius:2px;background:var(--cw-track);overflow:hidden;margin-bottom:6px">'
+      +   '<div class="cw-bar-area">'
+      +     '<div class="cw-progress-track">'
       +       '<div id="cw-progress-top" style="width:0%;height:100%;transition:width 0.6s cubic-bezier(0.4,0,0.2,1), background 0.3s"></div>'
       +     '</div>'
-      +     '<div style="height:28px;border-radius:5px;background:var(--cw-track);border:1px solid var(--cw-border);overflow:hidden"><canvas id="cw-bar" style="width:100%;height:100%;display:block;cursor:pointer"></canvas></div>'
-      +     '<div style="display:flex;gap:12px;margin-top:6px;flex-wrap:wrap;justify-content:space-between">'
-      +       '<div id="cw-legend" style="display:flex;gap:12px;flex-wrap:wrap"></div>'
-      +       '<div style="display:flex;gap:10px;align-items:center;font-size:11px;color:var(--cw-text-dim)">'
-      +         '<div style="display:flex;gap:4px;align-items:center">'
-      +           '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="color:var(--cw-text-faint);opacity:0.35"><path d="M17.94 17.94A10.07 10.07 0 0112 20c-7 0-11-8-11-8a18.45 18.45 0 015.06-5.94"/><path d="M9.9 4.24A9.12 9.12 0 0112 4c7 0 11 8 11 8a18.5 18.5 0 01-2.16 3.19"/><line x1="1" y1="1" x2="23" y2="23"/></svg>'
-      +           '<span style="color:var(--cw-text-faint)">' + escapeHtml(t('cwe_visHidden')) + '</span>'
+      +     '<div class="cw-canvas-track"><canvas id="cw-bar"></canvas></div>'
+      +     '<div class="cw-legend-row">'
+      +       '<div id="cw-legend" class="cw-legend-items"></div>'
+      +       '<div class="cw-vis-key">'
+      +         '<div class="cw-vis-key-item">'
+      +           '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" class="cw-faint" style="opacity:0.35"><path d="M17.94 17.94A10.07 10.07 0 0112 20c-7 0-11-8-11-8a18.45 18.45 0 015.06-5.94"/><path d="M9.9 4.24A9.12 9.12 0 0112 4c7 0 11 8 11 8a18.5 18.5 0 01-2.16 3.19"/><line x1="1" y1="1" x2="23" y2="23"/></svg>'
+      +           '<span class="cw-faint">' + escapeHtml(t('cwe_visHidden')) + '</span>'
       +         '</div>'
-      +         '<div style="display:flex;gap:4px;align-items:center">'
-      +           '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" style="color:var(--cw-text-faint);opacity:0.5"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><line x1="9" y1="12" x2="15" y2="12"/></svg>'
+      +         '<div class="cw-vis-key-item">'
+      +           '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" class="cw-faint-half"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><line x1="9" y1="12" x2="15" y2="12"/></svg>'
       +           '<span>' + escapeHtml(t('cwe_visBrief')) + '</span>'
       +         '</div>'
-      +         '<div style="display:flex;gap:4px;align-items:center">'
-      +           '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="#558A42" stroke-width="3"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>'
+      +         '<div class="cw-vis-key-item">'
+      +           '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="var(--cw-you)" stroke-width="3"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>'
       +           '<span>' + escapeHtml(t('cwe_visFull')) + '</span>'
       +         '</div>'
       +       '</div>'
       +     '</div>'
       +   '</div>'
-      +   '<div id="cw-main" style="display:flex;padding:14px 20px 0;gap:16px;flex:1;min-height:0">'
-      +     '<div style="flex:1;min-width:0;position:relative">'
-      +       '<div id="cw-timeline" class="cw-scroll" style="width:100%;height:100%;overflow-y:auto;padding-right:8px"></div>'
-      +       '<div id="cw-tl-nav" style="position:absolute;bottom:8px;right:16px;display:none;gap:3px;opacity:0;pointer-events:none;transition:opacity 0.2s;z-index:2">'
-      +         '<button id="cw-tl-top" style="width:24px;height:24px;border-radius:4px;border:1px solid var(--cw-border);background:var(--cw-surface);color:var(--cw-text-dim);cursor:pointer;display:flex;align-items:center;justify-content:center" title="맨 위로"><svg width="9" height="6" viewBox="0 0 9 6" fill="currentColor"><path d="M4.5 0L9 6H0z"/></svg></button>'
-      +         '<button id="cw-tl-bottom" style="width:24px;height:24px;border-radius:4px;border:1px solid var(--cw-border);background:var(--cw-surface);color:var(--cw-text-dim);cursor:pointer;display:flex;align-items:center;justify-content:center" title="맨 아래로"><svg width="9" height="6" viewBox="0 0 9 6" fill="currentColor"><path d="M4.5 6L0 0H9z"/></svg></button>'
+      +   '<div id="cw-main" class="cw-main">'
+      +     '<div class="cw-tl-wrap">'
+      +       '<div id="cw-timeline" class="cw-timeline cw-scroll"></div>'
+      +       '<div id="cw-tl-nav" class="cw-nav-overlay">'
+      +         '<button id="cw-tl-top" class="cw-icon-btn" title="맨 위로"><svg width="9" height="6" viewBox="0 0 9 6" fill="currentColor"><path d="M4.5 0L9 6H0z"/></svg></button>'
+      +         '<button id="cw-tl-bottom" class="cw-icon-btn" title="맨 아래로"><svg width="9" height="6" viewBox="0 0 9 6" fill="currentColor"><path d="M4.5 6L0 0H9z"/></svg></button>'
       +       '</div>'
       +     '</div>'
-      +     '<div style="width:300px;flex-shrink:0;display:flex;flex-direction:column">'
-      +       '<div id="cw-detail" class="cw-scroll" style="padding:14px 16px;border-radius:10px;background:var(--cw-surface);border:1px solid var(--cw-border);flex:1;min-height:0;overflow-y:auto;display:flex;flex-direction:column;gap:10px"></div>'
+      +     '<div class="cw-detail-wrap">'
+      +       '<div id="cw-detail" class="cw-detail cw-scroll"></div>'
       +     '</div>'
       +   '</div>'
-      +   '<div id="cw-session-info" style="display:none;padding:10px 20px 16px;align-items:center;gap:16px;font-size:12px;color:var(--cw-text-dim);flex-wrap:wrap"></div>'
-      +   '<div id="cw-playback-bar" style="padding:10px 20px 16px;display:flex;align-items:center;gap:10px">'
-      +     '<button id="cw-play" aria-label="Play" style="width:30px;height:30px;border-radius:6px;border:none;background:rgba(217,119,87,0.1);color:#D97757;cursor:pointer;font-size:15px;font-weight:700;display:flex;align-items:center;justify-content:center">▶</button>'
-      +     '<button id="cw-skip" title="' + escapeHtml(t('cwe_skipToEnd')) + '" style="width:28px;height:28px;border-radius:6px;border:1px solid var(--cw-border);background:var(--cw-surface);color:var(--cw-text-dim);cursor:pointer;font-size:13px;flex-shrink:0;display:flex;align-items:center;justify-content:center">⏭</button>'
-      +     '<div style="flex:1;height:3px;border-radius:2px;background:var(--cw-track);overflow:hidden">'
-      +       '<div id="cw-progress-bottom" style="width:0%;height:100%;background:#D97757;transition:width 0.1s linear"></div>'
+      +   '<div id="cw-session-info" class="cw-session-info"></div>'
+      +   '<div id="cw-playback-bar" class="cw-playback">'
+      +     '<button id="cw-play" aria-label="Play" class="cw-play-btn">▶</button>'
+      +     '<button id="cw-skip" title="' + escapeHtml(t('cwe_skipToEnd')) + '" class="cw-ctrl-btn">⏭</button>'
+      +     '<div class="cw-scrubber-track">'
+      +       '<div id="cw-progress-bottom" style="width:0%;height:100%;background:var(--cw-accent);transition:width 0.1s linear"></div>'
       +     '</div>'
-      +     '<span id="cw-percent" style="font-size:12px;font-family:var(--cw-font-mono);color:var(--cw-text-faint);min-width:30px">0%</span>'
-      +     '<span style="font-size:11px;color:var(--cw-text-faint);opacity:0.6;margin-left:4px">' + escapeHtml(t('cwe_kbdHint')) + '</span>'
-      +     '<button id="cw-fs" aria-label="Fullscreen" title="Fullscreen" style="width:28px;height:28px;border-radius:6px;border:1px solid var(--cw-border);background:var(--cw-surface);color:var(--cw-text-dim);cursor:pointer;font-size:15px;flex-shrink:0;margin-left:4px;display:flex;align-items:center;justify-content:center">⛶</button>'
+      +     '<span id="cw-percent" class="cw-percent">0%</span>'
+      +     '<span class="cw-kbd-hint">' + escapeHtml(t('cwe_kbdHint')) + '</span>'
+      +     '<button id="cw-fs" aria-label="Fullscreen" title="Fullscreen" class="cw-ctrl-btn cw-ctrl-btn--lg">⛶</button>'
       +   '</div>'
       + '</div>';
 
@@ -4841,10 +5022,9 @@ window.name = 'oh-my-hi';
 
     // Render legend once
     legendEl.innerHTML = LEGEND.map((x) => {
-      return '<div class="cw-legend-item" data-cw-legend="' + x.c + '" data-cw-pct="' + x.c + '" data-cw-label="' + escapeHtml(t(x.labelKey)) + '" data-tip="" '
-        + 'style="display:flex;align-items:center;gap:4px;padding:2px 6px;border-radius:4px;cursor:pointer;transition:background 0.1s">'
-        + '<div style="width:6px;height:6px;border-radius:1.5px;background:' + x.c + ';opacity:0.7"></div>'
-        + '<span style="font-size:12px;color:var(--cw-text-dim)">' + escapeHtml(t(x.labelKey)) + '</span>'
+      return '<div class="cw-legend-item" data-cw-legend="' + x.c + '" data-cw-pct="' + x.c + '" data-cw-label="' + escapeHtml(t(x.labelKey)) + '" data-tip="">'
+        + '<div class="cw-legend-dot" style="background:' + x.c + '"></div>'
+        + '<span class="cw-legend-label">' + escapeHtml(t(x.labelKey)) + '</span>'
         + '</div>';
     }).join('');
 
@@ -4857,21 +5037,21 @@ window.name = 'oh-my-hi';
     const floatTip = document.createElement('div');
     floatTip.style.cssText = 'position:fixed; pointer-events:none; opacity:0;'
       + ' z-index:10000; padding:7px 10px; border-radius:6px;'
-      + ' background:rgba(30,28,24,0.95); color:#F5F3EC;'
       + ' font-size:11px; font-weight:400; line-height:1.45;'
       + ' max-width:300px; white-space:normal; text-align:left;'
       + ' box-shadow:0 6px 18px rgba(0,0,0,0.18);'
       + ' transition:opacity 0.15s ease;';
-    if (document.body.classList.contains('dark')) {
-      floatTip.style.background = 'rgba(240,238,230,0.95)';
-      floatTip.style.color = '#1A1918';
-    }
     document.body.appendChild(floatTip);
     window._cwFloatTip = floatTip;
 
     function showFloatTipFor(el) {
       const txt = el.getAttribute('data-tip') || '';
       if (!txt) return;
+      // Apply theme colours at show time so the tip stays correct after a
+      // theme toggle without requiring a full re-render.
+      const isDark = document.body.classList.contains('dark');
+      floatTip.style.background = isDark ? 'rgba(240,238,230,0.95)' : 'rgba(30,28,24,0.95)';
+      floatTip.style.color = isDark ? '#1A1918' : '#F5F3EC';
       floatTip.textContent = txt;
       // First set approximate position so we can measure, then clamp.
       const rect = el.getBoundingClientRect();
@@ -5098,64 +5278,64 @@ window.name = 'oh-my-hi';
 
       let html = '';
       if (showPhase) {
-        html += rowOpen + '<div style="font-size:12px;font-weight:700;color:var(--cw-text-faint);text-transform:uppercase;letter-spacing:0.6px;margin-top:14px;margin-bottom:6px;padding-left:28px">' + escapeHtml(showPhase) + '</div>';
+        html += rowOpen + '<div class="cw-phase-label">' + escapeHtml(showPhase) + '</div>';
       } else {
         html += rowOpen;
       }
       if (enteringSub) {
-        html += '<div style="margin-left:28px;margin-top:6px;margin-bottom:2px;padding-left:10px;border-left:2px solid rgba(155,123,196,0.4);font-size:12px;font-weight:600;color:#9B7BC4;text-transform:uppercase;letter-spacing:0.5px">' + escapeHtml(t('cwe_subagentCtxLabel')) + '</div>';
+        html += '<div class="cw-subagent-enter">' + escapeHtml(t('cwe_subagentCtxLabel')) + '</div>';
       }
       if (leavingSub) {
-        html += '<div style="margin-left:28px;margin-bottom:6px;padding-left:10px;padding-bottom:6px;border-left:2px solid rgba(155,123,196,0.4);font-size:12px;color:var(--cw-text-dim);font-family:var(--cw-font-mono)">↓ ' + escapeHtml(t('cwe_subagentReturned', fmt(subTotal))) + '</div>';
+        html += '<div class="cw-subagent-leave">↓ ' + escapeHtml(t('cwe_subagentReturned', fmt(subTotal))) + '</div>';
       }
 
       const dimmed = state.hovCat && evt.color !== state.hovCat;
       const rowBg = (isSel || isHov) ? 'var(--cw-hover)' : 'transparent';
-      const outline = isSel ? '1px solid rgba(217,119,87,0.4)' : 'none';
+      const outline = isSel ? '1px solid var(--cw-sel-ring)' : 'none';
       const rowStyle = 'display:flex;align-items:flex-start;border-radius:6px;cursor:pointer;'
         + 'background:' + rowBg + ';outline:' + outline + ';opacity:' + (dimmed ? 0.35 : 1) + ';'
         + 'transition:background 0.1s,opacity 0.15s;'
-        + (isSub ? 'margin-left:28px;padding-left:10px;border-left:2px solid rgba(155,123,196,0.4);' : '');
+        + (isSub ? 'margin-left:28px;padding-left:10px;border-left:2px solid var(--cw-mcp-ring);' : '');
 
       html += '<div data-cw-item="' + i + '" style="' + rowStyle + '">';
       const dotSz = (evt.kind === 'user' || evt.kind === 'compact') ? 10 : 7;
-      html += '<div style="width:28px;display:flex;flex-direction:column;align-items:center;padding-top:8px;flex-shrink:0">'
+      html += '<div class="cw-row-dot-col">'
         + '<div style="width:' + dotSz + 'px;height:' + dotSz + 'px;border-radius:50%;background:' + evt.color + ';opacity:' + (isHov ? 1 : 0.6) + ';transition:opacity 0.15s;' + (isHov ? 'box-shadow:0 0 8px ' + evt.color + '40' : '') + '"></div>';
       if (i < visible.length - 1) {
-        html += '<div style="width:1.5px;flex:1;background:var(--cw-rail);margin-top:2px;min-height:6px"></div>';
+        html += '<div class="cw-row-connector"></div>';
       }
       html += '</div>';
 
       const labelColor = isHov ? 'var(--cw-text)'
-        : evt.kind === 'user' ? '#558A42'
+        : evt.kind === 'user' ? 'var(--cw-you)'
         : evt.kind === 'auto' ? 'var(--cw-text-dim)' : 'var(--cw-text-2)';
       const tok = evtTokens(evt);
       const subTok = evtSubTokens(evt);
-      html += '<div style="flex:1;min-width:0;padding:5px 10px 5px 4px;display:flex;align-items:center;gap:8px">'
-        + '<span style="font-size:12px;font-weight:600;padding:1px 5px;border-radius:3px;background:' + meta.badgeBg + ';color:' + meta.badgeColor + ';flex-shrink:0;font-family:var(--cw-font-mono)">' + escapeHtml(t(meta.badgeKey)) + '</span>'
-        + '<span style="font-size:15px;font-family:var(--cw-font-mono);color:' + labelColor + ';flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:' + (evt.kind === 'user' ? 550 : 400) + '">' + escapeHtml(evtLabel(evt)) + '</span>';
+      html += '<div class="cw-row-label-col">'
+        + '<span class="cw-badge" style="background:' + meta.badgeBg + ';color:' + meta.badgeColor + '">' + escapeHtml(t(meta.badgeKey)) + '</span>'
+        + '<span class="cw-row-name" style="color:' + labelColor + ';font-weight:' + (evt.kind === 'user' ? 550 : 400) + '">' + escapeHtml(evtLabel(evt)) + '</span>';
       if (tok > 0) {
-        html += '<span style="font-size:12px;font-family:var(--cw-font-mono);color:var(--cw-text-faint);flex-shrink:0">+' + fmt(tok) + '</span>';
+        html += '<span class="cw-row-tok">+' + fmt(tok) + '</span>';
       }
       if (subTok > 0) {
-        html += '<span style="font-size:12px;font-family:var(--cw-font-mono);color:#9B7BC4;flex-shrink:0;opacity:0.6">+' + fmt(subTok) + '</span>';
+        html += '<span class="cw-row-subtok">+' + fmt(subTok) + '</span>';
       }
       if (tok > 0) {
         const mw = Math.min(tok / 5000 * 100, 100);
-        html += '<div style="width:50px;height:5px;border-radius:2px;background:var(--cw-track);flex-shrink:0;overflow:hidden">'
+        html += '<div class="cw-mini-bar-track">'
           + '<div style="width:' + mw + '%;height:100%;background:' + evt.color + ';opacity:' + (isHov ? 0.8 : 0.4) + ';transition:opacity 0.15s"></div>'
           + '</div>';
       }
-      html += '<span style="width:14px;flex-shrink:0;display:flex;justify-content:center" title="' + escapeHtml(t(VIS_META[evt.vis].labelKey)) + '">';
+      html += '<span class="cw-vis-icon" title="' + escapeHtml(t(VIS_META[evt.vis].labelKey)) + '">';
       if (evt.vis === 'hidden') {
         // Closed eye — same muted style, slash across the eye path
-        html += '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="color:var(--cw-text-faint);opacity:0.35"><path d="M17.94 17.94A10.07 10.07 0 0112 20c-7 0-11-8-11-8a18.45 18.45 0 015.06-5.94"/><path d="M9.9 4.24A9.12 9.12 0 0112 4c7 0 11 8 11 8a18.5 18.5 0 01-2.16 3.19"/><line x1="1" y1="1" x2="23" y2="23"/></svg>';
+        html += '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" class="cw-faint" style="opacity:0.35"><path d="M17.94 17.94A10.07 10.07 0 0112 20c-7 0-11-8-11-8a18.45 18.45 0 015.06-5.94"/><path d="M9.9 4.24A9.12 9.12 0 0112 4c7 0 11 8 11 8a18.5 18.5 0 01-2.16 3.19"/><line x1="1" y1="1" x2="23" y2="23"/></svg>';
       } else if (evt.vis === 'brief') {
         // Eye outline + dash inside: visible but abbreviated
-        html += '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" style="color:var(--cw-text-faint);opacity:0.5"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><line x1="9" y1="12" x2="15" y2="12"/></svg>';
+        html += '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" class="cw-faint-half"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><line x1="9" y1="12" x2="15" y2="12"/></svg>';
       } else {
-        // full — open eye, green
-        html += '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#558A42" stroke-width="3.5" style="opacity:1"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>';
+        // full — open eye, green (uses CSS var for theme)
+        html += '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="var(--cw-you)" stroke-width="3.5"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>';
       }
       html += '</span>';
       html += '</div>'; // label container
@@ -5213,21 +5393,21 @@ window.name = 'oh-my-hi';
 
       // ── Empty states ──
       if (state.mode === 'session' && state.sessionEvents.length === 0) {
-        timelineEl.innerHTML = '<div id="cw-tl-hdr" style="height:100%;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;color:var(--cw-text-faint)">'
-          + '<div style="font-size:28px;opacity:0.3">⌕</div>'
-          + '<div style="font-size:14px;font-weight:500">' + escapeHtml(t('cwe_pickSessionTitle')) + '</div>'
-          + '<div style="font-size:12px;max-width:320px;text-align:center;line-height:1.5">' + escapeHtml(t('cwe_pickSessionHint')) + '</div>'
+        timelineEl.innerHTML = '<div id="cw-tl-hdr" class="cw-empty-state">'
+          + '<div class="cw-empty-icon">⌕</div>'
+          + '<div class="cw-empty-title">' + escapeHtml(t('cwe_pickSessionTitle')) + '</div>'
+          + '<div class="cw-empty-desc">' + escapeHtml(t('cwe_pickSessionHint')) + '</div>'
           + '</div>';
         return;
       }
       if (visible.length === 0 && !state.playing && state.mode !== 'session') {
-        timelineEl.innerHTML = '<div id="cw-tl-hdr" style="height:100%;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:16px">'
-          + '<div style="font-family:var(--cw-font-mono);font-size:16px;color:var(--cw-text-dim);display:flex;align-items:center;gap:8px">'
-          +   '<span style="color:var(--cw-text-faint)">$</span><span>claude</span>'
-          +   '<span style="display:inline-block;width:8px;height:16px;background:var(--cw-text-dim);opacity:0.5;animation:cw-blink 1s step-end infinite"></span>'
+        timelineEl.innerHTML = '<div id="cw-tl-hdr" class="cw-start-state">'
+          + '<div class="cw-start-cursor">'
+          +   '<span class="cw-faint">$</span><span>claude</span>'
+          +   '<span class="cw-start-cursor-blink"></span>'
           + '</div>'
-          + '<button data-cw-start="1" style="padding:10px 20px;border-radius:8px;border:1px solid rgba(217,119,87,0.3);background:rgba(217,119,87,0.08);color:#D97757;font-size:15px;font-weight:600;cursor:pointer;display:flex;align-items:center;gap:8px"><span>▶</span><span>' + escapeHtml(t('cwe_startSession')) + '</span></button>'
-          + '<div style="font-size:13px;color:var(--cw-text-faint);max-width:280px;text-align:center;line-height:1.5">'
+          + '<button data-cw-start="1" class="cw-start-btn"><span>▶</span><span>' + escapeHtml(t('cwe_startSession')) + '</span></button>'
+          + '<div class="cw-start-hint">'
           +   renderCode(t('cwe_startHint'))
           + '</div>'
           + '</div>';
@@ -5237,23 +5417,23 @@ window.name = 'oh-my-hi';
       // ── Header (non-virtual) ──
       let hdrHtml = '<div id="cw-tl-hdr">';
       if (isCompacted) {
-        hdrHtml += '<div style="margin-bottom:10px;padding:10px 12px;border-radius:6px;background:rgba(217,119,87,0.05);border:1px solid rgba(217,119,87,0.15)">'
-          + '<div style="font-size:13px;font-weight:600;color:#D97757;margin-bottom:3px">' + escapeHtml(t('cwe_afterCompactTitle')) + '</div>'
-          + '<div style="font-size:13px;color:var(--cw-text-3);line-height:1.5;font-family:var(--cw-font-mono)">'
+        hdrHtml += '<div class="cw-compact-header">'
+          + '<div class="cw-compact-title">' + escapeHtml(t('cwe_afterCompactTitle')) + '</div>'
+          + '<div class="cw-compact-stats">'
           +   escapeHtml(t('cwe_afterCompactStats', fmt(preCompactTotal), fmt(totalTokens), fmt(preCompactTotal - totalTokens)))
           + '</div>'
-          + '<div style="font-size:13px;color:var(--cw-text-dim);line-height:1.5;margin-top:4px">'
+          + '<div class="cw-compact-desc">'
           +   escapeHtml(t('cwe_afterCompactDesc'))
           + '</div>'
           + '</div>';
       }
       if (state.mode !== 'session' && state.time > 0 && visible.length > 0) {
-        hdrHtml += '<div style="font-size:12px;font-weight:700;color:var(--cw-text-faint);text-transform:uppercase;letter-spacing:0.6px;margin-bottom:6px;padding-left:28px">'
+        hdrHtml += '<div class="cw-section-label">'
           + escapeHtml(isCompacted ? t('cwe_reloadedAfterCompact') : t('cwe_beforeYouType'))
           + '</div>';
       }
       if (state.mode === 'session' && visible.length > 0) {
-        hdrHtml += '<div style="font-size:12px;font-weight:700;color:var(--cw-text-faint);text-transform:uppercase;letter-spacing:0.6px;margin-bottom:6px;padding-left:28px">'
+        hdrHtml += '<div class="cw-section-label">'
           + escapeHtml(t('cwe_sessionReplay'))
           + '</div>';
       }
@@ -5273,30 +5453,31 @@ window.name = 'oh-my-hi';
       if (activeGate) {
         const gateText = t(activeGate.gateKey);
         const isCompact = activeGate.kind === 'compact';
-        const textSpan = '<span style="flex:1;min-width:0;font:15px var(--cw-font-mono);color:var(--cw-text-2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">' + escapeHtml(gateText) + '</span>';
+        const textSpan = '<span class="cw-gate-prompt-text">' + escapeHtml(gateText) + '</span>';
         if (!isCompact) {
-          ftrHtml += '<div style="padding-left:28px;margin-top:12px;padding-right:8px">'
-            + '<div style="font-size:11px;font-weight:600;color:#6BA656;font-family:var(--cw-font-mono);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:4px;padding-left:2px">' + escapeHtml(t('cwe_youTypeHeader')) + '</div>'
-            + '<div style="display:flex;align-items:center;gap:8px;padding:10px 12px;border-radius:6px;background:rgba(85,138,66,0.06);border:1px solid rgba(85,138,66,0.2)">'
-            +   '<span style="color:#558A42;font-size:15px;font-family:var(--cw-font-mono);flex-shrink:0">❯</span>'
+          ftrHtml += '<div class="cw-gate-wrap">'
+            + '<div class="cw-gate-you-label">' + escapeHtml(t('cwe_youTypeHeader')) + '</div>'
+            + '<div class="cw-gate-input-row">'
+            +   '<span class="cw-gate-prompt-icon">❯</span>'
             +   textSpan
-            +   '<button data-cw-gate="1" style="padding:5px 12px;border-radius:5px;border:none;background:#558A42;color:#fff;font-size:13px;font-weight:600;cursor:pointer;flex-shrink:0">'
+            +   '<button data-cw-gate="1" class="cw-gate-btn cw-gate-btn--you">'
             +     escapeHtml(activeGate.kind === 'prompt' ? t('cwe_sendBtn') : t('cwe_runBtn'))
             +   '</button>'
             + '</div>'
             + '</div>';
         } else {
-          const barColor = (totalTokens / state.budget * 100) > 75 ? '#D97757' : (totalTokens / state.budget * 100) > 50 ? '#B8860B' : '#558A42';
-          ftrHtml += '<div style="padding-left:28px;margin-top:12px;padding-right:8px">'
-            + '<div style="padding:12px 14px;border-radius:6px;background:rgba(217,119,87,0.06);border:1px solid rgba(217,119,87,0.25)">'
-            +   '<div style="font-size:13px;color:var(--cw-text-3);margin-bottom:8px;line-height:1.5">'
-            +     escapeHtml(t('cwe_compactPromptPre')) + ' <span style="font-family:var(--cw-font-mono);font-weight:600;color:' + barColor + '">' + fmt(totalTokens) + ' ' + escapeHtml(t('cwe_tokensWord')) + '</span>. '
+          const pct = totalTokens / state.budget * 100;
+          const barColorVar = pct > 75 ? 'var(--cw-accent)' : pct > 50 ? 'var(--cw-gold)' : 'var(--cw-you)';
+          ftrHtml += '<div class="cw-gate-wrap">'
+            + '<div class="cw-gate-compact-box">'
+            +   '<div class="cw-gate-compact-desc">'
+            +     escapeHtml(t('cwe_compactPromptPre')) + ' <span style="font-family:var(--cw-font-mono);font-weight:600;color:' + barColorVar + '">' + fmt(totalTokens) + ' ' + escapeHtml(t('cwe_tokensWord')) + '</span>. '
             +     renderCode(t('cwe_compactPromptPost'))
             +   '</div>'
-            +   '<div style="display:flex;align-items:center;gap:8px">'
-            +     '<span style="color:#D97757;font-size:15px;font-family:var(--cw-font-mono)">❯</span>'
+            +   '<div class="cw-gate-compact-row">'
+            +     '<span class="cw-gate-compact-icon">❯</span>'
             +     textSpan
-            +     '<button data-cw-gate="1" style="padding:5px 12px;border-radius:5px;border:none;background:#D97757;color:#fff;font-size:13px;font-weight:600;cursor:pointer;flex-shrink:0">' + escapeHtml(t('cwe_runBtn')) + '</button>'
+            +     '<button data-cw-gate="1" class="cw-gate-btn cw-gate-btn--accent">' + escapeHtml(t('cwe_runBtn')) + '</button>'
             +   '</div>'
             + '</div>'
             + '</div>';
@@ -5319,22 +5500,22 @@ window.name = 'oh-my-hi';
       if (hovEvent && hovEvent.isSession && hovEvent.isSynthetic) {
         const meta = KIND_META[hovEvent.kind];
         html += '<div>'
-          + '<div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">'
-          +   '<div style="width:10px;height:10px;border-radius:3px;background:' + hovEvent.color + ';opacity:0.8"></div>'
-          +   '<span style="font-size:16px;font-weight:600">' + escapeHtml(evtLabel(hovEvent)) + '</span>'
+          + '<div class="cw-detail-title-row">'
+          +   '<div class="cw-detail-dot" style="background:' + hovEvent.color + '"></div>'
+          +   '<span class="cw-detail-title">' + escapeHtml(evtLabel(hovEvent)) + '</span>'
           + '</div>'
-          + '<div style="display:flex;align-items:center;gap:6px;margin-bottom:8px">'
-          +   '<div style="display:flex;padding:3px 8px;border-radius:4px;background:' + meta.badgeBg + '">'
-          +     '<span style="font-size:12px;font-weight:600;color:' + meta.badgeColor + '">' + escapeHtml(t(meta.detailKey)) + '</span>'
+          + '<div class="cw-detail-badge-row">'
+          +   '<div class="cw-detail-badge-inline" style="background:' + meta.badgeBg + '">'
+          +     '<span class="cw-badge" style="color:' + meta.badgeColor + '">' + escapeHtml(t(meta.detailKey)) + '</span>'
           +   '</div>'
-          +   '<div style="display:flex;padding:3px 8px;border-radius:4px;background:rgba(140,140,130,0.1)">'
-          +     '<span style="font-size:12px;font-weight:600;color:var(--cw-text-faint)">' + escapeHtml(t('cwe_estimatedTag')) + '</span>'
+          +   '<div class="cw-detail-badge-inline cw-detail-badge--neutral">'
+          +     '<span class="cw-badge" style="color:var(--cw-text-faint)">' + escapeHtml(t('cwe_estimatedTag')) + '</span>'
           +   '</div>'
           + '</div>'
-          + '<div style="display:flex;align-items:center;gap:8px;margin-bottom:10px">'
-          +   '<span style="font-size:14px;font-family:var(--cw-font-mono);color:var(--cw-text-2)">~' + fmt(hovEvent.tokens) + ' ' + escapeHtml(t('cwe_tokensWord')) + '</span>'
+          + '<div class="cw-detail-token-row">'
+          +   '<span class="cw-detail-token">~' + fmt(hovEvent.tokens) + ' ' + escapeHtml(t('cwe_tokensWord')) + '</span>'
           + '</div>'
-          + '<p style="font-size:14px;color:var(--cw-text-dim);line-height:1.55;margin:0">' + escapeHtml(t('cwe_sessionStartupDesc')) + '</p>'
+          + '<p class="cw-detail-desc--dim">' + escapeHtml(t('cwe_sessionStartupDesc')) + '</p>'
           + '</div>';
         detailEl.innerHTML = html;
         detailEl.scrollTop = 0;
@@ -5346,23 +5527,23 @@ window.name = 'oh-my-hi';
           ? Math.round((hovEvent.cacheRead / hovEvent.cumulative) * 100)
           : 0;
         html += '<div>'
-          + '<div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">'
-          +   '<div style="width:10px;height:10px;border-radius:3px;background:' + hovEvent.color + ';opacity:0.8"></div>'
-          +   '<span style="font-size:16px;font-weight:600">' + escapeHtml(evtLabel(hovEvent)) + '</span>'
+          + '<div class="cw-detail-title-row">'
+          +   '<div class="cw-detail-dot" style="background:' + hovEvent.color + '"></div>'
+          +   '<span class="cw-detail-title">' + escapeHtml(evtLabel(hovEvent)) + '</span>'
           + '</div>'
-          + '<div style="display:flex;width:fit-content;padding:3px 8px;border-radius:4px;margin-bottom:8px;background:' + meta.badgeBg + '">'
-          +   '<span style="font-size:12px;font-weight:600;color:' + meta.badgeColor + '">' + escapeHtml(t(meta.detailKey)) + '</span>'
+          + '<div class="cw-detail-badge" style="background:' + meta.badgeBg + '">'
+          +   '<span class="cw-badge" style="color:' + meta.badgeColor + '">' + escapeHtml(t(meta.detailKey)) + '</span>'
           + '</div>'
-          + '<div style="font-size:13px;color:var(--cw-text-dim);font-family:var(--cw-font-mono);margin-bottom:6px">'
+          + '<div class="cw-detail-meta">'
           +   escapeHtml(shortModel(hovEvent.model)) + ' · ' + escapeHtml(fmtClock(hovEvent.timestamp))
           + '</div>'
-          + '<div style="font-size:14px;font-family:var(--cw-font-mono);color:var(--cw-text-2);margin-bottom:3px">'
+          + '<div class="cw-detail-cumul">'
           +   escapeHtml(t('cwe_sessionCumulative')) + ': <strong>' + fmt(hovEvent.cumulative) + '</strong> ' + escapeHtml(t('cwe_tokensWord'))
           + '</div>'
-          + '<div style="font-size:13px;font-family:var(--cw-font-mono);color:var(--cw-text-dim);margin-bottom:8px">'
+          + '<div class="cw-detail-delta">'
           +   escapeHtml(t('cwe_sessionDelta')) + ': ' + (hovEvent.delta >= 0 ? '+' : '') + fmt(hovEvent.delta)
           + '</div>'
-          + '<div style="padding:8px 10px;border-radius:6px;background:var(--cw-surface-2);border:1px solid var(--cw-border);font-size:12px;line-height:1.6;color:var(--cw-text-dim);font-family:var(--cw-font-mono)">'
+          + '<div class="cw-detail-cache-box">'
           +   escapeHtml(t('cwe_sessionCache')) + ': ' + pctCache + '%<br>'
           +   'raw: ' + fmt(hovEvent.rawInput) + ' · cache R/W: ' + fmt(hovEvent.cacheRead) + ' / ' + fmt(hovEvent.cacheCreation) + '<br>'
           +   'out: ' + fmt(hovEvent.outputTokens)
@@ -5377,85 +5558,83 @@ window.name = 'oh-my-hi';
         const tok = evtTokens(hovEvent);
         const subTok = evtSubTokens(hovEvent);
         html += '<div>'
-          + '<div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">'
-          +   '<div style="width:10px;height:10px;border-radius:3px;background:' + hovEvent.color + ';opacity:0.8"></div>'
-          +   '<span style="font-size:16px;font-weight:600">' + escapeHtml(evtLabel(hovEvent)) + '</span>'
+          + '<div class="cw-detail-title-row">'
+          +   '<div class="cw-detail-dot" style="background:' + hovEvent.color + '"></div>'
+          +   '<span class="cw-detail-title">' + escapeHtml(evtLabel(hovEvent)) + '</span>'
           + '</div>'
-          + '<div style="display:flex;width:fit-content;padding:3px 8px;border-radius:4px;margin-bottom:8px;background:' + meta.badgeBg + '">'
-          +   '<span style="font-size:12px;font-weight:600;color:' + meta.badgeColor + '">' + escapeHtml(t(meta.detailKey)) + '</span>'
+          + '<div class="cw-detail-badge" style="background:' + meta.badgeBg + '">'
+          +   '<span class="cw-badge" style="color:' + meta.badgeColor + '">' + escapeHtml(t(meta.detailKey)) + '</span>'
           + '</div>';
         {
           const isMeasured = hovEvent.statKey && resolveStat(hovEvent.statKey) != null;
           if (tok > 0) {
             const badgeLabel = isMeasured ? t('cwe_measured') : t('cwe_illustrativeTag');
             const badgeTitle = isMeasured ? t('cwe_measuredDesc') : t('cwe_illustrativeTagDesc');
-            const badgeBg = isMeasured ? 'rgba(85,138,66,0.12)' : 'rgba(140,140,130,0.1)';
-            const badgeCol = isMeasured ? '#558A42' : 'var(--cw-text-faint)';
-            html += '<div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">'
-              + '<span style="font-size:14px;font-family:var(--cw-font-mono);color:var(--cw-text-dim)">' + fmt(tok) + ' ' + escapeHtml(t('cwe_tokensWord')) + '</span>'
-              + '<span title="' + escapeHtml(badgeTitle) + '" style="font-size:10px;font-weight:600;padding:1px 6px;border-radius:3px;background:' + badgeBg + ';color:' + badgeCol + ';text-transform:uppercase;letter-spacing:0.3px">' + escapeHtml(badgeLabel) + '</span>'
+            html += '<div class="cw-detail-token-row">'
+              + '<span class="cw-detail-token">' + fmt(tok) + ' ' + escapeHtml(t('cwe_tokensWord')) + '</span>'
+              + '<span title="' + escapeHtml(badgeTitle) + '" class="cw-detail-tag ' + (isMeasured ? 'cw-detail-tag--measured' : 'cw-detail-tag--illus') + '">' + escapeHtml(badgeLabel) + '</span>'
               + '</div>';
           } else if (isMeasured && tok === 0) {
-            html += '<div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">'
-              + '<span style="font-size:14px;font-family:var(--cw-font-mono);color:var(--cw-text-faint)">0 ' + escapeHtml(t('cwe_tokensWord')) + '</span>'
-              + '<span style="font-size:10px;font-weight:600;padding:1px 6px;border-radius:3px;background:rgba(85,138,66,0.12);color:#558A42;text-transform:uppercase;letter-spacing:0.3px">' + escapeHtml(t('cwe_measured')) + '</span>'
+            html += '<div class="cw-detail-token-row">'
+              + '<span class="cw-detail-token cw-faint">0 ' + escapeHtml(t('cwe_tokensWord')) + '</span>'
+              + '<span class="cw-detail-tag cw-detail-tag--measured">' + escapeHtml(t('cwe_measured')) + '</span>'
               + '</div>'
-              + '<div style="font-size:12px;color:var(--cw-text-faint);margin-bottom:6px;font-style:italic">' + escapeHtml(t('cwe_zeroTokens')) + '</div>';
+              + '<div class="cw-detail-zero-note">' + escapeHtml(t('cwe_zeroTokens')) + '</div>';
           }
         }
         if (subTok > 0) {
-          html += '<div style="font-size:14px;font-family:var(--cw-font-mono);color:#9B7BC4;margin-bottom:6px">' + escapeHtml(t('cwe_tokensInSubagent', fmt(subTok))) + '</div>';
+          html += '<div class="cw-detail-subtok">' + escapeHtml(t('cwe_tokensInSubagent', fmt(subTok))) + '</div>';
         }
-        html += '<p style="font-size:15px;color:var(--cw-text-3);line-height:1.55;margin:0">' + renderCode(evtDesc(hovEvent)) + '</p>';
+        html += '<p class="cw-detail-desc">' + renderCode(evtDesc(hovEvent)) + '</p>';
 
-        const visBg = hovEvent.vis === 'full' ? 'rgba(85,138,66,0.08)' : 'var(--cw-surface-2)';
-        const visBorder = hovEvent.vis === 'full' ? 'rgba(85,138,66,0.2)' : 'var(--cw-border)';
+        const visBg = hovEvent.vis === 'full' ? 'var(--cw-you-bg2)' : 'var(--cw-surface-2)';
+        const visBorder = hovEvent.vis === 'full' ? 'var(--cw-you-ring)' : 'var(--cw-border)';
         const dot = hovEvent.vis === 'full' ? '●' : hovEvent.vis === 'brief' ? '◐' : '○';
-        const dotCol = hovEvent.vis === 'full' ? '#558A42' : 'var(--cw-text-dim)';
-        html += '<div style="margin-top:10px;padding:8px 10px;border-radius:6px;background:' + visBg + ';border:1px solid ' + visBorder + '">'
-          + '<div style="display:flex;align-items:center;gap:6px;margin-bottom:3px">'
+        const dotCol = hovEvent.vis === 'full' ? 'var(--cw-you)' : 'var(--cw-text-dim)';
+        html += '<div class="cw-vis-box" style="background:' + visBg + ';border:1px solid ' + visBorder + '">'
+          + '<div class="cw-vis-box-inner">'
           +   '<span style="font-size:13px;color:' + dotCol + '">' + dot + '</span>'
-          +   '<span style="font-size:12px;font-weight:600;color:var(--cw-text-2)">' + escapeHtml(t(VIS_META[hovEvent.vis].labelKey)) + '</span>'
+          +   '<span class="cw-vis-box-label">' + escapeHtml(t(VIS_META[hovEvent.vis].labelKey)) + '</span>'
           + '</div>'
-          + '<div style="font-size:13px;color:var(--cw-text-dim);line-height:1.4">' + escapeHtml(t(VIS_META[hovEvent.vis].subKey)) + '</div>'
+          + '<div class="cw-vis-box-desc">' + escapeHtml(t(VIS_META[hovEvent.vis].subKey)) + '</div>'
           + '</div>';
 
         const tip = evtTip(hovEvent);
         if (tip) {
-          html += '<div style="margin-top:10px;padding:8px 10px;border-radius:6px;background:rgba(85,138,66,0.06);border:1px solid rgba(85,138,66,0.15)">'
-            + '<div style="font-size:12px;font-weight:600;color:#558A42;margin-bottom:3px;display:flex;align-items:center;gap:4px"><span>💡</span> ' + escapeHtml(t('cwe_saveContext')) + '</div>'
-            + '<div style="font-size:13px;color:var(--cw-text-3);line-height:1.5">' + renderCode(tip) + '</div>'
+          html += '<div class="cw-tip-box">'
+            + '<div class="cw-tip-box-title"><span>💡</span> ' + escapeHtml(t('cwe_saveContext')) + '</div>'
+            + '<div class="cw-tip-box-body">' + renderCode(tip) + '</div>'
             + '</div>';
         }
         if (hovEvent.link) {
-          html += '<a href="' + escapeHtml(localizeDocsUrl(hovEvent.link)) + '" target="_blank" style="display:inline-block;margin-top:10px;font-size:13px;color:#D97757;text-decoration:none;border-bottom:1px solid rgba(217,119,87,0.3)">' + escapeHtml(t('cwe_learnMore')) + '</a>';
+          html += '<a href="' + escapeHtml(localizeDocsUrl(hovEvent.link)) + '" target="_blank" class="cw-learn-more">' + escapeHtml(t('cwe_learnMore')) + '</a>';
         }
         html += '</div>';
       } else {
-        html += '<div style="display:flex;flex-direction:column;align-items:center;text-align:center;gap:4px;padding:12px 0 4px">'
-          + '<div style="font-size:22px;opacity:0.2">👁</div>'
-          + '<div style="font-size:14px;font-weight:500;color:var(--cw-text-dim)">' + escapeHtml(t('cwe_hoverHintTitle')) + '</div>'
-          + '<div style="font-size:12px;color:var(--cw-text-faint);line-height:1.4;max-width:200px">' + escapeHtml(t('cwe_hoverHintDesc')) + '</div>'
+        html += '<div class="cw-hover-hint">'
+          + '<div class="cw-hover-hint-icon">👁</div>'
+          + '<div class="cw-hover-hint-title">' + escapeHtml(t('cwe_hoverHintTitle')) + '</div>'
+          + '<div class="cw-hover-hint-desc">' + escapeHtml(t('cwe_hoverHintDesc')) + '</div>'
           + '</div>';
       }
 
       if (state.mode !== 'session') {
-        html += '<div style="padding:10px 12px;border-radius:8px;background:rgba(217,119,87,0.05);border:1px solid rgba(217,119,87,0.12)">'
-          + '<div style="font-size:11px;font-weight:700;color:#D97757;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:3px">' + escapeHtml(t('cwe_keyTakeaway')) + '</div>'
-          + '<div style="font-size:13px;color:var(--cw-text-3);line-height:1.5">' + escapeHtml(takeaway) + '</div>'
+        html += '<div class="cw-takeaway-box">'
+          + '<div class="cw-takeaway-label">' + escapeHtml(t('cwe_keyTakeaway')) + '</div>'
+          + '<div class="cw-takeaway-body">' + escapeHtml(takeaway) + '</div>'
           + '</div>';
 
-        html += '<div style="padding:10px 12px;border-radius:8px;background:var(--cw-surface-2);border:1px solid var(--cw-border)">'
-          + '<div style="font-size:11px;font-weight:700;color:var(--cw-text-dim);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:3px">' + escapeHtml(t('cwe_terminalView')) + '</div>'
-          + '<div style="font-size:13px;color:var(--cw-text-3);line-height:1.5">' + escapeHtml(terminalView) + '</div>'
+        html += '<div class="cw-terminal-box">'
+          + '<div class="cw-terminal-label">' + escapeHtml(t('cwe_terminalView')) + '</div>'
+          + '<div class="cw-detail-desc--sm">' + escapeHtml(terminalView) + '</div>'
           + '</div>';
       }
 
       // Mixed data note — shown when we have at least one measured stat
       const hasMeasured = stats && Object.values(stats).some((v) => v != null && v > 0);
       if (hasMeasured && state.time > 0) {
-        html += '<div style="padding:6px 10px;border-radius:6px;font-size:11px;color:var(--cw-text-faint);line-height:1.4;display:flex;align-items:flex-start;gap:5px">'
-          + '<span style="flex-shrink:0;opacity:0.6">ℹ</span>'
+        html += '<div class="cw-mixed-note">'
+          + '<span class="cw-mixed-note-icon">ℹ</span>'
           + '<span>' + escapeHtml(t('cwe_mixedDataNote')) + '</span>'
           + '</div>';
       }
@@ -5467,12 +5646,20 @@ window.name = 'oh-my-hi';
     function update() {
       const view = computeView();
       const pct = view.totalTokens / state.budget * 100;
-      const barColor = pct > 75 ? '#D97757' : pct > 50 ? '#B8860B' : '#558A42';
+      // barColor: dynamic threshold colour — must stay JS-side since it drives
+      // canvas ctx.fillStyle and inline element colour simultaneously.
+      // Uses CSS vars so the values follow the theme palette.
+      const _cwStyle = getComputedStyle(root);
+      const barColor = pct > 75
+        ? (_cwStyle.getPropertyValue('--cw-accent').trim() || '#D97757')
+        : pct > 50
+          ? (_cwStyle.getPropertyValue('--cw-gold').trim() || '#B8860B')
+          : (_cwStyle.getPropertyValue('--cw-you').trim() || '#558A42');
 
       // Header tokens
       tokensDisplay.style.color = barColor;
       const prefix = state.mode === 'session' ? '' : '~';
-      tokensDisplay.innerHTML = prefix + fmt(view.totalTokens) + '<span style="font-size:15px;font-weight:500;margin-left:4px">' + escapeHtml(t('cwe_tokensWord')) + '</span>';
+      tokensDisplay.innerHTML = prefix + fmt(view.totalTokens) + '<span class="cw-tokens-word">' + escapeHtml(t('cwe_tokensWord')) + '</span>';
       // Collect unique real model names for the current session (if any).
       let modelsStr = '';
       if (state.mode === 'session' && state.sessionEvents.length > 0) {
@@ -5764,25 +5951,23 @@ window.name = 'oh-my-hi';
     function renderSessionList() {
       const list = filteredSessions();
       if (list.length === 0) {
-        sessionItems.innerHTML = '<div style="padding:12px 14px;font-size:12px;color:var(--cw-text-faint)">' + escapeHtml(t('cwe_noMatch')) + '</div>';
+        sessionItems.innerHTML = '<div class="cw-session-no-match">' + escapeHtml(t('cwe_noMatch')) + '</div>';
         sessionNav.style.display = 'none';
         return;
       }
       const html = list.map((s) => {
         const f = formatSessionOption(s);
         const active = s.id === state.sessionId;
-        const bg = active ? 'rgba(217,119,87,0.08)' : 'transparent';
+        const rowBg = active ? 'background:var(--cw-accent-bg)' : '';
         const metaParts = [f.dateStr, fmtCompact(f.turns) + ' ' + t('cwe_sessionTurns')];
         const tagParts = [];
-        if (f.modelStr) tagParts.push('<span style="padding:1px 5px;border-radius:3px;background:rgba(217,119,87,0.12);color:#D97757;font-size:10px;font-weight:600">' + escapeHtml(f.modelStr) + '</span>');
-        if (f.peakStr)  tagParts.push('<span style="padding:1px 5px;border-radius:3px;background:rgba(138,136,128,0.1);color:var(--cw-text-faint);font-size:10px;font-weight:600">' + escapeHtml(f.peakStr) + ' ctx</span>');
-        const snippetStyle = f.hasSnippet
-          ? 'font-size:13px;color:var(--cw-text-2);line-height:1.4;white-space:nowrap;overflow:hidden;text-overflow:ellipsis'
-          : 'font-size:12px;color:var(--cw-text-faint);font-style:italic;line-height:1.4;white-space:nowrap;overflow:hidden;text-overflow:ellipsis';
-        return '<div data-cw-pick="' + escapeHtml(s.id) + '" style="padding:8px 12px;cursor:pointer;border-bottom:1px solid var(--cw-border);background:' + bg + '">'
-          +   '<div data-cw-tip="' + escapeHtml(f.snippet) + '" style="' + snippetStyle + '">' + escapeHtml(f.snippet) + '</div>'
-          +   '<div style="display:flex;align-items:center;gap:6px;margin-top:3px;flex-wrap:wrap">'
-          +     '<span style="font-size:11px;color:var(--cw-text-faint);font-family:var(--cw-font-mono)">' + escapeHtml(metaParts.join(' · ')) + '</span>'
+        if (f.modelStr) tagParts.push('<span class="cw-pick-tag--accent">' + escapeHtml(f.modelStr) + '</span>');
+        if (f.peakStr)  tagParts.push('<span class="cw-pick-tag--neutral">' + escapeHtml(f.peakStr) + ' ctx</span>');
+        const snippetCls = f.hasSnippet ? 'cw-pick-snippet--plain' : 'cw-pick-snippet--faint';
+        return '<div data-cw-pick="' + escapeHtml(s.id) + '" class="cw-pick-row" style="' + rowBg + '">'
+          +   '<div data-cw-tip="' + escapeHtml(f.snippet) + '" class="' + snippetCls + '">' + escapeHtml(f.snippet) + '</div>'
+          +   '<div class="cw-pick-meta-row">'
+          +     '<span class="cw-pick-meta-text">' + escapeHtml(metaParts.join(' · ')) + '</span>'
           +     tagParts.join('')
           +   '</div>'
           + '</div>';
@@ -5855,17 +6040,17 @@ window.name = 'oh-my-hi';
       const f = formatSessionOption(cur);
       const chip = (label, value, mono) => {
         if (!value) return '';
-        return '<div style="display:flex;align-items:baseline;gap:6px">'
-          +   '<span style="font-size:10px;text-transform:uppercase;letter-spacing:0.5px;color:var(--cw-text-faint);font-weight:600">' + escapeHtml(label) + '</span>'
-          +   '<span style="' + (mono ? 'font-family:var(--cw-font-mono);' : '') + 'font-size:12px;color:var(--cw-text-2);font-weight:600">' + escapeHtml(value) + '</span>'
+        return '<div class="cw-info-chip">'
+          +   '<span class="cw-info-label">' + escapeHtml(label) + '</span>'
+          +   '<span class="cw-info-value' + (mono ? ' cw-info-value--mono' : '') + '">' + escapeHtml(value) + '</span>'
           + '</div>';
       };
       const parts = [];
       // Prompt snippet takes the remaining width — clipped with ellipsis so
       // long first-prompts do not push the meta chips off the row.
-      parts.push('<div style="flex:1;min-width:120px;display:flex;align-items:baseline;gap:6px;overflow:hidden">'
-        + '<span style="font-size:10px;text-transform:uppercase;letter-spacing:0.5px;color:var(--cw-text-faint);font-weight:600;flex-shrink:0">' + escapeHtml(t('cwe_infoPrompt')) + '</span>'
-        + '<span title="' + escapeHtml(f.snippet) + '" style="font-size:12px;' + (f.hasSnippet ? 'color:var(--cw-text-2)' : 'color:var(--cw-text-faint);font-style:italic') + ';white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0">' + escapeHtml(f.snippet) + '</span>'
+      parts.push('<div class="cw-info-wrap">'
+        + '<span class="cw-info-label">' + escapeHtml(t('cwe_infoPrompt')) + '</span>'
+        + '<span title="' + escapeHtml(f.snippet) + '" class="cw-info-snippet ' + (f.hasSnippet ? 'cw-info-snippet--plain' : 'cw-info-snippet--faint') + '">' + escapeHtml(f.snippet) + '</span>'
         + '</div>');
       parts.push(chip(t('cwe_infoDate'), f.dateStr, true));
       parts.push(chip(t('cwe_infoTurns'), fmtCompact(f.turns), true));
@@ -6361,10 +6546,38 @@ window.name = 'oh-my-hi';
     }
 
     if (!item) {
-      content.innerHTML = '<div class="empty-state">'
+      const cat = CATEGORIES.find((c) => { return c.key === category; });
+      const catLabel = cat ? getCatLabel(cat) : category;
+      // Fuzzy suggestions: find items whose names share a subsequence or prefix with the requested name
+      const lowerName = name.toLowerCase();
+      const suggestions = items
+        .map((i) => { return getItemName(category, i); })
+        .filter((n) => {
+          const ln = n.toLowerCase();
+          return ln.includes(lowerName) || lowerName.includes(ln) || ln.startsWith(lowerName.slice(0, 3));
+        })
+        .slice(0, 5);
+
+      let html = '<div class="empty-state">'
         + '<div class="empty-icon">🔍</div>'
-        + '<div class="empty-text">Item not found: ' + escapeHtml(name) + '</div>'
+        + '<div class="empty-text">' + t('itemNotFound', escapeHtml(name)) + '</div>'
+        + '<div style="margin-top:12px">'
+        +   '<button class="session-back-btn" data-action="nav-view" data-view="' + escapeHtml(category) + '">'
+        +   '← ' + t('itemNotFoundBack', escapeHtml(catLabel))
+        +   '</button>'
         + '</div>';
+      if (suggestions.length > 0) {
+        html += '<div style="margin-top:16px;font-size:13px;color:var(--text-secondary)">' + t('itemNotFoundSuggest') + '</div>'
+          + '<div style="margin-top:8px;display:flex;flex-wrap:wrap;gap:8px;justify-content:center">';
+        suggestions.forEach((sug) => {
+          html += '<span class="skill-chip" data-action="goto-detail" data-category="' + escapeHtml(category) + '" data-name="' + escapeHtml(sug) + '">'
+            + escapeHtml(sug) + '</span>';
+        });
+        html += '</div>';
+      }
+      html += '</div>';
+      content.innerHTML = html;
+      bindContentActions();
       return;
     }
 
@@ -6833,7 +7046,6 @@ window.name = 'oh-my-hi';
 
     var sA = sessionStats(_compareSessionA);
     var sB = sessionStats(_compareSessionB);
-    var fmtDur = function(ms) { return ms >= 3600000 ? (ms / 3600000).toFixed(1) + t('unitHour') : ms >= 60000 ? (ms / 60000).toFixed(0) + t('unitMin') : (ms / 1000).toFixed(0) + 's'; };
 
     var html = '<div class="page-header">'
       + '<h1>⚖️ ' + t('cmpTitle') + '</h1>'
@@ -7145,10 +7357,6 @@ window.name = 'oh-my-hi';
   function renderRegressionCard(usage) {
     const report = computeRegression(usage, Date.now());
     if (!report.anyRegressed) return '';
-    const fmtMs = (ms) => ms >= 60000 ? (ms / 60000).toFixed(1) + t('unitMin')
-      : ms >= 1000 ? (ms / 1000).toFixed(1) + 's'
-      : Math.round(ms) + 'ms';
-    const fmtPct = (frac) => Math.round(frac * 100) + '%';
 
     // Pick the "worst" metric (highest deltaPct) as the headline.
     const candidates = [];
@@ -7181,12 +7389,12 @@ window.name = 'oh-my-hi';
     let linkLabel = t('regressionCheckLatency');
     if (report.causes && report.causes.cacheDrop) {
       const c = report.causes.cacheDrop;
-      insightText = t('regressionCauseCacheDrop', fmtPct(c.prev), fmtPct(c.cur));
+      insightText = t('regressionCauseCacheDrop', fmtPct(c.prev * 100), fmtPct(c.cur * 100));
       linkView = 'tokens-prompt';
       linkLabel = t('regressionCheckCache');
     } else if (report.causes && report.causes.opusShift) {
       const c = report.causes.opusShift;
-      insightText = t('regressionCauseOpusShift', fmtPct(c.prev), fmtPct(c.cur));
+      insightText = t('regressionCauseOpusShift', fmtPct(c.prev * 100), fmtPct(c.cur * 100));
       linkView = 'tokens';
       linkLabel = t('regressionCheckModels');
     } else if (worst.metric === 'latency') {
@@ -7237,7 +7445,7 @@ window.name = 'oh-my-hi';
       + '<div class="regression-card-period">' + periodHtml + '</div>'
       + '<div class="stat-value regression-card-value">'
       +   '<span class="regression-card-icon">' + worst.icon + '</span>'
-      +   '<span class="regression-card-delta">+' + worst.delta.toFixed(1) + '%</span>'
+      +   '<span class="regression-card-delta">+' + fmtPct(worst.delta) + '</span>'
       + '</div>'
       + '<div class="stat-change regression-card-sub">'
       +   '<span class="regression-card-metric-label">' + escapeHtml(worst.label) + '</span>'

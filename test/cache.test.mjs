@@ -5,7 +5,7 @@ import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { gunzipSync, gzipSync } from 'zlib';
-import { parseUsage, loadTranscriptCache, loadMtimeIndex, saveMtimeIndex } from '../scripts/parsers/usage.mjs';
+import { parseUsage, loadTranscriptCache, loadMtimeIndex, saveMtimeIndex, commonPrefix } from '../scripts/parsers/usage.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, '..');
@@ -177,6 +177,41 @@ describe('Mtime Index', () => {
   });
 });
 
+// ── commonPrefix ──
+
+describe('commonPrefix', () => {
+  it('should return empty string for empty input', () => {
+    assert.equal(commonPrefix([]), '');
+  });
+
+  it('should find the longest common directory prefix', () => {
+    assert.equal(commonPrefix(['/a/b/c.jsonl', '/a/b/d.jsonl']), '/a/b');
+    assert.equal(commonPrefix(['/a/b/c/x.jsonl', '/a/b/y.jsonl']), '/a/b');
+  });
+
+  it('should terminate (not infinite-loop) when paths share no common directory', () => {
+    // Regression: dirname of a filesystem root is itself ('/' on POSIX,
+    // 'C:\\' on Windows) — without a loop guard this spins forever.
+    assert.equal(commonPrefix(['/a/x.jsonl', '/b/y.jsonl']), '');
+  });
+
+  it('saveMtimeIndex/loadMtimeIndex should round-trip when there is no common prefix', () => {
+    const tmpDir = fs.mkdtempSync('/tmp/omh-prefix-');
+    try {
+      const tmpCachePath = path.join(tmpDir, 'transcript-cache.json');
+      const cache = {
+        '/a/x.jsonl': { mtimeMs: 100, size: 1, result: null },
+        '/b/y.jsonl': { mtimeMs: 200, size: 1, result: null },
+      };
+      saveMtimeIndex(tmpCachePath, cache);
+      const loaded = loadMtimeIndex(tmpCachePath);
+      assert.deepEqual(loaded, { '/a/x.jsonl': 100, '/b/y.jsonl': 200 });
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+});
+
 // ── API-first Data Architecture ──
 
 describe('API-first Data Architecture', () => {
@@ -298,25 +333,28 @@ describe('Upgrade Compatibility', () => {
   });
 });
 
-// ── Pending Files (Lightweight Mode) ──
+// ── Lightweight Mode (SQLite-only, no pending files) ──
 
-describe('Pending Files', () => {
+describe('Lightweight Mode (no pending files)', () => {
   before(() => {
     cleanCache();
   });
 
-  it('--data-only should create pending file (not gz segment)', () => {
+  it('--data-only should NOT create pending files or gz segments', () => {
     run('--data-only');
-    assert.ok(fs.existsSync(PENDING_DIR), 'pending directory should exist');
-    const files = fs.readdirSync(PENDING_DIR).filter(f => f.endsWith('.json'));
-    assert.ok(files.length > 0, 'should have pending files');
-    // Verify it's plain JSON
-    const content = fs.readFileSync(path.join(PENDING_DIR, files[0]), 'utf8');
-    assert.doesNotThrow(() => JSON.parse(content), 'should be valid JSON');
-    // Should NOT have gz segments (only mtime-index)
+    // pending/ is a leftover from the pre-SQLite flow — must not be created anymore
+    assert.ok(!fs.existsSync(PENDING_DIR), 'pending directory should not be created');
+    // Should NOT have gz segments either (only mtime-index)
     const cacheFiles = fs.existsSync(CACHE_DIR) ? fs.readdirSync(CACHE_DIR) : [];
     const gzFiles = cacheFiles.filter(f => f.endsWith('.json.gz'));
     assert.equal(gzFiles.length, 0, 'lightweight mode should not create gz segments');
+  });
+
+  it('should clean up leftover pending/ dir from old versions', () => {
+    fs.mkdirSync(PENDING_DIR, { recursive: true });
+    fs.writeFileSync(path.join(PENDING_DIR, '20990101-000000.json'), '{}', 'utf8');
+    run('--data-only');
+    assert.ok(!fs.existsSync(PENDING_DIR), 'legacy pending directory should be removed');
   });
 
   it('--data-only should update data.json when files changed', () => {

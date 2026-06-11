@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="ko">
+<html lang="en">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -9,8 +9,15 @@
   <link rel="stylesheet" href="/static/styles-__VERSION__.css">
 </head>
 <body>
+  <div class="mobile-topbar" id="mobile-topbar">
+    <button class="mobile-hamburger" id="mobile-hamburger" aria-label="Open navigation menu" aria-expanded="false" aria-controls="sidebar">
+      <span></span><span></span><span></span>
+    </button>
+    <span class="mobile-topbar-title">oh-my-hi</span>
+  </div>
+  <div class="mobile-backdrop" id="mobile-backdrop"></div>
   <div class="app">
-    <aside class="sidebar">
+    <aside class="sidebar" id="sidebar">
       <div class="sidebar-logo" id="sidebar-logo" style="cursor:pointer">
         <div class="sidebar-logo-main">
           <span class="sidebar-logo-icon">👋</span>
@@ -55,6 +62,16 @@
   <script>
     let __EN__ = __EN_DATA__;
     let __LOCALE__ = __LOCALE_DATA__;
+    // Sync document lang before app.js runs to avoid a flash of wrong language
+    (function() {
+      var stored = localStorage.getItem('harness-lang');
+      if (stored) {
+        document.documentElement.lang = stored;
+      } else {
+        var sys = (navigator.language || 'en').substring(0, 2);
+        document.documentElement.lang = ['en', 'ko'].indexOf(sys) !== -1 ? sys : 'en';
+      }
+    })();
   </script>
   <script src="/static/app-__VERSION__.js"></script>
 </body>

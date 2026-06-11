@@ -102,7 +102,7 @@ This plugin runs on any user's machine. All path resolution must work on a clean
 - Adding a new page: register route in `applyHash()` → add branch in `renderContent()` → add menu in `renderSidebar()` → write render function
 - i18n: use `t(key)` function; add new keys to both en.json and ko.json
 - Charts: `bb.generate({ bindto, data, ... })` via billboard.js API
-- State persistence via localStorage: `harness-theme`, `harness-lang`, `harness-period`, `harness-budget`, `harness-compare`
+- State persistence via localStorage: `harness-theme`, `harness-lang`, `harness-period`, `harness-budget`, `harness-compare`, `harness-scope`, `harness-sidebar-collapsed`, `harness-bookmarks`, `harness-bd-expanded`
 
 ### Number Formatting (principle)
 
@@ -115,6 +115,7 @@ Every number shown to the user goes through **`fmtCompact(n)`** in `templates/ap
 Do **not** reinvent formatters with ad-hoc `toFixed` / `toLocaleString`. Exceptions:
 - `fmtCost(n)` for currency (`$` prefix, fixed decimal rules)
 - `fmtNum(n)` for raw Intl.NumberFormat output with no SI conversion (IDs, versions, small counts where K would be misleading)
+- `fmtPct(n)` for percent values (input: already-in-percent value 0-100): `|n| ≥ 10` → integer (`Math.round`) + `%`; `|n| < 10` → 1 decimal + `%`; null/undefined/NaN → `'0%'`. Note: if you hold a fraction (0-1), pass `fmtPct(fraction * 100)`.
 - Duration formatters (`fmtDur`, `fmtMs`) which convert ms → s/min/h
 
 When adding new number displays, reach for `fmtCompact` first. If you need different behavior, extend `fmtCompact` rather than adding a local formatter.

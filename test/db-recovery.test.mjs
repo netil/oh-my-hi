@@ -97,6 +97,33 @@ describe('recoverIfCorrupt — complete loss', () => {
     }
   });
 
+  it('also unlinks -wal/-shm siblings of corrupt DBs (B6)', () => {
+    const out = tempDir();
+    const mtimePath = path.join(out, 'cache', 'mtime-index.json');
+    let holder;
+    try {
+      writeMtimeIndex(mtimePath, 60);
+      const dbPath = getMonthlyDbPath(out, 2026, 4);
+      // A concurrent connection (like serve.mjs's cached handle) keeps the WAL
+      // alive: with another connection open, closing a connection does not
+      // checkpoint+delete the -wal/-shm files.
+      holder = openDb(dbPath);
+      // Force WAL content without touching token_entries (DB must stay "empty")
+      holder.exec('CREATE TABLE IF NOT EXISTS _wal_probe(x); INSERT INTO _wal_probe VALUES (1);');
+      assert.ok(fs.existsSync(`${dbPath}-wal`), 'precondition: -wal exists');
+      assert.ok(fs.existsSync(`${dbPath}-shm`), 'precondition: -shm exists');
+
+      const r = recoverIfCorrupt(out, mtimePath);
+      assert.equal(r.recovered, true);
+      assert.ok(!fs.existsSync(dbPath), 'main DB deleted');
+      assert.ok(!fs.existsSync(`${dbPath}-wal`), '-wal sibling deleted');
+      assert.ok(!fs.existsSync(`${dbPath}-shm`), '-shm sibling deleted');
+    } finally {
+      try { holder?.close(); } catch { /* ignore */ }
+      cleanDir(out);
+    }
+  });
+
   it('does NOT recover when DB has rows and mtime-index months match DB months', () => {
     const out = tempDir();
     const mtimePath = path.join(out, 'cache', 'mtime-index.json');

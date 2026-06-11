@@ -200,6 +200,9 @@
   "calls": "calls",
   "never": "Never",
   "noItems": "No {0} found in this scope",
+  "itemNotFound": "Item not found: {0}",
+  "itemNotFoundBack": "Back to {0}",
+  "itemNotFoundSuggest": "Did you mean one of these?",
   "itemsIn": "{0} items in {1}",
   "vsPrevPeriod": "% vs prev period",
   "less": "Less",
@@ -702,6 +705,7 @@
   "tagline": "Oh, so that's what Claude's been doing!",
   "sidebarShowMore": "+ {0} more",
   "sidebarShowAll": "Show all items in this category",
+  "mobileMenuOpen": "Open navigation menu",
   "cwe_filterAll": "All time",
   "cwe_filter1d": "Last 24h",
   "cwe_filter7d": "Last 7 days",
@@ -809,5 +813,8 @@
   "bdStartupSkills": "Skill descriptions",
   "bdStartupPrinciples": "Principles / Rules",
   "bdStartupMcp": "MCP tool listings",
-  "bdStartupMemory": "Memory (MEMORY.md)"
+  "bdStartupMemory": "Memory (MEMORY.md)",
+  "usageFetchError": "Failed to load usage data for the selected period.",
+  "usageFetchRetry": "Retry",
+  "dismiss": "Dismiss"
 }
