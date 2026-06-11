@@ -533,6 +533,89 @@ describe('appendUsageMonthly — monthly DB routing', () => {
   });
 });
 
+// ── appendUsageMonthly — per-month retry idempotency ─────────────────────────
+
+describe('appendUsageMonthly — completedMonths retry skip', () => {
+  it('records committed month keys in the completedMonths set', () => {
+    const out = tempDir();
+    try {
+      const completed = new Set();
+      appendUsageMonthly(out, 'global', {
+        skills: [
+          { name: 'skill-a', count: 2, timestamp: Date.UTC(2025, 2, 5) },  // 2025-03
+          { name: 'skill-b', count: 1, timestamp: Date.UTC(2025, 3, 20) }, // 2025-04
+        ],
+      }, completed);
+      assert.deepEqual([...completed].sort(), ['2025-3', '2025-4']);
+    } finally {
+      cleanDir(out);
+    }
+  });
+
+  it('skips months already in completedMonths so counts do not inflate on retry', () => {
+    const out = tempDir();
+    try {
+      const usage = {
+        skills: [
+          { name: 'skill-a', count: 2, timestamp: Date.UTC(2025, 2, 5) },  // 2025-03
+          { name: 'skill-b', count: 1, timestamp: Date.UTC(2025, 3, 20) }, // 2025-04
+        ],
+        mcpCalls: [
+          { tool: 'tool-x', count: 3, timestamp: Date.UTC(2025, 2, 6) },   // 2025-03
+        ],
+      };
+      const completed = new Set();
+      appendUsageMonthly(out, 'global', usage, completed);
+      // Simulate a retry of the SAME payload (e.g. month B threw SQLITE_BUSY
+      // after month A committed): already-committed months must be skipped.
+      appendUsageMonthly(out, 'global', usage, completed);
+      appendUsageMonthly(out, 'global', usage, completed);
+
+      const dbMar = openDb(getMonthlyDbPath(out, 2025, 3));
+      const dbApr = openDb(getMonthlyDbPath(out, 2025, 4));
+      assert.equal(dbMar.prepare("SELECT count FROM skill_usage WHERE name = 'skill-a'").get().count, 2, 'skill-a count not inflated');
+      assert.equal(dbMar.prepare("SELECT count FROM mcp_calls WHERE tool = 'tool-x'").get().count, 3, 'mcp count not inflated');
+      assert.equal(dbApr.prepare("SELECT count FROM skill_usage WHERE name = 'skill-b'").get().count, 1, 'skill-b count not inflated');
+      dbMar.close(); dbApr.close();
+    } finally {
+      cleanDir(out);
+    }
+  });
+
+  it('pre-seeded completedMonths prevents writing that month at all', () => {
+    const out = tempDir();
+    try {
+      const completed = new Set(['2025-3']);
+      appendUsageMonthly(out, 'global', {
+        skills: [
+          { name: 'skill-a', count: 2, timestamp: Date.UTC(2025, 2, 5) },  // 2025-03 — pre-committed
+          { name: 'skill-b', count: 1, timestamp: Date.UTC(2025, 3, 20) }, // 2025-04
+        ],
+      }, completed);
+      assert.equal(fs.existsSync(getMonthlyDbPath(out, 2025, 3)), false, '2025-03 DB not created');
+      const dbApr = openDb(getMonthlyDbPath(out, 2025, 4));
+      assert.equal(dbApr.prepare('SELECT COUNT(*) as c FROM skill_usage').get().c, 1, '2025-04 written');
+      dbApr.close();
+    } finally {
+      cleanDir(out);
+    }
+  });
+
+  it('without completedMonths (legacy callers) behavior is unchanged', () => {
+    const out = tempDir();
+    try {
+      const usage = { skills: [{ name: 'skill-a', count: 2, timestamp: Date.UTC(2025, 2, 5) }] };
+      appendUsageMonthly(out, 'global', usage);
+      appendUsageMonthly(out, 'global', usage); // counts accumulate as before
+      const db = openDb(getMonthlyDbPath(out, 2025, 3));
+      assert.equal(db.prepare("SELECT count FROM skill_usage WHERE name = 'skill-a'").get().count, 4);
+      db.close();
+    } finally {
+      cleanDir(out);
+    }
+  });
+});
+
 // ── splitLegacyDb — legacy migration ─────────────────────────────────────────
 
 describe('splitLegacyDb — legacy migration', () => {

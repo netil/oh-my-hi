@@ -155,7 +155,8 @@ window.name = 'oh-my-hi';
   const SIDEBAR_ITEM_LIMIT = 50;
   const sidebarShowAll = new Set();
   let searchQuery = '';
-  let tokenBudget = JSON.parse(localStorage.getItem('harness-budget') || 'null');
+  let tokenBudget = null;
+  try { tokenBudget = JSON.parse(localStorage.getItem('harness-budget') || 'null'); } catch (e) { /* ignore corrupt value */ }
   let currentSessionId = null;
   let pendingContextSid = null;
   // Sub-path for the context explorer page ('' | 'session' | '<sessionId>').
@@ -272,19 +273,17 @@ window.name = 'oh-my-hi';
       });
     }
 
-    // Browser history
-    window.addEventListener('popstate', (e) => {
-      if (e.state) {
-        currentView = e.state.view || 'overview';
-        currentDetail = e.state.detail || null;
-        if (currentDetail && currentDetail.category) {
-          expandedCategories[currentDetail.category] = true;
-        }
-        render();
-      } else {
-        applyHash();
-        render();
+    // Browser history. Always re-derive the full route from the hash —
+    // e.state only carries view/detail, not currentSessionId, compare
+    // session IDs or contextSubPath, so trusting it restores wrong pages.
+    // applyHash() is side-effect free w.r.t. history (no push/replace).
+    window.addEventListener('popstate', () => {
+      if (!window.location.hash) {
+        currentView = 'overview';
+        currentDetail = null;
       }
+      applyHash();
+      render();
     });
 
     // Dev build badge
@@ -441,16 +440,16 @@ window.name = 'oh-my-hi';
     }
     // Any other view → reset context sub-path so returning to #context doesn't stick
     if (view !== 'context') contextSubPath = '';
-    if (parts.length > 1) {
-      let name = decodeURIComponent(parts.slice(1).join('/'));
-      currentView = view;
-      currentDetail = { category: view, name: name };
-      expandedCategories[view] = true;
-    } else if (view === 'session' && parts.length > 1) {
+    if (view === 'session' && parts.length > 1) {
       currentView = 'session';
       currentSessionId = decodeURIComponent(parts.slice(1).join('/'));
       currentDetail = null;
       expandedCategories._tokens = true;
+    } else if (parts.length > 1) {
+      let name = decodeURIComponent(parts.slice(1).join('/'));
+      currentView = view;
+      currentDetail = { category: view, name: name };
+      expandedCategories[view] = true;
     } else if (view === 'overview' || view === 'structure' || view === 'context' || view === 'tokens' || view === 'tokens-cost' || view === 'tokens-prompt' || view === 'tokens-session' || view === 'tokens-analysis' || view === 'breakdown' || view === 'help') {
       currentView = view === 'tokens-analysis' ? 'tokens-prompt' : view;
       currentDetail = null;
@@ -498,11 +497,7 @@ window.name = 'oh-my-hi';
       const sd = DATA.scopeData[currentScope];
       if (sd && (!sd.usage || !sd.usage.tokenEntries)) {
         const range = computeCurrentPeriodRange();
-        if (range) {
-          fetchUsageForPeriod(currentScope, range.from, range.to).then((ok) => {
-            if (ok) render();
-          });
-        }
+        if (range) refetchUsage(range);
       }
     }
   }
@@ -562,9 +557,54 @@ window.name = 'oh-my-hi';
       DATA._usageReady = true;
       return true;
     } catch (e) {
-      if (e.name === 'AbortError') return false; // superseded by newer fetch
+      if (e.name === 'AbortError') return null; // superseded by newer fetch
       return false;
     }
+  }
+
+  // Refetch usage for the current scope and the given range. While the fetch
+  // is in flight the content area is dimmed (DATA._usageReady drives the
+  // `usage-loading` class); on failure a dismissible error strip with a retry
+  // action is shown instead of silently keeping mislabeled stale data.
+  function setUsageLoading(loading) {
+    DATA._usageReady = !loading;
+    content.classList.toggle('usage-loading', loading);
+  }
+
+  function refetchUsage(range) {
+    removeUsageFetchError();
+    setUsageLoading(true);
+    fetchUsageForPeriod(currentScope, range.from, range.to).then((ok) => {
+      if (ok === null) return; // aborted — a newer request owns the UI state
+      setUsageLoading(false);
+      if (ok) {
+        render();
+      } else {
+        showUsageFetchError();
+      }
+    });
+  }
+
+  function removeUsageFetchError() {
+    const prev = document.getElementById('usage-fetch-error');
+    if (prev) prev.remove();
+  }
+
+  function showUsageFetchError() {
+    removeUsageFetchError();
+    const strip = document.createElement('div');
+    strip.id = 'usage-fetch-error';
+    strip.className = 'usage-error-strip';
+    strip.innerHTML = '<span>' + t('usageFetchError') + '</span>'
+      + '<button type="button" class="usage-error-retry">' + t('usageFetchRetry') + '</button>'
+      + '<button type="button" class="usage-error-dismiss" aria-label="' + t('dismiss') + '">✕</button>';
+    strip.querySelector('.usage-error-retry').addEventListener('click', () => {
+      const range = computeCurrentPeriodRange();
+      strip.remove();
+      if (range) refetchUsage(range);
+    });
+    strip.querySelector('.usage-error-dismiss').addEventListener('click', () => { strip.remove(); });
+    content.insertBefore(strip, content.firstChild);
   }
 
   function getItems(category) {
@@ -754,7 +794,17 @@ window.name = 'oh-my-hi';
     html = html.replace(/^---$/gm, '<hr>');
     html = html.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
     html = html.replace(/\*(.+?)\*/g, '<em>$1</em>');
-    html = html.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank">$1</a>');
+    // Markdown sources include externally-influenced text (memory files,
+    // subagent prompts), so only safe URL schemes become live links:
+    // http(s), mailto, and fragment/relative URLs. Anything else (e.g.
+    // javascript:) renders as plain text. Control chars/whitespace are
+    // stripped before the scheme check since browsers ignore them in URLs.
+    html = html.replace(/\[([^\]]+)\]\(([^)]+)\)/g, (_, text, url) => {
+      const href = url.trim();
+      const scheme = (href.replace(/[\u0000-\u0020]/g, '').match(/^([a-zA-Z][a-zA-Z0-9+.-]*):/) || [])[1];
+      if (scheme && !/^(https?|mailto)$/i.test(scheme)) return text;
+      return '<a href="' + href + '" target="_blank" rel="noopener noreferrer">' + text + '</a>';
+    });
     html = html.replace(/^&gt; (.+)$/gm, '<blockquote>$1</blockquote>');
 
     html = html.replace(/^(\|.+\|)\n(\|[-| :]+\|)\n((?:\|.+\|\n?)*)/gm, (_, header, sep, body) => {
@@ -1089,9 +1139,44 @@ window.name = 'oh-my-hi';
       + '</div>';
   }
 
+  // ── Chart lifecycle ──
+  // billboard.js instances survive innerHTML replacement (they keep detached
+  // SVG refs + window resize handlers), so every chart must be created via
+  // makeChart() and is destroyed at the top of renderContent(). This covers
+  // lazy/deferred chart draws too — anything created after the last render
+  // is registered here and torn down on the next navigation.
+  let activeCharts = [];
+  function makeChart(cfg) {
+    const chart = bb.generate(cfg);
+    activeCharts.push(chart);
+    return chart;
+  }
+  function destroyActiveCharts() {
+    activeCharts.forEach((c) => {
+      try { c.destroy(); } catch (e) { /* DOM already replaced — ignore */ }
+    });
+    activeCharts = [];
+  }
+
   // ── Content rendering ──
   let skipScrollReset = false;
+  // Tear down Context Explorer globals (window/document handlers, rAF loop,
+  // floating tooltip). Runs on EVERY navigation via renderContent() so the
+  // animation loop and listeners never survive against detached DOM.
+  function teardownContextExplorer() {
+    if (window._cwRafId) { cancelAnimationFrame(window._cwRafId); window._cwRafId = null; }
+    if (window._cwKeyHandler) { window.removeEventListener('keydown', window._cwKeyHandler); window._cwKeyHandler = null; }
+    if (window._cwFsHandler) { document.removeEventListener('fullscreenchange', window._cwFsHandler); window._cwFsHandler = null; }
+    if (window._cwMouseHandler) { document.removeEventListener('mousedown', window._cwMouseHandler); window._cwMouseHandler = null; }
+    if (window._cwFloatTip && window._cwFloatTip.parentNode) {
+      window._cwFloatTip.parentNode.removeChild(window._cwFloatTip);
+      window._cwFloatTip = null;
+    }
+  }
+
   function renderContent() {
+    destroyActiveCharts();
+    teardownContextExplorer();
     if (!skipScrollReset) {
       content.scrollTop = 0;
       window.scrollTo(0, 0);
@@ -1227,11 +1312,7 @@ window.name = 'oh-my-hi';
         // API mode: refetch usage for the new period and re-render on arrival.
         if (DATA._apiMode) {
           const range = computeCurrentPeriodRange();
-          if (range) {
-            fetchUsageForPeriod(currentScope, range.from, range.to).then((ok) => {
-              if (ok) render();
-            });
-          }
+          if (range) refetchUsage(range);
         }
       });
     });
@@ -1376,11 +1457,7 @@ window.name = 'oh-my-hi';
         // API mode: refetch usage for the custom range.
         if (DATA._apiMode) {
           const range = computeCurrentPeriodRange();
-          if (range) {
-            fetchUsageForPeriod(currentScope, range.from, range.to).then((ok) => {
-              if (ok) render();
-            });
-          }
+          if (range) refetchUsage(range);
         }
         return;
       }
@@ -2161,7 +2238,7 @@ window.name = 'oh-my-hi';
     const minEff = Math.min(...rollingEff.filter((v) => v > 0));
     const yMin = Math.max(0, Math.floor((minEff - 10) / 10) * 10); // round down to nearest 10, floor at 0
 
-    bb.generate({
+    makeChart({
       bindto: '#cache-efficiency-chart',
       data: {
         x: 'x',
@@ -2218,7 +2295,7 @@ window.name = 'oh-my-hi';
     const categories = Array.from({ length: 24 }, (_, i) => i + t('unitHourSuffix'));
     const values = ['tokens'].concat(hourTokens);
 
-    bb.generate({
+    makeChart({
       bindto: '#hourly-dist-chart',
       data: {
         columns: [values],
@@ -2263,7 +2340,7 @@ window.name = 'oh-my-hi';
 
     const barHeight = Math.max(200, items.length * 32 + 40);
 
-    bb.generate({
+    makeChart({
       bindto: bindto,
       data: {
         columns: [values],
@@ -2535,7 +2612,7 @@ window.name = 'oh-my-hi';
       colors[prevLabel] = '#adb5bd';
     }
 
-    bb.generate({
+    makeChart({
       bindto: '#token-trend-chart',
       data: {
         x: 'x',
@@ -2610,7 +2687,7 @@ window.name = 'oh-my-hi';
     let colors = {};
     columns.forEach((col, i) => { colors[col[0]] = modelColors[i % modelColors.length]; });
 
-    bb.generate({
+    makeChart({
       bindto: '#token-model-donut',
       data: {
         columns: columns,
@@ -2810,7 +2887,7 @@ window.name = 'oh-my-hi';
         if (tokenBudget && tokenBudget.daily) {
           budgetLines.push({ value: tokenBudget.daily, text: fmtCost(tokenBudget.daily), class: 'budget-grid-line' });
         }
-        bb.generate({
+        makeChart({
           bindto: '#cost-trend-daily',
           data: { x: 'x', columns: [dateLabels, costData], type: 'area', colors: {} },
           axis: {
@@ -2854,7 +2931,7 @@ window.name = 'oh-my-hi';
         if (tokenBudget && tokenBudget.weekly) {
           budgetLines.push({ value: tokenBudget.weekly, text: fmtCost(tokenBudget.weekly), class: 'budget-grid-line' });
         }
-        bb.generate({
+        makeChart({
           bindto: '#cost-trend-weekly',
           data: { x: 'x', columns: [wDateLabels, wCostData], type: 'area', colors: {} },
           axis: {
@@ -2901,7 +2978,7 @@ window.name = 'oh-my-hi';
         if (tokenBudget && tokenBudget.monthly) {
           budgetLines.push({ value: tokenBudget.monthly, text: fmtCost(tokenBudget.monthly), class: 'budget-grid-line' });
         }
-        bb.generate({
+        makeChart({
           bindto: '#cost-trend-monthly',
           data: { x: 'x', columns: [mDateLabels, mCostData], type: 'area', colors: {} },
           axis: {
@@ -3552,7 +3629,7 @@ window.name = 'oh-my-hi';
       countData.push(dailyMap[dateLabels[j]] || 0);
     }
 
-    bb.generate({
+    makeChart({
       bindto: '#trend-chart',
       data: {
         x: 'x',
@@ -3624,7 +3701,7 @@ window.name = 'oh-my-hi';
       return;
     }
 
-    bb.generate({
+    makeChart({
       bindto: '#donut-chart',
       data: {
         columns: columns,
@@ -4593,14 +4670,10 @@ window.name = 'oh-my-hi';
     function activeEvents() { return state.mode === 'session' ? state.sessionEvents : EXAMPLE_EVENTS; }
     function activeGates()  { return state.mode === 'session' ? [] : EXAMPLE_GATES; }
 
-    // Cancel any previous animation / key handler on re-entry
-    if (window._cwRafId) { cancelAnimationFrame(window._cwRafId); window._cwRafId = null; }
-    if (window._cwKeyHandler) { window.removeEventListener('keydown', window._cwKeyHandler); window._cwKeyHandler = null; }
-    if (window._cwFsHandler) { document.removeEventListener('fullscreenchange', window._cwFsHandler); window._cwFsHandler = null; }
-    if (window._cwFloatTip && window._cwFloatTip.parentNode) {
-      window._cwFloatTip.parentNode.removeChild(window._cwFloatTip);
-      window._cwFloatTip = null;
-    }
+    // Cancel any previous animation / global handlers on re-entry
+    // (renderContent() already runs this, but keep the explicit call so
+    // direct re-entry paths stay safe).
+    teardownContextExplorer();
 
     // ── Render shell (static structure + styles) ──
     content.innerHTML = ''
@@ -5994,9 +6067,12 @@ window.name = 'oh-my-hi';
       e.preventDefault();
       selectSession(row.getAttribute('data-cw-pick'));
     });
-    document.addEventListener('mousedown', (e) => {
+    // Stored on window (like _cwKeyHandler) so teardownContextExplorer()
+    // can remove it — an anonymous listener here would pin detached DOM.
+    window._cwMouseHandler = (e) => {
       if (!sessionTools.contains(e.target)) closeSessionList();
-    });
+    };
+    document.addEventListener('mousedown', window._cwMouseHandler);
     // Session list scroll nav — sticky overlay inside the list
     const listTopBtn = document.getElementById('cw-list-top');
     const listBottomBtn = document.getElementById('cw-list-bottom');
@@ -6654,7 +6730,7 @@ window.name = 'oh-my-hi';
   // billboard.js gauge (left) + factor details (right), always visible.
 
   function drawHealthGauge(score) {
-    bb.generate({
+    makeChart({
       bindto: '#health-gauge-chart',
       data: {
         columns: [['score', score]],

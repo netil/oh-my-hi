@@ -387,6 +387,23 @@ describe('Web UI — Templates', () => {
       assert.ok(js.includes('renderBreakdown()'), 'renderBreakdown called');
     });
 
+    it('should route #session/{id} before the generic category-detail branch in applyHash', () => {
+      const applyHashIdx = js.indexOf('function applyHash');
+      const snippet = js.slice(applyHashIdx, applyHashIdx + 2500);
+      const sessionIdx = snippet.indexOf("view === 'session'");
+      const genericIdx = snippet.indexOf('currentDetail = { category: view');
+      assert.ok(sessionIdx > -1, 'session branch in applyHash');
+      assert.ok(genericIdx > -1, 'generic category-detail branch in applyHash');
+      assert.ok(sessionIdx < genericIdx, 'session branch must precede generic parts.length > 1 branch (deep link regression)');
+    });
+
+    it('should guard top-level harness-budget JSON.parse against corrupt localStorage', () => {
+      const idx = js.indexOf("'harness-budget'");
+      assert.ok(idx > -1, 'harness-budget read exists');
+      const around = js.slice(Math.max(0, idx - 200), idx);
+      assert.ok(around.includes('try'), 'harness-budget JSON.parse wrapped in try/catch');
+    });
+
     it('should include breakdown in sidebar isTokensArea check', () => {
       assert.ok(js.includes("currentView === 'breakdown'"), 'breakdown in isTokensArea');
     });
@@ -458,6 +475,68 @@ describe('Web UI — Templates', () => {
       assert.ok(changeIdx !== -1, 'changeBadge call present');
       assert.ok(totalIdx !== -1, 'usage-bar-total present');
       assert.ok(changeIdx < totalIdx, 'change badge before total value');
+    });
+
+    // ── F3 popstate routing ──────────────────────────────────────────────
+    it('popstate handler should re-derive route from hash via applyHash, not e.state', () => {
+      const idx = js.indexOf("addEventListener('popstate'");
+      assert.ok(idx > -1, 'popstate handler exists');
+      const snippet = js.slice(idx, idx + 600);
+      assert.ok(snippet.includes('applyHash()'), 'popstate calls applyHash()');
+      assert.ok(!snippet.includes('e.state.view'), 'popstate must not trust e.state for route data');
+    });
+
+    // ── F4 chart lifecycle ───────────────────────────────────────────────
+    it('should route all chart creation through makeChart and destroy on render', () => {
+      assert.ok(js.includes('function makeChart'), 'makeChart helper defined');
+      assert.ok(js.includes('function destroyActiveCharts'), 'destroyActiveCharts defined');
+      const generates = js.match(/bb\.generate\(/g) || [];
+      assert.equal(generates.length, 1, 'bb.generate only called inside makeChart');
+      const rcIdx = js.indexOf('function renderContent()');
+      const snippet = js.slice(rcIdx, rcIdx + 300);
+      assert.ok(snippet.includes('destroyActiveCharts()'), 'renderContent destroys active charts first');
+    });
+
+    // ── F5 context explorer teardown ─────────────────────────────────────
+    it('should tear down context explorer globals on every navigation', () => {
+      assert.ok(js.includes('function teardownContextExplorer'), 'teardown function defined');
+      const fnIdx = js.indexOf('function teardownContextExplorer');
+      const fnSnippet = js.slice(fnIdx, fnIdx + 900);
+      for (const h of ['_cwRafId', '_cwKeyHandler', '_cwFsHandler', '_cwMouseHandler', '_cwFloatTip']) {
+        assert.ok(fnSnippet.includes(h), `teardown handles ${h}`);
+      }
+      const rcIdx = js.indexOf('function renderContent()');
+      const rcSnippet = js.slice(rcIdx, rcIdx + 300);
+      assert.ok(rcSnippet.includes('teardownContextExplorer()'), 'renderContent runs teardown before dispatch');
+      // session-list mousedown listener must be the stored handler, not anonymous
+      assert.ok(js.includes("document.addEventListener('mousedown', window._cwMouseHandler)"),
+        'document mousedown listener uses removable window._cwMouseHandler');
+    });
+
+    // ── F6 usage refetch loading/error ───────────────────────────────────
+    it('should surface usage fetch failures and dim content while loading', () => {
+      assert.ok(js.includes('function refetchUsage'), 'refetchUsage helper defined');
+      assert.ok(js.includes('function showUsageFetchError'), 'error strip function defined');
+      assert.ok(js.includes("'usage-loading'"), 'usage-loading class toggled');
+      assert.ok(js.includes("t('usageFetchError')"), 'localized error message');
+      assert.ok(js.includes("t('usageFetchRetry')"), 'localized retry action');
+      // _usageReady must drive the loading state (not dangle unread)
+      const setIdx = js.indexOf('function setUsageLoading');
+      assert.ok(setIdx > -1, 'setUsageLoading defined');
+      const snippet = js.slice(setIdx, setIdx + 250);
+      assert.ok(snippet.includes('DATA._usageReady'), 'setUsageLoading wires DATA._usageReady');
+      // fetch failure path must not silently do nothing
+      assert.ok(js.includes('showUsageFetchError()'), 'failure path shows error strip');
+    });
+
+    // ── F7 markdown link scheme filtering ────────────────────────────────
+    it('renderMarkdown should only link safe URL schemes with noopener', () => {
+      const fnIdx = js.indexOf('function renderMarkdown');
+      const snippet = js.slice(fnIdx, fnIdx + 3000);
+      assert.ok(snippet.includes('https?|mailto'), 'scheme allowlist present');
+      assert.ok(snippet.includes('rel="noopener noreferrer"'), 'links get rel=noopener noreferrer');
+      assert.ok(snippet.includes('\\u0000-\\u0020'), 'control chars stripped before scheme check');
+      assert.ok(!snippet.includes('<a href="$2"'), 'raw $2 href substitution removed');
     });
   });
 

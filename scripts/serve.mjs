@@ -16,7 +16,8 @@ import { fileURLToPath } from 'url';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const ROOT = path.resolve(__dirname, '..');
-const OUTPUT_DIR = path.join(ROOT, 'output');
+// OMH_OUTPUT_DIR override matches generate-dashboard.mjs (also used by tests).
+const OUTPUT_DIR = process.env.OMH_OUTPUT_DIR || path.join(ROOT, 'output');
 const LEGACY_DB_PATH = path.join(OUTPUT_DIR, 'oh-my-hi.sqlite');
 const DATA_JSON = path.join(OUTPUT_DIR, 'data.json');
 const CACHE_DIR = path.join(OUTPUT_DIR, 'cache');
@@ -31,6 +32,9 @@ try {
 }
 
 // Lazily opened monthly DB instances — keyed by '${year}-${month}'.
+// Each entry is { db, ino }: the file's inode is captured at open time so that
+// a recovery which unlinks+recreates the file at the same path (new inode)
+// invalidates the stale handle instead of serving from the deleted inode.
 const _monthlyDbs = new Map();
 let _legacyDb = null;
 
@@ -61,10 +65,19 @@ function getDbsForRange(fromMs, toMs) {
     const monthEnd = Date.UTC(year, month, 1); // first ms of next month (exclusive)
     if (monthStart < toMs && monthEnd > fromMs) {
       const key = `${year}-${month}`;
-      if (!_monthlyDbs.has(key)) {
-        try { _monthlyDbs.set(key, dbModule.openDb(p)); } catch { continue; }
+      let ino = null;
+      try { ino = fs.statSync(p).ino; } catch { /* file vanished since listing */ }
+      const cached = _monthlyDbs.get(key);
+      if (cached && (ino === null || cached.ino !== ino)) {
+        // File was deleted/recreated underneath us (e.g. recoverIfCorrupt) — drop the handle.
+        try { cached.db.close(); } catch { /* ignore */ }
+        _monthlyDbs.delete(key);
       }
-      dbs.push(_monthlyDbs.get(key));
+      if (ino === null) continue;
+      if (!_monthlyDbs.has(key)) {
+        try { _monthlyDbs.set(key, { db: dbModule.openDb(p), ino }); } catch { continue; }
+      }
+      dbs.push(_monthlyDbs.get(key).db);
     }
   }
   return dbs;
@@ -217,12 +230,22 @@ function handleOpen(req, res) {
 }
 
 function requestHandler(req, res) {
-  const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
-  const pathname = url.pathname;
-  if (pathname === '/api/meta') return handleMeta(req, res);
-  if (pathname === '/api/usage') return handleUsage(req, res, url);
-  if (pathname === '/open') return handleOpen(req, res);
-  serveStatic(req, res, pathname);
+  try {
+    const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
+    const pathname = url.pathname;
+    if (pathname === '/api/meta') return handleMeta(req, res);
+    if (pathname === '/api/usage') return handleUsage(req, res, url);
+    if (pathname === '/open') return handleOpen(req, res);
+    serveStatic(req, res, pathname);
+  } catch (e) {
+    // A malformed request (e.g. invalid percent-encoding → URIError) must not
+    // crash the server — respond and keep serving.
+    const badInput = e instanceof URIError || e instanceof TypeError;
+    console.warn(`serve: ${badInput ? 'bad request' : 'request error'} ${req.url} —`, e.message);
+    if (res.headersSent) { res.destroy(); return; }
+    res.writeHead(badInput ? 400 : 500, { 'Content-Type': 'text/plain; charset=utf-8' });
+    res.end(badInput ? 'bad request' : 'internal server error');
+  }
 }
 
 function writeLockFile(port) {

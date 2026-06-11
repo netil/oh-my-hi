@@ -45,7 +45,7 @@ import { parseTeams } from './parsers/teams.mjs';
 import { parsePlans } from './parsers/plans.mjs';
 import { parseTodos } from './parsers/todos.mjs';
 import { parseConfigFiles } from './parsers/config-files.mjs';
-import { parseUsage, savePending, mergePending, hasPending, loadMtimeIndex, saveMtimeIndex, scanTranscriptMonths } from './parsers/usage.mjs';
+import { parseUsage, loadMtimeIndex, saveMtimeIndex, scanTranscriptMonths } from './parsers/usage.mjs';
 import { detectScopes } from './parsers/scopes.mjs';
 import { toMonthKey } from './util.mjs';
 
@@ -577,11 +577,11 @@ async function main() {
 
   // Rescue: DB 쓰기가 완전히 실패할 때 데이터를 JSON으로 즉시 저장
   const RESCUE_DIR = path.join(OUTPUT, 'rescue');
-  const saveRescue = (scope, usage) => {
+  const saveRescue = (scope, usage, completedMonths) => {
     try {
       fs.mkdirSync(RESCUE_DIR, { recursive: true });
       const fp = path.join(RESCUE_DIR, `${Date.now()}-${scope.replace(/[^a-z0-9]/gi, '_')}.json`);
-      fs.writeFileSync(fp, JSON.stringify({ scope, usage }), 'utf8');
+      fs.writeFileSync(fp, JSON.stringify({ scope, usage, completedMonths: [...(completedMonths || [])] }), 'utf8');
       return true;
     } catch { return false; }
   };
@@ -596,8 +596,16 @@ async function main() {
     for (const f of files) {
       const fp = path.join(RESCUE_DIR, f);
       try {
-        const { scope, usage } = JSON.parse(fs.readFileSync(fp, 'utf8'));
-        dbModule.appendUsageMonthly(OUTPUT, scope, usage);
+        const { scope, usage, completedMonths } = JSON.parse(fs.readFileSync(fp, 'utf8'));
+        const done = new Set(completedMonths || []);
+        try {
+          dbModule.appendUsageMonthly(OUTPUT, scope, usage, done);
+        } catch (e) {
+          // Persist per-month progress so the next replay skips months that already
+          // committed (count upserts are not idempotent across replays).
+          try { fs.writeFileSync(fp, JSON.stringify({ scope, usage, completedMonths: [...done] }), 'utf8'); } catch { /* keep original */ }
+          throw e;
+        }
         fs.unlinkSync(fp);
         ok++;
       } catch { fail++; }
@@ -614,9 +622,12 @@ async function main() {
     if (!dbModule || !usage) return false;
     let lastErr;
     let rebuilt = false;
+    // Months that committed in earlier attempts are skipped on retry so the
+    // count-accumulating upserts (skill/agent/mcp) don't inflate per retry.
+    const completedMonths = new Set();
     for (let attempt = 0; attempt < 4; attempt++) {
       try {
-        dbModule.appendUsageMonthly(OUTPUT, scope, usage);
+        dbModule.appendUsageMonthly(OUTPUT, scope, usage, completedMonths);
         return true;
       } catch (e) {
         lastErr = e;
@@ -633,7 +644,7 @@ async function main() {
       }
     }
     console.warn('oh-my-hi: SQLite 쓰기 실패 —', lastErr?.message);
-    if (saveRescue(scope, usage)) {
+    if (saveRescue(scope, usage, completedMonths)) {
       console.warn('  → 데이터를 rescue 파일로 보존 (실행 종료 전 재시도)');
     }
     return false;
@@ -668,7 +679,7 @@ async function main() {
   const needsMigration = checkNeedsMigration(dbModule, OUTPUT, dataPath);
 
   // ── Lightweight mode (--data-only, triggered by Stop hook) ──
-  // Parse changed files, update data.js for browser, save pending for cache.
+  // Parse changed files, append to SQLite, update data.json for browser.
   if (dataOnly) {
     if (IS_DEV_BUILD) console.log('oh-my-hi: [dev] running from source checkout');
     console.log('oh-my-hi: collecting data (lightweight)...');
@@ -696,21 +707,34 @@ async function main() {
     const total = Object.keys(cache).filter(k => !k.startsWith('_')).length;
     console.log(`  transcripts: ${total} files (${parsed} parsed, ${total - parsed} skipped)`);
 
-    // Append new entries to SQLite — must run BEFORE savePending()
-    // because savePending clears _new flags that the merge depends on.
+    // Append new entries to SQLite
     let dataOnlyDbOk = true;
-    if (parsed > 0 && dbModule) {
-      const newUsage = { skills: [], agents: [], mcpCalls: [], tokenEntries: [], promptStats: [], latencyEntries: [] };
-      for (const [key, entry] of Object.entries(cache)) {
-        if (key.startsWith('_') || !entry?._new || !entry.result) continue;
-        const r = entry.result;
-        for (const field of Object.keys(newUsage)) {
-          if (r[field]?.length) newUsage[field].push(...r[field]);
+    if (parsed > 0) {
+      if (!dbModule) {
+        // DB module unavailable (e.g. better-sqlite3 broken) — treat as write
+        // failure so the mtime index is not saved and next run re-parses.
+        dataOnlyDbOk = false;
+        console.warn('oh-my-hi: SQLite unavailable — skipping mtime cache so next run retries');
+      } else {
+        const releaseLock = acquireWriteLock();
+        if (!releaseLock) {
+          dataOnlyDbOk = false;
+          console.warn('oh-my-hi: another writer holds the DB lock — skipping append + mtime cache so next run retries');
+        } else {
+          try {
+            // Route new entries per-scope (global + matching project), same as full mode
+            const newByScope = collectNewUsageByScope(cache, projectScopes);
+            for (const [scopeId, usage] of Object.entries(newByScope)) {
+              if (usageIsEmpty(usage)) continue;
+              if (!await appendToMonthly(scopeId, usage)) dataOnlyDbOk = false;
+            }
+          } finally {
+            releaseLock();
+          }
+          if (!dataOnlyDbOk) {
+            console.warn('oh-my-hi: SQLite write failed — skipping mtime cache so next run retries');
+          }
         }
-      }
-      dataOnlyDbOk = await appendToMonthly('global', newUsage);
-      if (!dataOnlyDbOk) {
-        console.warn('oh-my-hi: SQLite write failed — skipping mtime cache so next run retries');
       }
     }
 
@@ -731,8 +755,7 @@ async function main() {
       } catch { /* skip — full rebuild on next /omh */ }
     }
 
-    // Save pending + update mtime index only if DB write succeeded
-    savePending(CACHE_PATH, cache);
+    // Update mtime index only if DB write succeeded — failed writes retry next run
     if (dataOnlyDbOk) saveMtimeIndex(CACHE_PATH, cache);
 
     // Ensure _devBuild flag is set when running from the real dev repo
@@ -770,7 +793,6 @@ async function main() {
   // Check cache state to decide progressive mode
   const cacheDirPath = path.join(OUTPUT, 'cache');
   const cacheExists = fs.existsSync(CACHE_PATH) || fs.existsSync(cacheDirPath);
-  const pendingExists = hasPending(CACHE_PATH);
 
   // Rebuild index.html only when needed (first run or version change)
   if (needsHtmlRebuild(indexPath)) {
@@ -779,7 +801,7 @@ async function main() {
 
   let dashboardUrl;
 
-  if (!cacheExists && !pendingExists) {
+  if (!cacheExists) {
     // Progressive mode: first run — no SQLite data and no mtime-index yet
     console.log('oh-my-hi: first run — generating dashboard from scratch...');
     console.log(`  [1/4] scanning ${scopes.length} workspace(s)...`);
@@ -860,38 +882,26 @@ async function main() {
       ]);
       if (stubCache._parsed > 0) {
         // Collect new entries from all scopes and append per-scope to monthly DBs
-        const newByScope = { global: { skills: [], agents: [], mcpCalls: [], tokenEntries: [], promptStats: [], latencyEntries: [] } };
-        for (const s of projectScopes) newByScope[s.id] = { skills: [], agents: [], mcpCalls: [], tokenEntries: [], promptStats: [], latencyEntries: [] };
-        const sortedProjectScopes = [...projectScopes].sort((a, b) => b.configPath.length - a.configPath.length);
-        for (const [key, entry] of Object.entries(stubCache)) {
-          if (key.startsWith('_') || !entry?._new || !entry.result) continue;
-          const r = entry.result;
-          let matchedScope = null;
-          for (const s of sortedProjectScopes) {
-            if (key === s.configPath || key.startsWith(s.configPath + path.sep)) {
-              matchedScope = s;
-              break;
-            }
-          }
-          const targets = [newByScope.global];
-          if (matchedScope) targets.push(newByScope[matchedScope.id]);
-          for (const target of targets) {
-            for (const field of Object.keys(target)) {
-              if (r[field]?.length) target[field].push(...r[field]);
-            }
-          }
-        }
+        const newByScope = collectNewUsageByScope(stubCache, projectScopes);
         let dbWriteOk = true;
-        for (const [scopeId, usage] of Object.entries(newByScope)) {
-          if (usage.tokenEntries.length > 0 || usage.skills.length > 0) {
-            if (!await appendToMonthly(scopeId, usage)) dbWriteOk = false;
+        const releaseLock = acquireWriteLock();
+        if (!releaseLock) {
+          dbWriteOk = false;
+        } else {
+          try {
+            for (const [scopeId, usage] of Object.entries(newByScope)) {
+              if (usageIsEmpty(usage)) continue;
+              if (!await appendToMonthly(scopeId, usage)) dbWriteOk = false;
+            }
+          } finally {
+            releaseLock();
           }
         }
-        // Only cache mtime if SQLite write succeeded — failed writes must be retried next run
+        // Only cache mtime if SQLite write succeeded — failed/locked writes must be retried next run
         if (dbWriteOk) {
           saveMtimeIndex(CACHE_PATH, stubCache);
         } else {
-          console.warn('oh-my-hi: SQLite write failed — skipping mtime cache so next run retries');
+          console.warn('oh-my-hi: SQLite write failed or locked — skipping mtime cache so next run retries');
         }
         console.log(`  transcripts: ${stubCache._parsed} new file(s) parsed`);
       }
@@ -968,12 +978,6 @@ async function collectAllScopes(scopes, { days = 0, cache, cachePath, skipUsage 
   const projectScopes = scopes.filter(s => s.type !== 'global');
   // Load or reuse cache; reset parse counter for this collection round
   const sharedCache = cache || {};
-
-  // Merge pending files into cache (from previous --data-only runs)
-  if (cachePath) {
-    const pendingCount = mergePending(cachePath, sharedCache);
-    if (pendingCount > 0) console.log(`  pending: ${pendingCount} files merged`);
-  }
 
   sharedCache._parsed = 0;
   sharedCache._processed = 0;
@@ -1086,6 +1090,14 @@ function cleanupLegacyFiles(outDir) {
       }
     } catch { /* ignore */ }
   }
+  // Remove legacy pending/ deltas — superseded by direct SQLite appends
+  const pendingDir = path.join(outDir, 'pending');
+  try {
+    if (fs.existsSync(pendingDir)) {
+      fs.rmSync(pendingDir, { recursive: true, force: true });
+      console.log('  cleanup: removed pending/');
+    }
+  } catch { /* ignore */ }
 }
 
 /**
@@ -1504,6 +1516,71 @@ function safeCall(fn) {
   try { return fn(); } catch { return []; }
 }
 
+// ── Incremental DB append helpers (shared by --data-only and full mode) ─────
+
+const USAGE_FIELDS = ['skills', 'agents', 'mcpCalls', 'tokenEntries', 'promptStats', 'latencyEntries'];
+
+/** Route `_new` parse results from a transcript cache to global + the matching
+ *  project scope. A transcript under a project scope's configPath is counted
+ *  both globally and for that scope (most specific configPath wins). */
+function collectNewUsageByScope(cache, projectScopes) {
+  const emptyUsage = () => Object.fromEntries(USAGE_FIELDS.map(f => [f, []]));
+  const newByScope = { global: emptyUsage() };
+  for (const s of projectScopes) newByScope[s.id] = emptyUsage();
+  const sortedProjectScopes = [...projectScopes].sort((a, b) => b.configPath.length - a.configPath.length);
+  for (const [key, entry] of Object.entries(cache)) {
+    if (key.startsWith('_') || !entry?._new || !entry.result) continue;
+    const r = entry.result;
+    let matchedScope = null;
+    for (const s of sortedProjectScopes) {
+      if (key === s.configPath || key.startsWith(s.configPath + path.sep)) {
+        matchedScope = s;
+        break;
+      }
+    }
+    const targets = [newByScope.global];
+    if (matchedScope) targets.push(newByScope[matchedScope.id]);
+    for (const target of targets) {
+      for (const field of USAGE_FIELDS) {
+        if (r[field]?.length) target[field].push(...r[field]);
+      }
+    }
+  }
+  return newByScope;
+}
+
+function usageIsEmpty(usage) {
+  return USAGE_FIELDS.every(f => !usage[f]?.length);
+}
+
+/** Exclusive writer lock for SQLite appends — serializes concurrent runs
+ *  (e.g. two sessions' Stop hooks firing --data-only at the same time).
+ *  Returns a release() function, or null when a live process holds the lock.
+ *  Stale locks (dead pid, or older than 10 min) are removed and re-acquired. */
+function acquireWriteLock() {
+  const lockPath = path.join(OUTPUT, '.write.lock');
+  const STALE_MS = 10 * 60 * 1000;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      fs.mkdirSync(OUTPUT, { recursive: true });
+      fs.writeFileSync(lockPath, JSON.stringify({ pid: process.pid, ts: Date.now() }), { flag: 'wx' });
+      return () => { try { fs.unlinkSync(lockPath); } catch { /* ignore */ } };
+    } catch {
+      try {
+        const { pid, ts } = JSON.parse(fs.readFileSync(lockPath, 'utf-8'));
+        let alive = false;
+        try { process.kill(pid, 0); alive = true; } catch { /* dead */ }
+        if (alive && Date.now() - (ts || 0) < STALE_MS) return null; // held by a live writer
+        fs.unlinkSync(lockPath); // stale — remove and retry once
+      } catch {
+        // unreadable lock file — try to clear it; give up if we can't
+        try { fs.unlinkSync(lockPath); } catch { return null; }
+      }
+    }
+  }
+  return null;
+}
+
 
 /** Spawn serve.mjs as a detached background process, or reuse if already running.
  *  Returns the server URL once the lock file is written.
@@ -1552,6 +1629,6 @@ async function spawnServe(lockPath, { open }) {
   return `http://127.0.0.1:8282`; // preferred port fallback
 }
 
-if (!args.includes('--update')) {
+if (!args.includes('--update') && !args.includes('--_update-cache')) {
   main().catch(err => { console.error(err); process.exit(1); });
 }

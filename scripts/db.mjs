@@ -235,8 +235,15 @@ function emptyUsage() {
  * Each entry is written to the DB for the month its timestamp/date falls in.
  * Items with no date are written to the current month's DB.
  * Safe to call multiple times — uses INSERT OR IGNORE / ON CONFLICT DO UPDATE.
+ *
+ * Note: skill/agent/mcp counts accumulate on conflict, so re-writing a month is
+ * NOT idempotent. Pass `completedMonths` (a Set of '${year}-${month}' keys) when
+ * retrying after a partial failure: months already in the set are skipped, and
+ * each month is added to the set as soon as its transaction commits.
+ *
+ * @param {Set<string>|null} [completedMonths] mutated in place with committed month keys
  */
-export function appendUsageMonthly(outputDir, scope, usage) {
+export function appendUsageMonthly(outputDir, scope, usage, completedMonths = null) {
   if (!usage) return;
 
   const now = new Date();
@@ -306,12 +313,14 @@ export function appendUsageMonthly(outputDir, scope, usage) {
       !monthUsage.skills.length && !monthUsage.agents.length && !monthUsage.mcpCalls.length &&
       !monthUsage.latencyEntries.length;
     if (empty) continue;
+    if (completedMonths?.has(key)) continue; // committed in a previous attempt — skip to keep counts idempotent
     const [year, month] = key.split('-').map(Number);
     const dbPath = getMonthlyDbPath(outputDir, year, month);
     let db;
     try {
       db = openDb(dbPath);
       appendUsage(db, scope, monthUsage);
+      completedMonths?.add(key);
     } catch (e) {
       console.warn(`appendUsageMonthly: failed for ${key} —`, e.message);
       throw e;
@@ -772,10 +781,17 @@ export function recoverIfCorrupt(outputDir, mtimeIndexPath, threshold = 50) {
       } catch { /* skip unreadable DB */ }
     }
 
-    // Case 1: DB completely empty — nuke mtime-index + all empty DBs
+    // Case 1: DB completely empty — nuke mtime-index + all empty DBs.
+    // Also remove -wal/-shm siblings: a concurrent open connection (e.g. serve.mjs)
+    // can prevent WAL checkpointing, and the DB is recreated at the same path in
+    // this very run, so the orphan cleanup in listMonthlyDbs would never fire.
     if (dbRows === 0) {
       try { fs.unlinkSync(mtimeIndexPath); } catch { /* ignore */ }
-      for (const { path: p } of monthly) { try { fs.unlinkSync(p); } catch { /* ignore */ } }
+      for (const { path: p } of monthly) {
+        for (const f of [p, `${p}-wal`, `${p}-shm`]) {
+          try { fs.unlinkSync(f); } catch { /* ignore */ }
+        }
+      }
       return { recovered: true, cachedCount, dbRows: 0, existingMonths };
     }
 
