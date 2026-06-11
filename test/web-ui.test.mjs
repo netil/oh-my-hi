@@ -48,7 +48,7 @@ describe('Web UI — Templates', () => {
 
     it('should define all page render functions', () => {
       const fns = [
-        'renderOverview', 'renderTokensPage', 'renderTokensCost',
+        'renderOverview', 'renderTokensPage', 'renderTokensCost', 'renderTokensCache',
         'renderTokensPrompt', 'renderTokensSession', 'renderSessionDetail',
         'renderStructure', 'renderHelp', 'renderCategoryOverview', 'renderDetailView',
       ];
@@ -58,21 +58,21 @@ describe('Web UI — Templates', () => {
     });
 
     it('should define all chart draw functions', () => {
-      const fns = ['drawTokenTrendChart', 'drawTokenModelDonut', 'drawCostTrendCharts', 'drawHourlyDistChart', 'drawRotatedBar'];
+      const fns = ['drawTokenTrendChart', 'drawTokenModelDonut', 'drawCostTrendCharts', 'drawHourlyDistChart', 'drawRotatedBar', 'drawCacheTrendChart', 'drawCacheHourlyChart'];
       for (const fn of fns) {
         assert.ok(js.includes(`function ${fn}`), `missing function: ${fn}`);
       }
     });
 
     it('should handle all hash routes in applyHash', () => {
-      const routes = ['overview', 'structure', 'tokens', 'tokens-cost', 'tokens-prompt', 'tokens-session', 'session', 'help'];
+      const routes = ['overview', 'structure', 'tokens', 'tokens-cost', 'tokens-cache', 'tokens-prompt', 'tokens-session', 'session', 'help'];
       for (const route of routes) {
         assert.ok(js.includes(`'${route}'`), `missing route: ${route}`);
       }
     });
 
     it('should dispatch all views in renderContent', () => {
-      const views = ['tokens-cost', 'tokens-prompt', 'tokens-session', 'session'];
+      const views = ['tokens-cost', 'tokens-cache', 'tokens-prompt', 'tokens-session', 'session'];
       for (const v of views) {
         assert.ok(js.includes(`currentView === '${v}'`), `missing dispatch: ${v}`);
       }
@@ -368,6 +368,45 @@ describe('Web UI — Templates', () => {
       assert.ok(js.includes('helpCweTimeline'), 'helpCweTimeline key used');
     });
 
+    // ── Tokens: Cache sub-page ───────────────────────────────────────────
+    it('should compute cache hit ratio over read+write+fresh input', () => {
+      const fnIdx = js.indexOf('function cacheHitRatioPct');
+      assert.ok(fnIdx !== -1, 'cacheHitRatioPct defined');
+      const snippet = js.slice(fnIdx, fnIdx + 300);
+      assert.ok(snippet.includes('read + write + fresh'), 'denominator = read+write+fresh');
+    });
+
+    it('should estimate cache savings using per-model pricing', () => {
+      const fnIdx = js.indexOf('function calcEntryCacheSavings');
+      assert.ok(fnIdx !== -1, 'calcEntryCacheSavings defined');
+      const snippet = js.slice(fnIdx, fnIdx + 500);
+      assert.ok(snippet.includes('resolvePricingKey'), 'uses per-model pricing key');
+      assert.ok(snippet.includes('p.input - p.cacheRead'), 'read savings vs input rate');
+      assert.ok(snippet.includes('p.cacheCreation - p.input'), 'write surcharge vs input rate');
+    });
+
+    it('should render workspace cache table sorted by cache volume', () => {
+      const fnIdx = js.indexOf('function renderTokensCache');
+      const snippet = js.slice(fnIdx, fnIdx + 6000);
+      assert.ok(snippet.includes('DATA.scopes'), 'iterates scopes');
+      assert.ok(snippet.includes('(b.read + b.write) - (a.read + a.write)'), 'sorted by cache volume');
+      assert.ok(snippet.includes('cacheByProjectTitle'), 'i18n title key used');
+      assert.ok(snippet.includes('cacheFormulaNote'), 'hit-ratio formula stated in UI');
+    });
+
+    it('should have cache page i18n keys in both locales', () => {
+      const en = JSON.parse(fs.readFileSync(path.join(TEMPLATES, 'locales', 'en.json'), 'utf-8'));
+      const ko = JSON.parse(fs.readFileSync(path.join(TEMPLATES, 'locales', 'ko.json'), 'utf-8'));
+      const keys = ['tokensCache', 'cachePageDesc', 'cacheFormulaNote', 'cacheWrite',
+        'cacheEstSavings', 'cacheEstSavingsNote', 'cacheTrendTitle', 'cacheTrendDesc',
+        'cacheHourlyTitle', 'cacheHourlyDesc', 'cacheByProjectTitle', 'cacheByProjectDesc',
+        'cacheColWorkspace', 'cacheCurrentScope'];
+      for (const key of keys) {
+        assert.ok(en[key], `en.json missing: ${key}`);
+        assert.ok(ko[key], `ko.json missing: ${key}`);
+      }
+    });
+
     // ── F8 Token Breakdown ────────────────────────────────────────────────
     it('should define renderBreakdown function', () => {
       assert.ok(js.includes('function renderBreakdown'));
@@ -377,7 +416,7 @@ describe('Web UI — Templates', () => {
       assert.ok(js.includes("'breakdown'"), 'breakdown route literal');
       // breakdown should expand _tokens area
       const applyHashIdx = js.indexOf('function applyHash');
-      const snippet = js.slice(applyHashIdx, applyHashIdx + 1500);
+      const snippet = js.slice(applyHashIdx, applyHashIdx + 2500);
       assert.ok(snippet.includes("'breakdown'"), 'breakdown in applyHash');
       assert.ok(snippet.includes('_tokens'), 'breakdown expands tokens group');
     });
