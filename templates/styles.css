@@ -1580,6 +1580,82 @@ body.dark .stat-badge--teal {
   font-weight: 500;
 }
 
+/* ── Health check (lint) ── */
+.lint-warn-badge {
+  font-size: 11px;
+  padding: 1px 6px;
+  border-radius: 10px;
+  font-weight: 600;
+  background: #fff3bf;
+  color: #e67700;
+  flex-shrink: 0;
+}
+
+body.dark .lint-warn-badge {
+  background: #5c4a00;
+  color: #ffd43b;
+}
+
+.lint-card {
+  padding: 16px;
+}
+
+.lint-all-clear {
+  font-size: 13px;
+  font-weight: 600;
+  color: #087f5b;
+}
+
+body.dark .lint-all-clear {
+  color: #69db7c;
+}
+
+.lint-summary {
+  font-size: 13px;
+  font-weight: 600;
+  color: #e67700;
+  margin-bottom: 10px;
+}
+
+body.dark .lint-summary {
+  color: #ffd43b;
+}
+
+.lint-group {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border);
+}
+
+.lint-group-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  font-weight: 600;
+  margin-bottom: 6px;
+}
+
+.lint-item {
+  padding: 5px 0 5px 26px;
+}
+
+.lint-item-msg {
+  font-size: 13px;
+  color: var(--text);
+}
+
+.lint-item-msg::before {
+  content: '⚠️ ';
+}
+
+.lint-item-file {
+  font-size: 11px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  color: var(--text-secondary);
+  word-break: break-all;
+}
+
 /* ── Flowchart ── */
 .flowchart-card {
   padding: 20px;

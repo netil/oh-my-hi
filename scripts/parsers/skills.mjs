@@ -50,6 +50,9 @@ function extractPluginName(filePath, cacheDir) {
 function extractFields(meta, filePath) {
   return {
     name: meta['name'] ?? path.basename(path.dirname(filePath)),
+    // Raw frontmatter name (null when absent) — used by lint.mjs to detect
+    // missing `name` fields, since `name` above falls back to the dir name.
+    metaName: meta['name'] ?? null,
     description: meta['description'] ?? '',
     version: meta['version'] ?? null,
     argumentHint: meta['argument-hint'] ?? null,
