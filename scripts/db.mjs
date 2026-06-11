@@ -8,10 +8,37 @@
 
 import path from 'path';
 import fs from 'fs';
+import os from 'os';
 import { createRequire } from 'module';
+import { fileURLToPath } from 'url';
 import { toMonthKey } from './util.mjs';
 
 const require = createRequire(import.meta.url);
+
+// ── Machine identity ───────────────────────────────────────────────────────
+//
+// Every usage row is stamped with a stable, normalized machine id so that DBs
+// copied from other machines can be merged without colliding (the machine id
+// is part of every unique key). Override with OH_MY_HI_MACHINE if hostnames
+// clash or you want a friendlier label.
+
+let _machineId = null;
+
+/**
+ * Stable machine identifier: normalized os.hostname().
+ * Normalization: lowercase, strip trailing `.local`/`.lan`/`.localdomain`,
+ * non [a-z0-9._-] chars replaced with '-'. Env override: OH_MY_HI_MACHINE.
+ */
+export function getMachineId() {
+  if (_machineId) return _machineId;
+  const raw = process.env.OH_MY_HI_MACHINE || os.hostname() || 'unknown';
+  _machineId = String(raw)
+    .toLowerCase()
+    .replace(/\.(local|lan|localdomain)$/, '')
+    .replace(/[^a-z0-9._-]+/g, '-')
+    .replace(/^-+|-+$/g, '') || 'unknown';
+  return _machineId;
+}
 
 /**
  * Clear the better-sqlite3 native module from the CJS require cache so the
@@ -29,7 +56,7 @@ export function reloadNativeModule() {
 // CURRENT_SCHEMA_VERSION, add `if (v < N) migrateToVN(db)` in migrate(), and
 // write migrateToVN ending with `db.pragma('user_version = N')` — always
 // hardcode N, never use CURRENT_SCHEMA_VERSION inside a migration function.
-const CURRENT_SCHEMA_VERSION = 1;
+const CURRENT_SCHEMA_VERSION = 2;
 
 /**
  * Open (and migrate) the oh-my-hi SQLite database.
@@ -62,7 +89,7 @@ export function getSchemaVersion(db) {
  */
 function migrate(db) {
   const v = getSchemaVersion(db);
-  if (v === 0) initSchema(db);
+  if (v === 0) { initSchema(db); return; }
   // Add latency_entries for DBs created before it was added to the schema (user_version <= 6)
   const hasLatency = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='latency_entries'").get();
   if (!hasLatency) {
@@ -80,8 +107,127 @@ function migrate(db) {
       `);
     })();
   }
+  if (v < 2) migrateToV2(db);
   // Future incremental migrations go here:
-  // if (v < 2) migrateToV2(db);
+  // if (v < 3) migrateToV3(db);
+}
+
+/**
+ * v1 → v2: add a `machine` column to every usage-bearing table and fold it
+ * into each unique key so rows from different machines never collide
+ * (foundation for cross-machine merge via `node scripts/db.mjs --import`).
+ *
+ * Existing rows are stamped with the *current* machine id — a v1 DB by
+ * definition only ever contained local data.
+ *
+ * - token_entries: the unique key is a standalone UNIQUE INDEX, so a cheap
+ *   ALTER TABLE ADD COLUMN + index swap suffices (no row copy).
+ * - prompt_entries / skill_usage / agent_usage / mcp_calls / latency_entries:
+ *   the unique key is a table-level UNIQUE constraint, which SQLite cannot
+ *   alter in place → rebuild via create-new-table + copy + drop + rename.
+ */
+function migrateToV2(db) {
+  // getMachineId() output is sanitized to [a-z0-9._-], safe to inline as an SQL literal.
+  const machine = getMachineId();
+  db.transaction(() => {
+    // token_entries — ALTER + unique-index swap (largest table; avoid copying rows)
+    db.exec(`
+      ALTER TABLE token_entries ADD COLUMN machine TEXT NOT NULL DEFAULT '';
+      UPDATE token_entries SET machine = '${machine}';
+      DROP INDEX IF EXISTS idx_te_unique;
+      CREATE UNIQUE INDEX idx_te_unique
+        ON token_entries(scope, timestamp, model, input_tokens, output_tokens, machine);
+    `);
+
+    // prompt_entries — rebuild (UNIQUE constraint gains `machine`)
+    db.exec(`
+      CREATE TABLE prompt_entries_v2 (
+        scope      TEXT    NOT NULL,
+        session_id TEXT    NOT NULL DEFAULT '',
+        timestamp  INTEGER NOT NULL,
+        char_len   INTEGER DEFAULT 0,
+        preview    TEXT,
+        machine    TEXT    NOT NULL DEFAULT '',
+        UNIQUE(scope, session_id, timestamp, machine)
+      );
+      INSERT INTO prompt_entries_v2 (scope, session_id, timestamp, char_len, preview, machine)
+        SELECT scope, session_id, timestamp, char_len, preview, '${machine}' FROM prompt_entries;
+      DROP TABLE prompt_entries;
+      ALTER TABLE prompt_entries_v2 RENAME TO prompt_entries;
+      CREATE INDEX idx_pe_scope_ts ON prompt_entries(scope, timestamp);
+    `);
+
+    // skill_usage — rebuild
+    db.exec(`
+      CREATE TABLE skill_usage_v2 (
+        scope   TEXT NOT NULL,
+        name    TEXT NOT NULL,
+        count   INTEGER DEFAULT 0,
+        date    TEXT,
+        machine TEXT NOT NULL DEFAULT '',
+        UNIQUE(scope, name, date, machine)
+      );
+      INSERT INTO skill_usage_v2 (scope, name, count, date, machine)
+        SELECT scope, name, count, date, '${machine}' FROM skill_usage;
+      DROP TABLE skill_usage;
+      ALTER TABLE skill_usage_v2 RENAME TO skill_usage;
+      CREATE INDEX idx_skill_usage_scope_date ON skill_usage(scope, date);
+    `);
+
+    // agent_usage — rebuild
+    db.exec(`
+      CREATE TABLE agent_usage_v2 (
+        scope   TEXT NOT NULL,
+        name    TEXT NOT NULL,
+        count   INTEGER DEFAULT 0,
+        date    TEXT,
+        machine TEXT NOT NULL DEFAULT '',
+        UNIQUE(scope, name, date, machine)
+      );
+      INSERT INTO agent_usage_v2 (scope, name, count, date, machine)
+        SELECT scope, name, count, date, '${machine}' FROM agent_usage;
+      DROP TABLE agent_usage;
+      ALTER TABLE agent_usage_v2 RENAME TO agent_usage;
+      CREATE INDEX idx_agent_usage_scope_date ON agent_usage(scope, date);
+    `);
+
+    // mcp_calls — rebuild
+    db.exec(`
+      CREATE TABLE mcp_calls_v2 (
+        scope   TEXT NOT NULL,
+        tool    TEXT NOT NULL,
+        count   INTEGER DEFAULT 0,
+        date    TEXT,
+        machine TEXT NOT NULL DEFAULT '',
+        UNIQUE(scope, tool, date, machine)
+      );
+      INSERT INTO mcp_calls_v2 (scope, tool, count, date, machine)
+        SELECT scope, tool, count, date, '${machine}' FROM mcp_calls;
+      DROP TABLE mcp_calls;
+      ALTER TABLE mcp_calls_v2 RENAME TO mcp_calls;
+      CREATE INDEX idx_mcp_calls_scope_date ON mcp_calls(scope, date);
+    `);
+
+    // latency_entries — rebuild
+    db.exec(`
+      CREATE TABLE latency_entries_v2 (
+        scope      TEXT    NOT NULL,
+        session_id TEXT,
+        timestamp  INTEGER NOT NULL,
+        latency_ms INTEGER NOT NULL,
+        model      TEXT,
+        machine    TEXT    NOT NULL DEFAULT '',
+        UNIQUE(scope, timestamp, session_id, machine)
+      );
+      INSERT INTO latency_entries_v2 (scope, session_id, timestamp, latency_ms, model, machine)
+        SELECT scope, session_id, timestamp, latency_ms, model, '${machine}' FROM latency_entries;
+      DROP TABLE latency_entries;
+      ALTER TABLE latency_entries_v2 RENAME TO latency_entries;
+      CREATE INDEX idx_le_scope_ts ON latency_entries(scope, timestamp);
+    `);
+
+    db.pragma('user_version = 2');
+  })();
 }
 
 /**
@@ -91,7 +237,9 @@ function migrate(db) {
 function initSchema(db) {
   db.transaction(() => {
     db.exec(`
-      -- Token entries: one row per API call
+      -- Token entries: one row per API call.
+      -- 'machine' identifies the machine that produced the row (cross-machine
+      -- merge support) and is part of every unique key below.
       CREATE TABLE token_entries (
         scope         TEXT    NOT NULL,
         session_id    TEXT,
@@ -103,11 +251,12 @@ function initSchema(db) {
         cache_creation INTEGER DEFAULT 0,
         raw_input     INTEGER DEFAULT 0,
         context       TEXT,
-        context_name  TEXT
+        context_name  TEXT,
+        machine       TEXT    NOT NULL DEFAULT ''
       );
       CREATE INDEX idx_te_scope_ts ON token_entries(scope, timestamp);
       CREATE UNIQUE INDEX idx_te_unique
-        ON token_entries(scope, timestamp, model, input_tokens, output_tokens);
+        ON token_entries(scope, timestamp, model, input_tokens, output_tokens, machine);
 
       -- Prompt entries: one row per user message
       CREATE TABLE prompt_entries (
@@ -116,7 +265,8 @@ function initSchema(db) {
         timestamp  INTEGER NOT NULL,
         char_len   INTEGER DEFAULT 0,
         preview    TEXT,
-        UNIQUE(scope, session_id, timestamp)
+        machine    TEXT    NOT NULL DEFAULT '',
+        UNIQUE(scope, session_id, timestamp, machine)
       );
       CREATE INDEX idx_pe_scope_ts ON prompt_entries(scope, timestamp);
 
@@ -130,31 +280,34 @@ function initSchema(db) {
         PRIMARY KEY (scope, date)
       );
 
-      -- Skill / agent / mcp usage: one row per (scope, name/tool, date)
+      -- Skill / agent / mcp usage: one row per (scope, name/tool, date, machine)
       CREATE TABLE skill_usage (
-        scope TEXT NOT NULL,
-        name  TEXT NOT NULL,
-        count INTEGER DEFAULT 0,
-        date  TEXT,
-        UNIQUE(scope, name, date)
+        scope   TEXT NOT NULL,
+        name    TEXT NOT NULL,
+        count   INTEGER DEFAULT 0,
+        date    TEXT,
+        machine TEXT NOT NULL DEFAULT '',
+        UNIQUE(scope, name, date, machine)
       );
       CREATE INDEX idx_skill_usage_scope_date ON skill_usage(scope, date);
 
       CREATE TABLE agent_usage (
-        scope TEXT NOT NULL,
-        name  TEXT NOT NULL,
-        count INTEGER DEFAULT 0,
-        date  TEXT,
-        UNIQUE(scope, name, date)
+        scope   TEXT NOT NULL,
+        name    TEXT NOT NULL,
+        count   INTEGER DEFAULT 0,
+        date    TEXT,
+        machine TEXT NOT NULL DEFAULT '',
+        UNIQUE(scope, name, date, machine)
       );
       CREATE INDEX idx_agent_usage_scope_date ON agent_usage(scope, date);
 
       CREATE TABLE mcp_calls (
-        scope TEXT NOT NULL,
-        tool  TEXT NOT NULL,
-        count INTEGER DEFAULT 0,
-        date  TEXT,
-        UNIQUE(scope, tool, date)
+        scope   TEXT NOT NULL,
+        tool    TEXT NOT NULL,
+        count   INTEGER DEFAULT 0,
+        date    TEXT,
+        machine TEXT NOT NULL DEFAULT '',
+        UNIQUE(scope, tool, date, machine)
       );
       CREATE INDEX idx_mcp_calls_scope_date ON mcp_calls(scope, date);
 
@@ -165,11 +318,12 @@ function initSchema(db) {
         timestamp  INTEGER NOT NULL,
         latency_ms INTEGER NOT NULL,
         model      TEXT,
-        UNIQUE(scope, timestamp, session_id)
+        machine    TEXT    NOT NULL DEFAULT '',
+        UNIQUE(scope, timestamp, session_id, machine)
       );
       CREATE INDEX idx_le_scope_ts ON latency_entries(scope, timestamp);
     `);
-    db.pragma('user_version = 1');
+    db.pragma('user_version = 2');
   })();
 }
 
@@ -355,14 +509,15 @@ export function splitLegacyDb(legacyDb, outputDir) {
         contextName: r.context_name,
         latencyMs: r.latency_ms,
         charLen: r.char_len,
+        machine: r.machine,
       })),
       // Legacy prompt_stats are daily aggregates ({date, message_count, …}); individual
       // timestamps are not recoverable, so they cannot be stored in the new prompt_entries
       // table.  Skip rather than create misleading midnight-timestamp placeholders.
       promptStats: [],
-      skills: skillRows.map(r => ({ name: r.name, count: r.count, date: r.date })),
-      agents: agentRows.map(r => ({ name: r.name, count: r.count, date: r.date })),
-      mcpCalls: mcpRows.map(r => ({ tool: r.tool, count: r.count, date: r.date })),
+      skills: skillRows.map(r => ({ name: r.name, count: r.count, date: r.date, machine: r.machine })),
+      agents: agentRows.map(r => ({ name: r.name, count: r.count, date: r.date, machine: r.machine })),
+      mcpCalls: mcpRows.map(r => ({ tool: r.tool, count: r.count, date: r.date, machine: r.machine })),
       latencyEntries: [],
     };
 
@@ -396,11 +551,13 @@ export function queryUsageMultiDb(dbs, scope, from, to) {
   for (const db of dbs) {
     const r = queryUsage(db, scope, from, to);
     merged.tokenEntries.push(...r.tokenEntries);
-    for (const p of r.promptStats) promptMap.set(`${p.sessionId || ''}\0${p.timestamp}`, p);
+    // Dedup keys include the machine so identical timestamps from different
+    // machines (merged via --import) are kept as distinct entries.
+    for (const p of r.promptStats) promptMap.set(`${p.machine || ''}\0${p.sessionId || ''}\0${p.timestamp}`, p);
     for (const s of r.skills) mergeCountMap(skillMap, s, 'name');
     for (const a of r.agents) mergeCountMap(agentMap, a, 'name');
     for (const m of r.mcpCalls) mergeCountMap(mcpMap, m, 'name');
-    for (const l of r.latencyEntries) latencyMap.set(`${l.sessionId || ''}\0${l.timestamp}`, l);
+    for (const l of r.latencyEntries) latencyMap.set(`${l.machine || ''}\0${l.sessionId || ''}\0${l.timestamp}`, l);
   }
 
   merged.promptStats = [...promptMap.values()].sort((a, b) => a.timestamp - b.timestamp);
@@ -452,45 +609,47 @@ export function queryDateRangeAllMonths(outputDir) {
 // ── Scope-level write operations ───────────────────────────────────────────
 
 /**
- * Replace all rows for a given scope with the supplied usage payload.
+ * Replace all rows for a given scope + machine with the supplied usage payload.
  * Idempotent: running twice with the same usage yields the same DB state.
+ * Only the current machine's rows are deleted — rows imported from other
+ * machines (via --import) survive local rebuilds.
  */
-export function upsertUsage(db, scope, usage) {
+export function upsertUsage(db, scope, usage, machine = getMachineId()) {
   if (!usage) return;
 
-  const delTokens = db.prepare('DELETE FROM token_entries WHERE scope = ?');
-  const delPrompts = db.prepare('DELETE FROM prompt_entries WHERE scope = ?');
-  const delLatency = db.prepare('DELETE FROM latency_entries WHERE scope = ?');
-  const delSkills = db.prepare('DELETE FROM skill_usage WHERE scope = ?');
-  const delAgents = db.prepare('DELETE FROM agent_usage WHERE scope = ?');
-  const delMcp = db.prepare('DELETE FROM mcp_calls WHERE scope = ?');
+  const delTokens = db.prepare('DELETE FROM token_entries WHERE scope = ? AND machine = ?');
+  const delPrompts = db.prepare('DELETE FROM prompt_entries WHERE scope = ? AND machine = ?');
+  const delLatency = db.prepare('DELETE FROM latency_entries WHERE scope = ? AND machine = ?');
+  const delSkills = db.prepare('DELETE FROM skill_usage WHERE scope = ? AND machine = ?');
+  const delAgents = db.prepare('DELETE FROM agent_usage WHERE scope = ? AND machine = ?');
+  const delMcp = db.prepare('DELETE FROM mcp_calls WHERE scope = ? AND machine = ?');
 
   const insTokens = db.prepare(`
     INSERT INTO token_entries
       (scope, session_id, timestamp, model, input_tokens, output_tokens,
-       cache_read, cache_creation, raw_input, context, context_name)
+       cache_read, cache_creation, raw_input, context, context_name, machine)
     VALUES (@scope, @session_id, @timestamp, @model, @input_tokens, @output_tokens,
-            @cache_read, @cache_creation, @raw_input, @context, @context_name)
+            @cache_read, @cache_creation, @raw_input, @context, @context_name, @machine)
   `);
   const insPrompts = db.prepare(`
-    INSERT OR REPLACE INTO prompt_entries (scope, session_id, timestamp, char_len, preview)
-    VALUES (?, ?, ?, ?, ?)
+    INSERT OR REPLACE INTO prompt_entries (scope, session_id, timestamp, char_len, preview, machine)
+    VALUES (?, ?, ?, ?, ?, ?)
   `);
-  const insSkill = db.prepare('INSERT INTO skill_usage (scope, name, count, date) VALUES (?, ?, ?, ?)');
-  const insAgent = db.prepare('INSERT INTO agent_usage (scope, name, count, date) VALUES (?, ?, ?, ?)');
-  const insMcp = db.prepare('INSERT INTO mcp_calls (scope, tool, count, date) VALUES (?, ?, ?, ?)');
+  const insSkill = db.prepare('INSERT INTO skill_usage (scope, name, count, date, machine) VALUES (?, ?, ?, ?, ?)');
+  const insAgent = db.prepare('INSERT INTO agent_usage (scope, name, count, date, machine) VALUES (?, ?, ?, ?, ?)');
+  const insMcp = db.prepare('INSERT INTO mcp_calls (scope, tool, count, date, machine) VALUES (?, ?, ?, ?, ?)');
   const insLatency = db.prepare(`
-    INSERT OR IGNORE INTO latency_entries (scope, session_id, timestamp, latency_ms, model)
-    VALUES (?, ?, ?, ?, ?)
+    INSERT OR IGNORE INTO latency_entries (scope, session_id, timestamp, latency_ms, model, machine)
+    VALUES (?, ?, ?, ?, ?, ?)
   `);
 
   const tx = db.transaction(() => {
-    delTokens.run(scope);
-    delPrompts.run(scope);
-    delLatency.run(scope);
-    delSkills.run(scope);
-    delAgents.run(scope);
-    delMcp.run(scope);
+    delTokens.run(scope, machine);
+    delPrompts.run(scope, machine);
+    delLatency.run(scope, machine);
+    delSkills.run(scope, machine);
+    delAgents.run(scope, machine);
+    delMcp.run(scope, machine);
 
     for (const e of (usage.tokenEntries || [])) {
       insTokens.run({
@@ -505,30 +664,31 @@ export function upsertUsage(db, scope, usage) {
         raw_input: e.rawInput | 0,
         context: e.context != null ? String(e.context) : null,
         context_name: e.contextName ?? null,
+        machine: e.machine ?? machine,
       });
     }
     for (const p of (usage.promptStats || [])) {
       const ts = Number(p.timestamp);
       if (!ts) continue;
-      insPrompts.run(scope, p.sessionId ?? '', ts, p.charLen | 0, p.preview ?? null);
+      insPrompts.run(scope, p.sessionId ?? '', ts, p.charLen | 0, p.preview ?? null, p.machine ?? machine);
     }
     for (const s of (usage.skills || [])) {
       const date = s.date ?? (s.timestamp ? new Date(s.timestamp).toISOString().slice(0, 10) : null);
-      insSkill.run(scope, s.name ?? '', s.count || 1, date);
+      insSkill.run(scope, s.name ?? '', s.count || 1, date, s.machine ?? machine);
     }
     for (const a of (usage.agents || [])) {
       const date = a.date ?? (a.timestamp ? new Date(a.timestamp).toISOString().slice(0, 10) : null);
-      insAgent.run(scope, a.name ?? '', a.count || 1, date);
+      insAgent.run(scope, a.name ?? '', a.count || 1, date, a.machine ?? machine);
     }
     for (const m of (usage.mcpCalls || [])) {
       const toolName = m.tool ?? m.name ?? '';
       const date = m.date ?? (m.timestamp ? new Date(m.timestamp).toISOString().slice(0, 10) : null);
-      insMcp.run(scope, toolName, m.count || 1, date);
+      insMcp.run(scope, toolName, m.count || 1, date, m.machine ?? machine);
     }
     for (const l of (usage.latencyEntries || [])) {
       const ts = Number(l.timestamp);
       if (!ts) continue;
-      insLatency.run(scope, l.sessionId ?? null, ts, l.latencyMs || l.latency_ms || 0, l.model ?? null);
+      insLatency.run(scope, l.sessionId ?? null, ts, l.latencyMs || l.latency_ms || 0, l.model ?? null, l.machine ?? machine);
     }
   });
   tx();
@@ -539,36 +699,38 @@ export function upsertUsage(db, scope, usage) {
  * Uses INSERT OR IGNORE for token_entries (dedup by unique key).
  * Uses ON CONFLICT DO UPDATE for skill/agent/mcp to accumulate counts.
  * Use this for incremental updates; use upsertUsage for full rebuilds.
+ * Rows are stamped with `machine` (per-entry `entry.machine` wins — used by
+ * the cross-machine import path).
  */
-export function appendUsage(db, scope, usage) {
+export function appendUsage(db, scope, usage, machine = getMachineId()) {
   if (!usage) return;
 
   const insTokens = db.prepare(`
     INSERT OR IGNORE INTO token_entries
       (scope, session_id, timestamp, model, input_tokens, output_tokens,
-       cache_read, cache_creation, raw_input, context, context_name)
+       cache_read, cache_creation, raw_input, context, context_name, machine)
     VALUES (@scope, @session_id, @timestamp, @model, @input_tokens, @output_tokens,
-            @cache_read, @cache_creation, @raw_input, @context, @context_name)
+            @cache_read, @cache_creation, @raw_input, @context, @context_name, @machine)
   `);
   const insPrompts = db.prepare(`
-    INSERT OR REPLACE INTO prompt_entries (scope, session_id, timestamp, char_len, preview)
-    VALUES (?, ?, ?, ?, ?)
+    INSERT OR REPLACE INTO prompt_entries (scope, session_id, timestamp, char_len, preview, machine)
+    VALUES (?, ?, ?, ?, ?, ?)
   `);
   const insSkill = db.prepare(`
-    INSERT INTO skill_usage (scope, name, count, date) VALUES (?, ?, ?, ?)
-    ON CONFLICT(scope, name, date) DO UPDATE SET count = count + excluded.count
+    INSERT INTO skill_usage (scope, name, count, date, machine) VALUES (?, ?, ?, ?, ?)
+    ON CONFLICT(scope, name, date, machine) DO UPDATE SET count = count + excluded.count
   `);
   const insAgent = db.prepare(`
-    INSERT INTO agent_usage (scope, name, count, date) VALUES (?, ?, ?, ?)
-    ON CONFLICT(scope, name, date) DO UPDATE SET count = count + excluded.count
+    INSERT INTO agent_usage (scope, name, count, date, machine) VALUES (?, ?, ?, ?, ?)
+    ON CONFLICT(scope, name, date, machine) DO UPDATE SET count = count + excluded.count
   `);
   const insMcp = db.prepare(`
-    INSERT INTO mcp_calls (scope, tool, count, date) VALUES (?, ?, ?, ?)
-    ON CONFLICT(scope, tool, date) DO UPDATE SET count = count + excluded.count
+    INSERT INTO mcp_calls (scope, tool, count, date, machine) VALUES (?, ?, ?, ?, ?)
+    ON CONFLICT(scope, tool, date, machine) DO UPDATE SET count = count + excluded.count
   `);
   const insLatency = db.prepare(`
-    INSERT OR IGNORE INTO latency_entries (scope, session_id, timestamp, latency_ms, model)
-    VALUES (?, ?, ?, ?, ?)
+    INSERT OR IGNORE INTO latency_entries (scope, session_id, timestamp, latency_ms, model, machine)
+    VALUES (?, ?, ?, ?, ?, ?)
   `);
 
   const tx = db.transaction(() => {
@@ -585,30 +747,31 @@ export function appendUsage(db, scope, usage) {
         raw_input: e.rawInput | 0,
         context: e.context != null ? String(e.context) : null,
         context_name: e.contextName ?? null,
+        machine: e.machine ?? machine,
       });
     }
     for (const p of (usage.promptStats || [])) {
       const ts = Number(p.timestamp);
       if (!ts) continue;
-      insPrompts.run(scope, p.sessionId ?? '', ts, p.charLen | 0, p.preview ?? null);
+      insPrompts.run(scope, p.sessionId ?? '', ts, p.charLen | 0, p.preview ?? null, p.machine ?? machine);
     }
     for (const s of (usage.skills || [])) {
       const date = s.date ?? (s.timestamp ? new Date(s.timestamp).toISOString().slice(0, 10) : null);
-      insSkill.run(scope, s.name ?? '', s.count || 1, date);
+      insSkill.run(scope, s.name ?? '', s.count || 1, date, s.machine ?? machine);
     }
     for (const a of (usage.agents || [])) {
       const date = a.date ?? (a.timestamp ? new Date(a.timestamp).toISOString().slice(0, 10) : null);
-      insAgent.run(scope, a.name ?? '', a.count || 1, date);
+      insAgent.run(scope, a.name ?? '', a.count || 1, date, a.machine ?? machine);
     }
     for (const m of (usage.mcpCalls || [])) {
       const toolName = m.tool ?? m.name ?? '';
       const date = m.date ?? (m.timestamp ? new Date(m.timestamp).toISOString().slice(0, 10) : null);
-      insMcp.run(scope, toolName, m.count || 1, date);
+      insMcp.run(scope, toolName, m.count || 1, date, m.machine ?? machine);
     }
     for (const l of (usage.latencyEntries || [])) {
       const ts = Number(l.timestamp);
       if (!ts) continue;
-      insLatency.run(scope, l.sessionId ?? null, ts, l.latencyMs || l.latency_ms || 0, l.model ?? null);
+      insLatency.run(scope, l.sessionId ?? null, ts, l.latencyMs || l.latency_ms || 0, l.model ?? null, l.machine ?? machine);
     }
   });
   tx();
@@ -626,7 +789,7 @@ export function queryUsage(db, scope, from, to) {
 
   const tokenRows = db.prepare(`
     SELECT session_id, timestamp, model, input_tokens, output_tokens,
-           cache_read, cache_creation, raw_input, context, context_name
+           cache_read, cache_creation, raw_input, context, context_name, machine
     FROM token_entries
     WHERE scope = ? AND timestamp BETWEEN ? AND ?
     ORDER BY timestamp
@@ -643,10 +806,11 @@ export function queryUsage(db, scope, from, to) {
     rawInput: r.raw_input,
     context: r.context,
     contextName: r.context_name,
+    machine: r.machine,
   }));
 
   const promptStats = db.prepare(`
-    SELECT session_id, timestamp, char_len, preview
+    SELECT session_id, timestamp, char_len, preview, machine
     FROM prompt_entries
     WHERE scope = ? AND timestamp BETWEEN ? AND ?
     ORDER BY timestamp
@@ -655,6 +819,7 @@ export function queryUsage(db, scope, from, to) {
     timestamp: r.timestamp,
     charLen: r.char_len,
     preview: r.preview,
+    machine: r.machine,
   }));
 
   // Convert epoch ms to YYYY-MM-DD, clamped to valid Date range.
@@ -688,7 +853,7 @@ export function queryUsage(db, scope, from, to) {
     .map(r => ({ name: r.tool, count: r.count, date: r.date, timestamp: toTs(r.date) }));
 
   const latencyEntries = db.prepare(`
-    SELECT session_id AS sessionId, timestamp, latency_ms AS latencyMs
+    SELECT session_id AS sessionId, timestamp, latency_ms AS latencyMs, machine
     FROM latency_entries
     WHERE scope = ? AND timestamp BETWEEN ? AND ?
     ORDER BY timestamp
@@ -805,4 +970,226 @@ export function recoverIfCorrupt(outputDir, mtimeIndexPath, threshold = 50) {
     }
     return { recovered: true, cachedCount, dbRows, missingMonths, removedEntries: removed, existingMonths };
   } catch { return { recovered: false, cachedCount: 0, dbRows: 0 }; }
+}
+
+// ── Cross-machine import / merge ───────────────────────────────────────────
+//
+// Workflow (the dashboard's SQLite files are per-machine; this merges them):
+//   1. On machine B, copy its monthly DB files
+//        <plugin>/output/db/YYYY/YYYY-MM.sqlite
+//      into any synced folder (iCloud Drive, git repo, USB, ...). Copy when no
+//      Claude session is actively writing so the WAL is checkpointed; the
+//      plain .sqlite files are enough (-wal/-shm need not be copied).
+//   2. On machine A:
+//        node scripts/db.mjs --import <synced folder> [--machine <id-for-v1-files>]
+//      The directory is scanned recursively, so both a flat copy and the full
+//      db/YYYY/ tree work.
+//   3. Rebuild / refresh the dashboard — the Tokens page shows a per-machine
+//      breakdown once more than one machine is present.
+//
+// Idempotent: rows are inserted with INSERT OR IGNORE on machine-inclusive
+// unique keys; count tables use max(count, excluded.count). Re-running the
+// import never duplicates rows or inflates counts.
+
+/** Recursively collect monthly DB files (YYYY-MM.sqlite) under dir. */
+function findMonthlyDbFiles(dir, depth = 0, results = []) {
+  if (depth > 4) return results; // sanity bound — db/YYYY/ is only 2 deep
+  let entries;
+  try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return results; }
+  for (const ent of entries) {
+    const p = path.join(dir, ent.name);
+    if (ent.isDirectory()) findMonthlyDbFiles(p, depth + 1, results);
+    else if (/^(\d{4})-(\d{2})\.sqlite$/.test(ent.name)) {
+      const m = ent.name.match(/^(\d{4})-(\d{2})\.sqlite$/);
+      results.push({ year: parseInt(m[1], 10), month: parseInt(m[2], 10), path: p });
+    }
+  }
+  return results;
+}
+
+/**
+ * Merge another machine's monthly DB files into the local monthly DBs.
+ *
+ * Source files are opened read-only and are NEVER migrated (a v1 source from
+ * an old install must not be stamped with the local machine id). Rows lacking
+ * a machine value (v1 schema or empty string) are stamped with
+ * `fallbackMachine` instead.
+ *
+ * @param {string} srcDir     directory containing copied YYYY-MM.sqlite files
+ * @param {string} outputDir  local output dir (the one holding db/YYYY/...)
+ * @param {{ fallbackMachine?: string, log?: (msg: string) => void }} [opts]
+ * @returns {{ files: number, inserted: Record<string, number> }}
+ */
+export function importUsageDir(srcDir, outputDir, opts = {}) {
+  const { fallbackMachine = 'unknown', log = () => {} } = opts;
+  const Database = require('better-sqlite3');
+
+  const files = findMonthlyDbFiles(srcDir);
+  const inserted = {
+    tokenEntries: 0, promptEntries: 0, skills: 0, agents: 0, mcpCalls: 0, latencyEntries: 0,
+  };
+
+  for (const { year, month, path: srcPath } of files) {
+    const src = new Database(srcPath, { readonly: true, fileMustExist: true });
+    let dest;
+    try {
+      const hasTable = (name) =>
+        !!src.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name=?").get(name);
+      const hasMachineCol = (table) =>
+        src.prepare(`PRAGMA table_info(${table})`).all().some(c => c.name === 'machine');
+      const rowMachine = (r, withMachine) =>
+        (withMachine && r.machine) ? r.machine : fallbackMachine;
+
+      dest = openDb(getMonthlyDbPath(outputDir, year, month)); // migrates local DB to v2 if needed
+
+      const insTokens = dest.prepare(`
+        INSERT OR IGNORE INTO token_entries
+          (scope, session_id, timestamp, model, input_tokens, output_tokens,
+           cache_read, cache_creation, raw_input, context, context_name, machine)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `);
+      const insPrompts = dest.prepare(`
+        INSERT OR IGNORE INTO prompt_entries (scope, session_id, timestamp, char_len, preview, machine)
+        VALUES (?, ?, ?, ?, ?, ?)
+      `);
+      // Counts are running totals per (scope, name, date, machine) — the source
+      // may have grown since the last import, so raise to the source value when
+      // larger. Both steps are idempotent and monotonic; re-import never
+      // inflates counts. Insert/update are split so `inserted` only reports
+      // genuinely new rows.
+      const insSkill = dest.prepare(`
+        INSERT OR IGNORE INTO skill_usage (scope, name, count, date, machine) VALUES (?, ?, ?, ?, ?)
+      `);
+      const updSkill = dest.prepare(`
+        UPDATE skill_usage SET count = ?
+        WHERE scope = ? AND name = ? AND date IS ? AND machine = ? AND count < ?
+      `);
+      const insAgent = dest.prepare(`
+        INSERT OR IGNORE INTO agent_usage (scope, name, count, date, machine) VALUES (?, ?, ?, ?, ?)
+      `);
+      const updAgent = dest.prepare(`
+        UPDATE agent_usage SET count = ?
+        WHERE scope = ? AND name = ? AND date IS ? AND machine = ? AND count < ?
+      `);
+      const insMcp = dest.prepare(`
+        INSERT OR IGNORE INTO mcp_calls (scope, tool, count, date, machine) VALUES (?, ?, ?, ?, ?)
+      `);
+      const updMcp = dest.prepare(`
+        UPDATE mcp_calls SET count = ?
+        WHERE scope = ? AND tool = ? AND date IS ? AND machine = ? AND count < ?
+      `);
+      const insLatency = dest.prepare(`
+        INSERT OR IGNORE INTO latency_entries (scope, session_id, timestamp, latency_ms, model, machine)
+        VALUES (?, ?, ?, ?, ?, ?)
+      `);
+
+      dest.transaction(() => {
+        if (hasTable('token_entries')) {
+          const wm = hasMachineCol('token_entries');
+          for (const r of src.prepare('SELECT * FROM token_entries').iterate()) {
+            const info = insTokens.run(
+              r.scope, r.session_id, r.timestamp, r.model, r.input_tokens, r.output_tokens,
+              r.cache_read, r.cache_creation, r.raw_input, r.context, r.context_name,
+              rowMachine(r, wm)
+            );
+            inserted.tokenEntries += info.changes;
+          }
+        }
+        if (hasTable('prompt_entries')) {
+          const wm = hasMachineCol('prompt_entries');
+          for (const r of src.prepare('SELECT * FROM prompt_entries').iterate()) {
+            const info = insPrompts.run(
+              r.scope, r.session_id ?? '', r.timestamp, r.char_len, r.preview, rowMachine(r, wm)
+            );
+            inserted.promptEntries += info.changes;
+          }
+        }
+        if (hasTable('skill_usage')) {
+          const wm = hasMachineCol('skill_usage');
+          for (const r of src.prepare('SELECT * FROM skill_usage').iterate()) {
+            const m = rowMachine(r, wm);
+            const ins = insSkill.run(r.scope, r.name, r.count, r.date, m).changes;
+            inserted.skills += ins;
+            if (!ins) updSkill.run(r.count, r.scope, r.name, r.date, m, r.count);
+          }
+        }
+        if (hasTable('agent_usage')) {
+          const wm = hasMachineCol('agent_usage');
+          for (const r of src.prepare('SELECT * FROM agent_usage').iterate()) {
+            const m = rowMachine(r, wm);
+            const ins = insAgent.run(r.scope, r.name, r.count, r.date, m).changes;
+            inserted.agents += ins;
+            if (!ins) updAgent.run(r.count, r.scope, r.name, r.date, m, r.count);
+          }
+        }
+        if (hasTable('mcp_calls')) {
+          const wm = hasMachineCol('mcp_calls');
+          for (const r of src.prepare('SELECT * FROM mcp_calls').iterate()) {
+            const m = rowMachine(r, wm);
+            const ins = insMcp.run(r.scope, r.tool, r.count, r.date, m).changes;
+            inserted.mcpCalls += ins;
+            if (!ins) updMcp.run(r.count, r.scope, r.tool, r.date, m, r.count);
+          }
+        }
+        if (hasTable('latency_entries')) {
+          const wm = hasMachineCol('latency_entries');
+          for (const r of src.prepare('SELECT * FROM latency_entries').iterate()) {
+            const info = insLatency.run(
+              r.scope, r.session_id, r.timestamp, r.latency_ms, r.model, rowMachine(r, wm)
+            );
+            inserted.latencyEntries += info.changes;
+          }
+        }
+      })();
+
+      log(`  ${toMonthKey(year, month)}.sqlite — merged`);
+    } finally {
+      try { src.close(); } catch { /* ignore */ }
+      try { dest?.close(); } catch { /* ignore */ }
+    }
+  }
+
+  return { files: files.length, inserted };
+}
+
+// ── CLI: node scripts/db.mjs --import <dir> [--machine <id>] [--output <dir>] ─
+
+const __dbCliFile = fileURLToPath(import.meta.url);
+if (process.argv[1] && __dbCliFile === path.resolve(process.argv[1])) {
+  const args = process.argv.slice(2);
+  const flagValue = (name) => {
+    const i = args.indexOf(name);
+    return i >= 0 && i + 1 < args.length ? args[i + 1] : null;
+  };
+
+  if (args.includes('--import')) {
+    const srcDir = flagValue('--import');
+    if (!srcDir || !fs.existsSync(srcDir)) {
+      console.error('oh-my-hi: --import requires an existing directory of copied YYYY-MM.sqlite files');
+      process.exit(1);
+    }
+    const outputDir = flagValue('--output')
+      || process.env.OMH_OUTPUT_DIR
+      || path.resolve(path.dirname(__dbCliFile), '..', 'output');
+    const fallbackMachine = flagValue('--machine') || 'unknown';
+
+    console.log(`oh-my-hi: importing usage DBs from ${srcDir}`);
+    console.log(`  → local output: ${outputDir} (this machine: ${getMachineId()})`);
+    const result = importUsageDir(path.resolve(srcDir), outputDir, {
+      fallbackMachine,
+      log: (msg) => console.log(msg),
+    });
+    if (result.files === 0) {
+      console.log('  no YYYY-MM.sqlite files found — nothing to import');
+    } else {
+      const s = result.inserted;
+      console.log(`  ✅ ${result.files} file(s) merged — new rows: `
+        + `tokens ${s.tokenEntries}, prompts ${s.promptEntries}, skills ${s.skills}, `
+        + `agents ${s.agents}, mcp ${s.mcpCalls}, latency ${s.latencyEntries}`);
+      console.log('  (re-running the same import is safe — it is idempotent)');
+    }
+  } else {
+    console.log('Usage: node scripts/db.mjs --import <dir> [--machine <fallback-id>] [--output <outputDir>]');
+    console.log('  Merges another machine\'s monthly usage DBs (YYYY-MM.sqlite) into the local DBs.');
+  }
 }

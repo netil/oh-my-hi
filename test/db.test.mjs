@@ -4,10 +4,12 @@ import assert from 'node:assert/strict';
 import os from 'os';
 import path from 'path';
 import fs from 'fs';
+import { createRequire } from 'module';
 
 import {
   openDb,
   getSchemaVersion,
+  getMachineId,
   appendUsage,
   upsertUsage,
   queryUsage,
@@ -18,7 +20,10 @@ import {
   splitLegacyDb,
   countDbRows,
   recoverIfCorrupt,
+  importUsageDir,
 } from '../scripts/db.mjs';
+
+const require = createRequire(import.meta.url);
 
 function freshDb() {
   return openDb(':memory:');
@@ -35,9 +40,18 @@ function cleanDir(dir) {
 // ── Schema ──────────────────────────────────────────────────────────────────
 
 describe('Schema', () => {
-  it('openDb creates a v1 schema (fresh install)', () => {
+  it('openDb creates a v2 schema (fresh install)', () => {
     const db = freshDb();
-    assert.equal(getSchemaVersion(db), 1);
+    assert.equal(getSchemaVersion(db), 2);
+    db.close();
+  });
+
+  it('all usage-bearing tables have a machine column', () => {
+    const db = freshDb();
+    for (const table of ['token_entries', 'prompt_entries', 'skill_usage', 'agent_usage', 'mcp_calls', 'latency_entries']) {
+      const cols = db.prepare(`PRAGMA table_info(${table})`).all().map(r => r.name);
+      assert.ok(cols.includes('machine'), `${table} has machine column`);
+    }
     db.close();
   });
 
@@ -793,5 +807,278 @@ describe('listMonthlyDbs — orphaned WAL/SHM cleanup', () => {
       assert.ok(fs.existsSync(walPath), 'WAL belonging to existing .sqlite must be preserved');
       assert.ok(fs.existsSync(shmPath), 'SHM belonging to existing .sqlite must be preserved');
     } finally { cleanDir(out); }
+  });
+});
+
+// ── v1 → v2 migration (machine column) ───────────────────────────────────────
+
+/**
+ * Create a raw v1-schema DB (the exact pre-machine-column schema) at dbPath,
+ * bypassing openDb so no migration runs. Returns the open Database handle.
+ */
+function createV1Db(dbPath) {
+  const Database = require('better-sqlite3');
+  fs.mkdirSync(path.dirname(dbPath), { recursive: true });
+  const db = new Database(dbPath);
+  db.exec(`
+    CREATE TABLE token_entries (
+      scope TEXT NOT NULL, session_id TEXT, timestamp INTEGER NOT NULL, model TEXT,
+      input_tokens INTEGER DEFAULT 0, output_tokens INTEGER DEFAULT 0,
+      cache_read INTEGER DEFAULT 0, cache_creation INTEGER DEFAULT 0,
+      raw_input INTEGER DEFAULT 0, context TEXT, context_name TEXT
+    );
+    CREATE INDEX idx_te_scope_ts ON token_entries(scope, timestamp);
+    CREATE UNIQUE INDEX idx_te_unique
+      ON token_entries(scope, timestamp, model, input_tokens, output_tokens);
+    CREATE TABLE prompt_entries (
+      scope TEXT NOT NULL, session_id TEXT NOT NULL DEFAULT '', timestamp INTEGER NOT NULL,
+      char_len INTEGER DEFAULT 0, preview TEXT,
+      UNIQUE(scope, session_id, timestamp)
+    );
+    CREATE INDEX idx_pe_scope_ts ON prompt_entries(scope, timestamp);
+    CREATE TABLE prompt_stats (
+      scope TEXT NOT NULL, date TEXT NOT NULL, message_count INTEGER DEFAULT 0,
+      session_count INTEGER DEFAULT 0, tool_call_count INTEGER DEFAULT 0,
+      PRIMARY KEY (scope, date)
+    );
+    CREATE TABLE skill_usage (
+      scope TEXT NOT NULL, name TEXT NOT NULL, count INTEGER DEFAULT 0, date TEXT,
+      UNIQUE(scope, name, date)
+    );
+    CREATE TABLE agent_usage (
+      scope TEXT NOT NULL, name TEXT NOT NULL, count INTEGER DEFAULT 0, date TEXT,
+      UNIQUE(scope, name, date)
+    );
+    CREATE TABLE mcp_calls (
+      scope TEXT NOT NULL, tool TEXT NOT NULL, count INTEGER DEFAULT 0, date TEXT,
+      UNIQUE(scope, tool, date)
+    );
+    CREATE TABLE latency_entries (
+      scope TEXT NOT NULL, session_id TEXT, timestamp INTEGER NOT NULL,
+      latency_ms INTEGER NOT NULL, model TEXT,
+      UNIQUE(scope, timestamp, session_id)
+    );
+    CREATE INDEX idx_le_scope_ts ON latency_entries(scope, timestamp);
+  `);
+  db.pragma('user_version = 1');
+  return db;
+}
+
+describe('v1 → v2 migration — machine column', () => {
+  it('migrates a v1 DB: adds machine column, stamps existing rows, preserves data', () => {
+    const out = tempDir();
+    const dbPath = path.join(out, 'v1.sqlite');
+    try {
+      const v1 = createV1Db(dbPath);
+      v1.prepare(`INSERT INTO token_entries (scope, session_id, timestamp, model, input_tokens, output_tokens)
+                  VALUES ('global', 's1', 1000, 'claude-3', 100, 50)`).run();
+      v1.prepare(`INSERT INTO prompt_entries (scope, session_id, timestamp, char_len, preview)
+                  VALUES ('global', 's1', 1000, 10, 'hi')`).run();
+      v1.prepare(`INSERT INTO skill_usage (scope, name, count, date) VALUES ('global', 'sk', 3, '2026-01-01')`).run();
+      v1.prepare(`INSERT INTO agent_usage (scope, name, count, date) VALUES ('global', 'ag', 2, '2026-01-01')`).run();
+      v1.prepare(`INSERT INTO mcp_calls (scope, tool, count, date) VALUES ('global', 'mc', 1, '2026-01-01')`).run();
+      v1.prepare(`INSERT INTO latency_entries (scope, session_id, timestamp, latency_ms) VALUES ('global', 's1', 1000, 200)`).run();
+      v1.close();
+
+      const db = openDb(dbPath); // triggers migration
+      assert.equal(getSchemaVersion(db), 2, 'user_version bumped to 2');
+      const me = getMachineId();
+      for (const table of ['token_entries', 'prompt_entries', 'skill_usage', 'agent_usage', 'mcp_calls', 'latency_entries']) {
+        const rows = db.prepare(`SELECT * FROM ${table}`).all();
+        assert.equal(rows.length, 1, `${table} row count preserved`);
+        assert.equal(rows[0].machine, me, `${table} rows stamped with current machine`);
+      }
+      // Original values preserved
+      const te = db.prepare('SELECT * FROM token_entries').get();
+      assert.equal(te.input_tokens, 100);
+      assert.equal(db.prepare('SELECT count FROM skill_usage').get().count, 3);
+      db.close();
+    } finally { cleanDir(out); }
+  });
+
+  it('migrated unique keys include machine — same entry from two machines does not collide', () => {
+    const out = tempDir();
+    const dbPath = path.join(out, 'v1.sqlite');
+    try {
+      createV1Db(dbPath).close();
+      const db = openDb(dbPath);
+      const entry = { sessionId: 's', timestamp: 5000, model: 'm', inputTokens: 1, outputTokens: 1 };
+      appendUsage(db, 'global', { tokenEntries: [entry] }, 'machine-a');
+      appendUsage(db, 'global', { tokenEntries: [entry] }, 'machine-b');
+      appendUsage(db, 'global', { tokenEntries: [entry] }, 'machine-b'); // dup within machine → ignored
+      assert.equal(db.prepare('SELECT COUNT(*) AS c FROM token_entries').get().c, 2);
+
+      const lat = { sessionId: 's', timestamp: 5000, latencyMs: 10 };
+      appendUsage(db, 'global', { latencyEntries: [lat] }, 'machine-a');
+      appendUsage(db, 'global', { latencyEntries: [lat] }, 'machine-b');
+      assert.equal(db.prepare('SELECT COUNT(*) AS c FROM latency_entries').get().c, 2);
+
+      const sk = { name: 'sk', count: 1, date: '2026-01-01' };
+      appendUsage(db, 'global', { skills: [sk] }, 'machine-a');
+      appendUsage(db, 'global', { skills: [sk] }, 'machine-b');
+      const rows = db.prepare('SELECT machine, count FROM skill_usage ORDER BY machine').all();
+      assert.equal(rows.length, 2, 'per-machine skill rows');
+      db.close();
+    } finally { cleanDir(out); }
+  });
+
+  it('migration is idempotent across reopen (already-v2 DB is untouched)', () => {
+    const out = tempDir();
+    const dbPath = path.join(out, 'v1.sqlite');
+    try {
+      createV1Db(dbPath).close();
+      openDb(dbPath).close();
+      const db = openDb(dbPath); // second open must not re-migrate / throw
+      assert.equal(getSchemaVersion(db), 2);
+      db.close();
+    } finally { cleanDir(out); }
+  });
+
+  it('queryUsage exposes machine on tokenEntries/promptStats/latencyEntries', () => {
+    const db = freshDb();
+    appendUsage(db, 'global', {
+      tokenEntries: [{ sessionId: 's', timestamp: 1000, model: 'm', inputTokens: 1, outputTokens: 1 }],
+      promptStats: [{ sessionId: 's', timestamp: 1000, charLen: 5, preview: 'p' }],
+      latencyEntries: [{ sessionId: 's', timestamp: 1000, latencyMs: 10 }],
+    }, 'machine-x');
+    const r = queryUsage(db, 'global', 0, 9999);
+    assert.equal(r.tokenEntries[0].machine, 'machine-x');
+    assert.equal(r.promptStats[0].machine, 'machine-x');
+    assert.equal(r.latencyEntries[0].machine, 'machine-x');
+    db.close();
+  });
+
+  it('upsertUsage only replaces rows of the given machine (imported rows survive)', () => {
+    const db = freshDb();
+    appendUsage(db, 'global', {
+      tokenEntries: [{ sessionId: 'b', timestamp: 1000, model: 'm', inputTokens: 1, outputTokens: 1 }],
+    }, 'machine-b');
+    upsertUsage(db, 'global', {
+      tokenEntries: [{ sessionId: 'a', timestamp: 2000, model: 'm', inputTokens: 2, outputTokens: 2 }],
+    }, 'machine-a');
+    const rows = db.prepare('SELECT machine FROM token_entries ORDER BY machine').all();
+    assert.deepEqual(rows.map(r => r.machine), ['machine-a', 'machine-b'], 'machine-b rows preserved');
+    db.close();
+  });
+});
+
+// ── importUsageDir — cross-machine merge ─────────────────────────────────────
+
+describe('importUsageDir — cross-machine merge', () => {
+  const ts = Date.UTC(2026, 0, 15); // 2026-01
+
+  function buildSourceOutput(machine) {
+    const srcOut = tempDir();
+    appendUsageMonthly(srcOut, 'global', {
+      tokenEntries: [
+        { sessionId: 's1', timestamp: ts, model: 'claude-3', inputTokens: 10, outputTokens: 5, machine },
+        { sessionId: 's1', timestamp: ts + 1, model: 'claude-3', inputTokens: 20, outputTokens: 8, machine },
+      ],
+      promptStats: [{ sessionId: 's1', timestamp: ts, charLen: 9, preview: 'hello', machine }],
+      skills: [{ name: 'sk', count: 4, date: '2026-01-15', machine }],
+      agents: [{ name: 'ag', count: 2, date: '2026-01-15', machine }],
+      mcpCalls: [{ tool: 'mc', count: 7, date: '2026-01-15', machine }],
+      latencyEntries: [{ sessionId: 's1', timestamp: ts, latencyMs: 120, machine }],
+    });
+    return srcOut;
+  }
+
+  it('merges another machine\'s rows into local monthly DBs', () => {
+    const srcOut = buildSourceOutput('machine-b');
+    const destOut = tempDir();
+    try {
+      // local data already present (current machine)
+      appendUsageMonthly(destOut, 'global', {
+        tokenEntries: [{ sessionId: 'local', timestamp: ts + 100, model: 'claude-3', inputTokens: 1, outputTokens: 1 }],
+      });
+
+      const r = importUsageDir(path.join(srcOut, 'db'), destOut);
+      assert.equal(r.files, 1);
+      assert.equal(r.inserted.tokenEntries, 2);
+
+      const db = openDb(getMonthlyDbPath(destOut, 2026, 1));
+      assert.equal(db.prepare('SELECT COUNT(*) AS c FROM token_entries').get().c, 3, 'local + imported coexist');
+      assert.equal(db.prepare("SELECT COUNT(*) AS c FROM token_entries WHERE machine = 'machine-b'").get().c, 2);
+      assert.equal(db.prepare('SELECT count FROM skill_usage WHERE machine = ?').get('machine-b').count, 4);
+      db.close();
+    } finally { cleanDir(srcOut); cleanDir(destOut); }
+  });
+
+  it('is idempotent — re-running does not duplicate rows or inflate counts', () => {
+    const srcOut = buildSourceOutput('machine-b');
+    const destOut = tempDir();
+    try {
+      importUsageDir(path.join(srcOut, 'db'), destOut);
+      const snapshot = (db) => ({
+        tokens: db.prepare('SELECT COUNT(*) AS c FROM token_entries').get().c,
+        prompts: db.prepare('SELECT COUNT(*) AS c FROM prompt_entries').get().c,
+        latency: db.prepare('SELECT COUNT(*) AS c FROM latency_entries').get().c,
+        skillCount: db.prepare('SELECT count FROM skill_usage').get().count,
+        agentCount: db.prepare('SELECT count FROM agent_usage').get().count,
+        mcpCount: db.prepare('SELECT count FROM mcp_calls').get().count,
+      });
+      let db = openDb(getMonthlyDbPath(destOut, 2026, 1));
+      const before = snapshot(db);
+      db.close();
+
+      const r2 = importUsageDir(path.join(srcOut, 'db'), destOut); // re-run
+      assert.equal(r2.inserted.tokenEntries, 0, 'no new token rows on re-import');
+
+      db = openDb(getMonthlyDbPath(destOut, 2026, 1));
+      assert.deepEqual(snapshot(db), before, 're-import changes nothing');
+      assert.equal(before.skillCount, 4, 'skill count not inflated');
+      db.close();
+    } finally { cleanDir(srcOut); cleanDir(destOut); }
+  });
+
+  it('picks up grown counts from the source without inflating (max merge)', () => {
+    const srcOut = buildSourceOutput('machine-b');
+    const destOut = tempDir();
+    try {
+      importUsageDir(path.join(srcOut, 'db'), destOut);
+      // source machine keeps working: count grows 4 → 9
+      appendUsageMonthly(srcOut, 'global', {
+        skills: [{ name: 'sk', count: 5, date: '2026-01-15', machine: 'machine-b' }],
+      });
+      importUsageDir(path.join(srcOut, 'db'), destOut);
+      const db = openDb(getMonthlyDbPath(destOut, 2026, 1));
+      assert.equal(db.prepare('SELECT count FROM skill_usage WHERE machine = ?').get('machine-b').count, 9);
+      db.close();
+    } finally { cleanDir(srcOut); cleanDir(destOut); }
+  });
+
+  it('imports v1 source files (no machine column) using fallbackMachine, without migrating the source', () => {
+    const srcOut = tempDir();
+    const destOut = tempDir();
+    try {
+      const srcDbPath = path.join(srcOut, 'db', '2026', '2026-01.sqlite');
+      const v1 = createV1Db(srcDbPath);
+      v1.prepare(`INSERT INTO token_entries (scope, session_id, timestamp, model, input_tokens, output_tokens)
+                  VALUES ('global', 's1', ?, 'claude-3', 11, 7)`).run(ts);
+      v1.close();
+
+      importUsageDir(path.join(srcOut, 'db'), destOut, { fallbackMachine: 'old-laptop' });
+
+      const db = openDb(getMonthlyDbPath(destOut, 2026, 1));
+      const row = db.prepare('SELECT * FROM token_entries').get();
+      assert.equal(row.machine, 'old-laptop');
+      assert.equal(row.input_tokens, 11);
+      db.close();
+
+      // source must remain v1 (read-only open, never migrated)
+      const Database = require('better-sqlite3');
+      const src = new Database(srcDbPath, { readonly: true });
+      assert.equal(src.pragma('user_version', { simple: true }), 1, 'source DB untouched');
+      src.close();
+    } finally { cleanDir(srcOut); cleanDir(destOut); }
+  });
+
+  it('returns files: 0 for a directory without monthly DB files', () => {
+    const srcOut = tempDir();
+    const destOut = tempDir();
+    try {
+      const r = importUsageDir(srcOut, destOut);
+      assert.equal(r.files, 0);
+    } finally { cleanDir(srcOut); cleanDir(destOut); }
   });
 });
