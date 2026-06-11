@@ -2929,6 +2929,66 @@ body.dark .health-factor-tooltip {
   border-color: var(--accent);
 }
 
+/* ── Session full-text search ── */
+.session-search-card {
+  padding: 12px 16px;
+  margin-top: 12px;
+}
+.session-search-input {
+  width: 100%;
+  padding: 8px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg);
+  font-size: 13px;
+  color: var(--text);
+  outline: none;
+  transition: border-color var(--transition);
+}
+.session-search-input:focus {
+  border-color: var(--accent);
+}
+.session-search-results:not(:empty) {
+  margin-top: 8px;
+}
+.session-search-result {
+  display: block;
+  padding: 8px 10px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  text-decoration: none;
+  color: var(--text);
+}
+.session-search-result:hover {
+  background: var(--bg);
+}
+.session-search-result-meta {
+  display: flex;
+  gap: 10px;
+  font-size: 11px;
+  color: var(--text-secondary);
+  margin-bottom: 2px;
+}
+.session-search-result-scope {
+  font-weight: 600;
+}
+.session-search-result-snippet {
+  font-size: 12px;
+  line-height: 1.5;
+  word-break: break-word;
+}
+.session-search-result-snippet mark {
+  background: color-mix(in srgb, var(--accent) 22%, transparent);
+  color: inherit;
+  border-radius: 2px;
+  padding: 0 1px;
+}
+.session-search-empty {
+  padding: 8px 10px;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
 /* ── Session Compare ── */
 .compare-container {
   display: flex;

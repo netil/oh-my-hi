@@ -6,6 +6,7 @@
 // the SQLite snapshot written by generate-dashboard.mjs:
 //   GET /api/meta         — data.json with usage arrays stripped + segment index
 //   GET /api/usage?...    — queried usage payload from SQLite
+//   GET /api/search?q=... — FTS5 full-text search over user prompts
 
 import http from 'http';
 import fs from 'fs';
@@ -168,6 +169,24 @@ function handleUsage(req, res, url) {
   }
 }
 
+/**
+ * GET /api/search?q=...&limit=N — full-text search over user prompts (FTS5).
+ * Returns sessions grouped best-match-first; snippet highlights use the
+ * \u0001/\u0002 sentinels the frontend converts to <mark> after HTML-escaping.
+ */
+function handleSearch(req, res, url) {
+  if (!dbModule) return sendJson(res, 503, { error: 'search_unavailable' });
+  const q = url.searchParams.get('q') || '';
+  const limitRaw = parseInt(url.searchParams.get('limit') || '', 10);
+  const limit = Number.isFinite(limitRaw) ? Math.min(Math.max(limitRaw, 1), 100) : 20;
+  try {
+    const results = dbModule.searchPrompts(OUTPUT_DIR, q, { limit });
+    sendJson(res, 200, { query: q, results });
+  } catch (e) {
+    sendJson(res, 500, { error: 'search_failed', detail: e.message });
+  }
+}
+
 function serveStatic(req, res, pathname) {
   const rel = pathname === '/' ? '/index.html' : pathname;
   const filePath = path.normalize(path.join(OUTPUT_DIR, decodeURIComponent(rel)));
@@ -221,6 +240,7 @@ function requestHandler(req, res) {
   const pathname = url.pathname;
   if (pathname === '/api/meta') return handleMeta(req, res);
   if (pathname === '/api/usage') return handleUsage(req, res, url);
+  if (pathname === '/api/search') return handleSearch(req, res, url);
   if (pathname === '/open') return handleOpen(req, res);
   serveStatic(req, res, pathname);
 }

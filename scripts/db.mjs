@@ -80,8 +80,31 @@ function migrate(db) {
       `);
     })();
   }
+  // Full-text search over user prompt texts (FTS5 virtual table).
+  // Created lazily for both fresh and pre-existing DBs. Wrapped in try/catch:
+  // if this SQLite build lacks FTS5, search is silently unavailable —
+  // writers/readers check table existence via hasFtsTable().
+  if (!hasFtsTable(db)) {
+    try {
+      db.exec(`
+        CREATE VIRTUAL TABLE prompt_fts USING fts5(
+          text,
+          scope      UNINDEXED,
+          session_id UNINDEXED,
+          timestamp  UNINDEXED
+        );
+      `);
+    } catch { /* FTS5 not compiled in — search disabled */ }
+  }
   // Future incremental migrations go here:
   // if (v < 2) migrateToV2(db);
+}
+
+/** True when the prompt_fts virtual table exists (FTS5 available). */
+function hasFtsTable(db) {
+  try {
+    return !!db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='prompt_fts'").get();
+  } catch { return false; }
 }
 
 /**
@@ -449,6 +472,86 @@ export function queryDateRangeAllMonths(outputDir) {
   return earliest === Infinity ? null : { earliest, latest };
 }
 
+// ── Full-text search (prompt_fts) ──────────────────────────────────────────
+
+// Snippet highlight sentinels — control chars that cannot appear in HTML-escaped
+// output. The frontend escapes the snippet, then converts these to <mark> tags.
+export const SEARCH_MARK_START = '\u0001';
+export const SEARCH_MARK_END = '\u0002';
+
+/**
+ * Convert raw user input into a safe FTS5 MATCH expression.
+ * Each whitespace-separated term becomes a quoted prefix phrase ("term"*),
+ * with embedded double quotes doubled — so FTS5 operators (AND, OR, NEAR,
+ * parens, quotes, *, ^) in user input are treated as literal text and can
+ * never produce a syntax error.
+ * Returns null when the input contains no searchable terms.
+ */
+export function escapeFtsMatch(query) {
+  const terms = String(query ?? '').trim().split(/\s+/).filter(Boolean).slice(0, 8);
+  if (terms.length === 0) return null;
+  return terms.map(t => `"${t.replace(/"/g, '""')}"*`).join(' ');
+}
+
+/**
+ * Search user prompt texts across all monthly DBs.
+ * Results are grouped per session: each session keeps its best-ranked
+ * (lowest bm25) snippet plus a match count, sorted best-first.
+ *
+ * @param {string} outputDir
+ * @param {string} query raw user input (sanitized internally)
+ * @param {{ limit?: number }} [opts]
+ * @returns {Array<{ sessionId: string, scope: string, timestamp: number, snippet: string, rank: number, matches: number }>}
+ */
+export function searchPrompts(outputDir, query, { limit = 20 } = {}) {
+  const match = escapeFtsMatch(query);
+  if (!match) return [];
+
+  const bySession = new Map();
+  for (const { path: p } of listMonthlyDbs(outputDir)) {
+    let db;
+    try {
+      db = openDb(p);
+      const rows = searchPromptsInDb(db, match, limit);
+      for (const r of rows) {
+        if (!r.sessionId) continue; // unattributable rows are not linkable
+        const cur = bySession.get(r.sessionId);
+        if (!cur) {
+          bySession.set(r.sessionId, { ...r, matches: 1 });
+        } else {
+          cur.matches += 1;
+          if (r.rank < cur.rank) {
+            cur.rank = r.rank;
+            cur.snippet = r.snippet;
+            cur.timestamp = r.timestamp;
+            cur.scope = r.scope;
+          }
+        }
+      }
+    } catch { /* skip unreadable DB */ } finally {
+      try { db?.close(); } catch { /* ignore */ }
+    }
+  }
+  return [...bySession.values()].sort((a, b) => a.rank - b.rank).slice(0, limit);
+}
+
+/**
+ * Run an already-escaped MATCH expression against one DB's prompt_fts.
+ * bm25() is negative — lower (more negative) means a better match.
+ */
+export function searchPromptsInDb(db, match, limit = 20) {
+  if (!hasFtsTable(db)) return [];
+  return db.prepare(`
+    SELECT scope, session_id AS sessionId, timestamp,
+           snippet(prompt_fts, 0, ?, ?, '…', 16) AS snippet,
+           bm25(prompt_fts) AS rank
+    FROM prompt_fts
+    WHERE prompt_fts MATCH ?
+    ORDER BY rank
+    LIMIT ?
+  `).all(SEARCH_MARK_START, SEARCH_MARK_END, match, limit);
+}
+
 // ── Scope-level write operations ───────────────────────────────────────────
 
 /**
@@ -458,8 +561,10 @@ export function queryDateRangeAllMonths(outputDir) {
 export function upsertUsage(db, scope, usage) {
   if (!usage) return;
 
+  const ftsOk = hasFtsTable(db);
   const delTokens = db.prepare('DELETE FROM token_entries WHERE scope = ?');
   const delPrompts = db.prepare('DELETE FROM prompt_entries WHERE scope = ?');
+  const delFts = ftsOk ? db.prepare('DELETE FROM prompt_fts WHERE scope = ?') : null;
   const delLatency = db.prepare('DELETE FROM latency_entries WHERE scope = ?');
   const delSkills = db.prepare('DELETE FROM skill_usage WHERE scope = ?');
   const delAgents = db.prepare('DELETE FROM agent_usage WHERE scope = ?');
@@ -476,6 +581,9 @@ export function upsertUsage(db, scope, usage) {
     INSERT OR REPLACE INTO prompt_entries (scope, session_id, timestamp, char_len, preview)
     VALUES (?, ?, ?, ?, ?)
   `);
+  const insFts = ftsOk ? db.prepare(`
+    INSERT INTO prompt_fts (text, scope, session_id, timestamp) VALUES (?, ?, ?, ?)
+  `) : null;
   const insSkill = db.prepare('INSERT INTO skill_usage (scope, name, count, date) VALUES (?, ?, ?, ?)');
   const insAgent = db.prepare('INSERT INTO agent_usage (scope, name, count, date) VALUES (?, ?, ?, ?)');
   const insMcp = db.prepare('INSERT INTO mcp_calls (scope, tool, count, date) VALUES (?, ?, ?, ?)');
@@ -487,6 +595,7 @@ export function upsertUsage(db, scope, usage) {
   const tx = db.transaction(() => {
     delTokens.run(scope);
     delPrompts.run(scope);
+    delFts?.run(scope);
     delLatency.run(scope);
     delSkills.run(scope);
     delAgents.run(scope);
@@ -511,6 +620,7 @@ export function upsertUsage(db, scope, usage) {
       const ts = Number(p.timestamp);
       if (!ts) continue;
       insPrompts.run(scope, p.sessionId ?? '', ts, p.charLen | 0, p.preview ?? null);
+      if (insFts && p.text) insFts.run(String(p.text), scope, p.sessionId ?? '', ts);
     }
     for (const s of (usage.skills || [])) {
       const date = s.date ?? (s.timestamp ? new Date(s.timestamp).toISOString().slice(0, 10) : null);
@@ -554,6 +664,11 @@ export function appendUsage(db, scope, usage) {
     INSERT OR REPLACE INTO prompt_entries (scope, session_id, timestamp, char_len, preview)
     VALUES (?, ?, ?, ?, ?)
   `);
+  // FTS5 has no UNIQUE constraints — delete-then-insert keyed like prompt_entries'
+  // UNIQUE(scope, session_id, timestamp) gives the same INSERT OR REPLACE idempotency.
+  const ftsOk = hasFtsTable(db);
+  const delFts = ftsOk ? db.prepare('DELETE FROM prompt_fts WHERE scope = ? AND session_id = ? AND timestamp = ?') : null;
+  const insFts = ftsOk ? db.prepare('INSERT INTO prompt_fts (text, scope, session_id, timestamp) VALUES (?, ?, ?, ?)') : null;
   const insSkill = db.prepare(`
     INSERT INTO skill_usage (scope, name, count, date) VALUES (?, ?, ?, ?)
     ON CONFLICT(scope, name, date) DO UPDATE SET count = count + excluded.count
@@ -591,6 +706,10 @@ export function appendUsage(db, scope, usage) {
       const ts = Number(p.timestamp);
       if (!ts) continue;
       insPrompts.run(scope, p.sessionId ?? '', ts, p.charLen | 0, p.preview ?? null);
+      if (insFts && p.text) {
+        delFts.run(scope, p.sessionId ?? '', ts);
+        insFts.run(String(p.text), scope, p.sessionId ?? '', ts);
+      }
     }
     for (const s of (usage.skills || [])) {
       const date = s.date ?? (s.timestamp ? new Date(s.timestamp).toISOString().slice(0, 10) : null);
