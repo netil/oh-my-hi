@@ -18,6 +18,11 @@ import {
   splitLegacyDb,
   countDbRows,
   recoverIfCorrupt,
+  escapeFtsMatch,
+  searchPrompts,
+  searchPromptsInDb,
+  SEARCH_MARK_START,
+  SEARCH_MARK_END,
 } from '../scripts/db.mjs';
 
 function freshDb() {
@@ -875,6 +880,170 @@ describe('listMonthlyDbs — orphaned WAL/SHM cleanup', () => {
       listMonthlyDbs(out);
       assert.ok(fs.existsSync(walPath), 'WAL belonging to existing .sqlite must be preserved');
       assert.ok(fs.existsSync(shmPath), 'SHM belonging to existing .sqlite must be preserved');
+    } finally { cleanDir(out); }
+  });
+});
+
+// ── prompt_fts — FTS5 full-text search ──────────────────────────────────────
+
+describe('prompt_fts — indexing', () => {
+  it('creates the prompt_fts virtual table on fresh DBs', () => {
+    const db = freshDb();
+    const row = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='prompt_fts'").get();
+    assert.ok(row, 'prompt_fts table exists');
+    db.close();
+  });
+
+  it('appendUsage indexes promptStats text into prompt_fts', () => {
+    const db = freshDb();
+    appendUsage(db, 'global', {
+      promptStats: [
+        { sessionId: 's1', timestamp: 1000, charLen: 30, preview: 'fix the dashboard', text: 'fix the dashboard rendering bug in billboard charts' },
+      ],
+    });
+    const rows = db.prepare('SELECT * FROM prompt_fts').all();
+    assert.equal(rows.length, 1);
+    assert.equal(rows[0].session_id, 's1');
+    assert.equal(rows[0].scope, 'global');
+    assert.equal(rows[0].timestamp, 1000);
+    db.close();
+  });
+
+  it('appendUsage is idempotent for prompt_fts (re-append does not duplicate)', () => {
+    const db = freshDb();
+    const usage = {
+      promptStats: [
+        { sessionId: 'dup', timestamp: 1000, charLen: 10, preview: 'hello', text: 'hello full text' },
+      ],
+    };
+    appendUsage(db, 'global', usage);
+    appendUsage(db, 'global', usage);
+    const count = db.prepare('SELECT COUNT(*) AS c FROM prompt_fts').get().c;
+    assert.equal(count, 1, 'delete-then-insert keeps one row per (scope, session, ts)');
+    db.close();
+  });
+
+  it('appendUsage skips promptStats without text (no empty FTS rows)', () => {
+    const db = freshDb();
+    appendUsage(db, 'global', {
+      promptStats: [{ sessionId: 'p', timestamp: 1000, charLen: 5, preview: 'old-cache entry' }],
+    });
+    const count = db.prepare('SELECT COUNT(*) AS c FROM prompt_fts').get().c;
+    assert.equal(count, 0, 'entries without text are not indexed');
+    db.close();
+  });
+
+  it('upsertUsage replaces prompt_fts rows for the scope only', () => {
+    const db = freshDb();
+    upsertUsage(db, 'project-a', {
+      promptStats: [{ sessionId: 'sa', timestamp: 1000, text: 'alpha prompt text' }],
+    });
+    upsertUsage(db, 'project-b', {
+      promptStats: [{ sessionId: 'sb', timestamp: 2000, text: 'beta prompt text' }],
+    });
+    upsertUsage(db, 'project-a', {
+      promptStats: [{ sessionId: 'sa2', timestamp: 3000, text: 'gamma prompt text' }],
+    });
+    const rows = db.prepare('SELECT session_id FROM prompt_fts ORDER BY timestamp').all().map(r => r.session_id);
+    assert.deepEqual(rows, ['sb', 'sa2'], 'project-a rows replaced, project-b untouched');
+    db.close();
+  });
+});
+
+describe('escapeFtsMatch — query sanitization', () => {
+  it('returns null for empty or whitespace-only input', () => {
+    assert.equal(escapeFtsMatch(''), null);
+    assert.equal(escapeFtsMatch('   '), null);
+    assert.equal(escapeFtsMatch(null), null);
+    assert.equal(escapeFtsMatch(undefined), null);
+  });
+
+  it('quotes each term as a prefix phrase', () => {
+    assert.equal(escapeFtsMatch('hello'), '"hello"*');
+    assert.equal(escapeFtsMatch('hello world'), '"hello"* "world"*');
+  });
+
+  it('doubles embedded double quotes', () => {
+    assert.equal(escapeFtsMatch('say"hi"'), '"say""hi"""*');
+  });
+
+  it('hostile inputs with FTS5 operators never crash a MATCH query', () => {
+    const db = freshDb();
+    appendUsage(db, 'global', {
+      promptStats: [{ sessionId: 's', timestamp: 1000, text: 'totally normal prompt' }],
+    });
+    const hostile = [
+      '"unbalanced',
+      'AND OR NOT',
+      'NEAR(foo bar)',
+      '(paren* AND "quote',
+      'col:value',
+      '* ^ - + {}',
+      'foo"bar"baz" "',
+    ];
+    for (const q of hostile) {
+      const match = escapeFtsMatch(q);
+      if (match === null) continue;
+      assert.doesNotThrow(() => searchPromptsInDb(db, match, 10), `hostile input did not throw: ${q}`);
+    }
+    db.close();
+  });
+});
+
+describe('searchPrompts — cross-month query', () => {
+  it('finds sessions across multiple monthly DBs and groups per session', () => {
+    const out = tempDir();
+    try {
+      const jan = Date.UTC(2026, 0, 15);
+      const feb = Date.UTC(2026, 1, 15);
+      appendUsageMonthly(out, 'global', {
+        promptStats: [
+          { sessionId: 'sess-jan', timestamp: jan, text: 'refactor the billboard chart tooltip' },
+          { sessionId: 'sess-jan', timestamp: jan + 1000, text: 'tooltip still broken on billboard chart' },
+        ],
+      });
+      appendUsageMonthly(out, 'proj', {
+        promptStats: [
+          { sessionId: 'sess-feb', timestamp: feb, text: 'add billboard legend toggle' },
+        ],
+      });
+      assert.equal(listMonthlyDbs(out).length, 2, 'two monthly DBs created');
+
+      const results = searchPrompts(out, 'billboard');
+      assert.equal(results.length, 2, 'one result per session across months');
+      const ids = results.map(r => r.sessionId).sort();
+      assert.deepEqual(ids, ['sess-feb', 'sess-jan']);
+      const janHit = results.find(r => r.sessionId === 'sess-jan');
+      assert.equal(janHit.matches, 2, 'multiple matches in a session are counted');
+      assert.equal(janHit.scope, 'global');
+      assert.ok(janHit.snippet.includes(SEARCH_MARK_START) && janHit.snippet.includes(SEARCH_MARK_END),
+        'snippet contains highlight sentinels');
+    } finally { cleanDir(out); }
+  });
+
+  it('matches by prefix and returns empty for non-matching or empty queries', () => {
+    const out = tempDir();
+    try {
+      appendUsageMonthly(out, 'global', {
+        promptStats: [{ sessionId: 's', timestamp: Date.UTC(2026, 2, 1), text: 'implement fulltext session search' }],
+      });
+      assert.equal(searchPrompts(out, 'fullte').length, 1, 'prefix match works');
+      assert.equal(searchPrompts(out, 'zzz-no-match').length, 0);
+      assert.equal(searchPrompts(out, '   ').length, 0);
+      assert.equal(searchPrompts(out, '"AND (').length, 0, 'operator-laden query returns [] without throwing');
+    } finally { cleanDir(out); }
+  });
+
+  it('respects the limit option', () => {
+    const out = tempDir();
+    try {
+      const base = Date.UTC(2026, 3, 1);
+      const promptStats = [];
+      for (let i = 0; i < 10; i++) {
+        promptStats.push({ sessionId: `s${i}`, timestamp: base + i * 1000, text: `searchable entry number ${i}` });
+      }
+      appendUsageMonthly(out, 'global', { promptStats });
+      assert.equal(searchPrompts(out, 'searchable', { limit: 3 }).length, 3);
     } finally { cleanDir(out); }
   });
 });

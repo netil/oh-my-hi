@@ -2206,6 +2206,88 @@ window.name = 'oh-my-hi';
   function _loadBm() { return loadBookmarks(localStorage.getItem('harness-bookmarks')); }
   function _saveBm(map) { localStorage.setItem('harness-bookmarks', saveBookmarks(map)); }
 
+  // ── Session full-text search (#tokens-session) ──
+  // Needs the serve.mjs HTTP API (/api/search) — rendered only in API mode.
+  var _sessionSearchQuery = '';
+  var _sessionSearchAbort = null;
+  var _sessionSearchTimer = null;
+
+  function renderSessionSearchBox() {
+    return '<div class="card session-search-card">'
+      + '<input type="search" id="session-search-input" class="session-search-input"'
+      + ' placeholder="' + escapeHtml(t('sessionSearchPlaceholder')) + '"'
+      + ' aria-label="' + escapeHtml(t('sessionSearchPlaceholder')) + '"'
+      + ' value="' + escapeHtml(_sessionSearchQuery) + '">'
+      + '<div id="session-search-results" class="session-search-results"></div>'
+      + '</div>';
+  }
+
+  function bindSessionSearch() {
+    var input = document.getElementById('session-search-input');
+    if (!input) return;
+    input.addEventListener('input', function () {
+      _sessionSearchQuery = input.value;
+      if (_sessionSearchTimer) clearTimeout(_sessionSearchTimer);
+      _sessionSearchTimer = setTimeout(runSessionSearch, 250);
+    });
+    // Restore results when returning to the page with a previous query
+    if (_sessionSearchQuery.trim()) runSessionSearch();
+  }
+
+  async function runSessionSearch() {
+    var box = document.getElementById('session-search-results');
+    if (!box) return;
+    var q = _sessionSearchQuery.trim();
+    if (!q) { box.innerHTML = ''; return; }
+    if (_sessionSearchAbort) _sessionSearchAbort.abort();
+    _sessionSearchAbort = new AbortController();
+    try {
+      var res = await fetch('/api/search?' + new URLSearchParams({ q: q, limit: '20' }), { signal: _sessionSearchAbort.signal });
+      if (!res.ok) throw new Error('search returned ' + res.status);
+      var data = await res.json();
+      renderSessionSearchResults(box, data.results || []);
+    } catch (e) {
+      if (e.name === 'AbortError') return;
+      box.innerHTML = '<div class="session-search-empty">' + t('sessionSearchError') + '</div>';
+    }
+  }
+
+  function renderSessionSearchResults(box, results) {
+    if (results.length === 0) {
+      box.innerHTML = '<div class="session-search-empty">' + t('sessionSearchNoResults') + '</div>';
+      return;
+    }
+    var html = '';
+    results.forEach(function (r) {
+      var scope = (DATA.scopes || []).find(function (s) { return s.id === r.scope; });
+      var scopeLabel = scope ? scope.label : (r.scope || '');
+      // Server marks matches with \u0001/\u0002 sentinels — escape HTML first,
+      // then convert sentinels to <mark> so prompt content can never inject markup.
+      var snippet = escapeHtml(r.snippet || '').replace(/\u0001/g, '<mark>').replace(/\u0002/g, '</mark>');
+      var dateStr = r.timestamp ? formatDate(new Date(r.timestamp).toISOString()) : '';
+      html += '<a class="session-search-result" href="#session/' + encodeURIComponent(r.sessionId) + '" data-session-id="' + escapeHtml(r.sessionId) + '">'
+        + '<div class="session-search-result-meta">'
+        + '<span>' + dateStr + '</span>'
+        + '<span class="session-search-result-scope">' + escapeHtml(scopeLabel) + '</span>'
+        + (r.matches > 1 ? '<span>' + t('sessionSearchMatches', fmtNum(r.matches)) + '</span>' : '')
+        + '</div>'
+        + '<div class="session-search-result-snippet">' + snippet + '</div>'
+        + '</a>';
+    });
+    box.innerHTML = html;
+    box.querySelectorAll('.session-search-result').forEach(function (el) {
+      el.addEventListener('click', function (e) {
+        e.preventDefault();
+        currentView = 'session';
+        currentSessionId = el.dataset.sessionId;
+        currentDetail = null;
+        expandedCategories._tokens = true;
+        pushState(true);
+        render();
+      });
+    });
+  }
+
   function renderTokensSession() {
     const usage = getUsage();
     const days = customDateRange ? 0 : currentPeriod;
@@ -2231,6 +2313,9 @@ window.name = 'oh-my-hi';
 
     let html = '<div class="page-header"><div class="page-header-row"><h1>📋 ' + t('tokensSession') + '</h1>' + renderExportButtons() + '</div></div>'
       + renderPeriodFilter();
+
+    // Prompt search needs the serve.mjs API — hidden when not served (e.g. file://)
+    if (DATA._apiMode) html += renderSessionSearchBox();
 
     if (sessions.length > 0) {
       const totalSessions = sessions.length;
@@ -2341,6 +2426,7 @@ window.name = 'oh-my-hi';
     html += '<div class="generated-at">' + t('generatedAt') + ' ' + formatDateTime(DATA.generatedAt) + ' · ' + (DATA.configDir || '') + '</div>';
     content.innerHTML = html;
     bindContentActions();
+    if (DATA._apiMode) bindSessionSearch();
   }
 
   function renderSessionDetail() {
