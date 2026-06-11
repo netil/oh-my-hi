@@ -32,6 +32,7 @@ window.name = 'oh-my-hi';
  *   // ── Calendar Picker ──               custom date range overlay
  *   // ── Tokens page ──                   #tokens root
  *   // ── Tokens: Cost sub-page ──         #tokens-cost
+ *   // ── Tokens: Cache sub-page ──        #tokens-cache
  *   // ── Tokens: Prompt sub-page ──       #tokens-prompt
  *   // ── Tokens: Session sub-page ──      #tokens-session + session detail
  *   // ── Overview page ──                 #overview
@@ -450,7 +451,7 @@ window.name = 'oh-my-hi';
       currentView = view;
       currentDetail = { category: view, name: name };
       expandedCategories[view] = true;
-    } else if (view === 'overview' || view === 'structure' || view === 'context' || view === 'tokens' || view === 'tokens-cost' || view === 'tokens-prompt' || view === 'tokens-session' || view === 'tokens-analysis' || view === 'breakdown' || view === 'help') {
+    } else if (view === 'overview' || view === 'structure' || view === 'context' || view === 'tokens' || view === 'tokens-cost' || view === 'tokens-cache' || view === 'tokens-prompt' || view === 'tokens-session' || view === 'tokens-analysis' || view === 'breakdown' || view === 'help') {
       currentView = view === 'tokens-analysis' ? 'tokens-prompt' : view;
       currentDetail = null;
       if (view.startsWith('tokens') || view === 'breakdown') expandedCategories._tokens = true;
@@ -1018,13 +1019,14 @@ window.name = 'oh-my-hi';
     let html = '';
 
     html += navItem('overview', '📊', t('overview'), null, currentView === 'overview' && !currentDetail);
-    const isTokensArea = currentView === 'tokens' || currentView === 'tokens-cost' || currentView === 'breakdown';
+    const isTokensArea = currentView === 'tokens' || currentView === 'tokens-cost' || currentView === 'tokens-cache' || currentView === 'breakdown';
     // Tokens group is always expanded — no collapse toggle, sub-items
     // visible from first render. Clicking the header still navigates
     // to the Tokens overview.
     html += navItem('tokens', '🪙', t('tokens'), null, currentView === 'tokens');
     html += '<div class="nav-sub">'
       + navItem('tokens-cost', '💰', t('tokensCost'), null, currentView === 'tokens-cost')
+      + navItem('tokens-cache', '♻️', t('tokensCache'), null, currentView === 'tokens-cache')
       + navItem('breakdown', '📊', t('bdTitle'), null, currentView === 'breakdown')
       + '</div>';
     html += '<div class="nav-section-label">' + t('usageAnalysis') + '</div>';
@@ -1191,6 +1193,8 @@ window.name = 'oh-my-hi';
       renderTokensPage();
     } else if (currentView === 'tokens-cost') {
       renderTokensCost();
+    } else if (currentView === 'tokens-cache') {
+      renderTokensCache();
     } else if (currentView === 'tokens-prompt') {
       renderTokensPrompt();
     } else if (currentView === 'tokens-session') {
@@ -1740,6 +1744,254 @@ window.name = 'oh-my-hi';
     bindPeriodFilter();
     bindBudgetActions();
     drawCostTrendCharts(costDailyMap, days);
+  }
+
+  // ── Tokens: Cache sub-page ──
+  // Hit ratio formula: cacheRead / (cacheRead + cacheCreation + rawInput).
+  // Same denominator as the Prompt page's cache composition — the share of
+  // all input-side tokens served from the prompt cache.
+  function cacheHitRatioPct(read, write, fresh) {
+    const denom = read + write + fresh;
+    return denom > 0 ? Math.round((read / denom) * 100) : 0;
+  }
+
+  // Estimated cost avoided by the prompt cache vs. sending everything as
+  // fresh input: reads are billed at 0.1× the input rate (saves 0.9×),
+  // writes at 1.25× (costs an extra 0.25×). Uses per-model pricing.
+  function calcEntryCacheSavings(e) {
+    const key = resolvePricingKey(e.model);
+    if (!key) return 0;
+    const p = MODEL_PRICING[key];
+    return ((e.cacheRead || 0) * (p.input - p.cacheRead)
+      - (e.cacheCreation || 0) * (p.cacheCreation - p.input)) / 1e6;
+  }
+
+  function renderTokensCache() {
+    const usage = getUsage();
+    const days = customDateRange ? 0 : currentPeriod;
+    const allTokenEntries = usage.tokenEntries || [];
+    const tokenEntries = filterByPeriod(allTokenEntries, 'timestamp', days);
+
+    let totalRead = 0, totalWrite = 0, totalFresh = 0, totalSavings = 0;
+    tokenEntries.forEach((e) => {
+      totalRead += e.cacheRead || 0;
+      totalWrite += e.cacheCreation || 0;
+      totalFresh += e.rawInput || 0;
+      totalSavings += calcEntryCacheSavings(e);
+    });
+    const hitPct = cacheHitRatioPct(totalRead, totalWrite, totalFresh);
+    const changeRead = calcTokenChange(allTokenEntries, days, (e) => e.cacheRead || 0);
+    const changeWrite = calcTokenChange(allTokenEntries, days, (e) => e.cacheCreation || 0);
+    const savingsStr = (totalSavings < 0 ? '-' : '') + fmtCost(Math.abs(totalSavings));
+
+    let html = '<div class="page-header"><h1>♻️ ' + t('tokensCache') + '</h1>'
+      + '<div class="page-desc">' + t('cachePageDesc') + '</div></div>'
+      + renderPeriodFilter();
+
+    // Headline metrics
+    html += '<div class="section"><div class="section-title">' + t('cacheEfficiency')
+      + ' <span class="section-title-sub">' + t('cacheFormulaNote') + '</span></div>'
+      + '<div class="card-grid">'
+      + statCard(t('cacheHitRate'), hitPct + '%', null, { raw: true, note: t('cacheFormulaNote') })
+      + statCard(t('cacheRead'), totalRead, changeRead, { si: true })
+      + statCard(t('cacheWrite'), totalWrite, changeWrite, { si: true })
+      + statCard(t('cacheEstSavings'), savingsStr, null, { raw: true, valueColor: totalSavings >= 0 ? '#0ca678' : '#ef4444', note: t('cacheEstSavingsNote') })
+      + '</div></div>';
+
+    // Daily trend: read/write areas + hit-ratio overlay
+    html += '<div class="section"><div class="section-title">' + t('cacheTrendTitle')
+      + ' <span class="section-title-sub">' + t('cacheTrendDesc') + '</span></div>'
+      + '<div class="card chart-card"><div id="cache-trend-chart" style="padding-top:10px"></div></div>'
+      + '</div>';
+
+    // Hour-of-day efficiency
+    html += '<div class="section"><div class="section-title">' + t('cacheHourlyTitle')
+      + ' <span class="section-title-sub">' + t('cacheHourlyDesc') + '</span></div>'
+      + '<div class="card chart-card"><div id="cache-hourly-chart"></div></div>'
+      + '</div>';
+
+    // Per-workspace breakdown, sorted by cache volume
+    const scopeRows = [];
+    (DATA.scopes || []).forEach((s) => {
+      const su = (DATA.scopeData[s.id] && DATA.scopeData[s.id].usage) || {};
+      const entries = filterByPeriod(su.tokenEntries || [], 'timestamp', days);
+      let read = 0, write = 0, fresh = 0, savings = 0;
+      entries.forEach((e) => {
+        read += e.cacheRead || 0;
+        write += e.cacheCreation || 0;
+        fresh += e.rawInput || 0;
+        savings += calcEntryCacheSavings(e);
+      });
+      if (read + write + fresh === 0) return;
+      scopeRows.push({ id: s.id, label: s.label, read, write, fresh, savings, hit: cacheHitRatioPct(read, write, fresh) });
+    });
+    scopeRows.sort((a, b) => (b.read + b.write) - (a.read + a.write));
+
+    if (scopeRows.length > 0) {
+      html += '<div class="section"><div class="section-title">' + t('cacheByProjectTitle')
+        + ' <span class="section-title-sub">' + t('cacheByProjectDesc') + '</span></div>'
+        + '<div class="card" style="padding:16px;overflow-x:auto"><table class="config-table" style="width:100%">'
+        + '<thead><tr><th>' + t('cacheColWorkspace') + '</th>'
+        + '<th style="text-align:right">' + t('cacheRead') + '</th>'
+        + '<th style="text-align:right">' + t('cacheWrite') + '</th>'
+        + '<th style="text-align:right">' + t('freshInput') + '</th>'
+        + '<th style="text-align:right">' + t('cacheHitRate') + '</th>'
+        + '<th style="text-align:right">' + t('cacheEstSavings') + '</th></tr></thead><tbody>';
+      scopeRows.forEach((r) => {
+        const rowSavings = (r.savings < 0 ? '-' : '') + fmtCost(Math.abs(r.savings));
+        html += '<tr>'
+          + '<td><strong>' + escapeHtml(r.label) + '</strong>' + (r.id === currentScope ? ' <span class="badge">' + t('cacheCurrentScope') + '</span>' : '') + '</td>'
+          + '<td style="text-align:right">' + fmtCompact(r.read) + '</td>'
+          + '<td style="text-align:right">' + fmtCompact(r.write) + '</td>'
+          + '<td style="text-align:right">' + fmtCompact(r.fresh) + '</td>'
+          + '<td style="text-align:right"><strong>' + r.hit + '%</strong></td>'
+          + '<td style="text-align:right">' + rowSavings + '</td></tr>';
+      });
+      html += '</tbody></table></div></div>';
+    }
+
+    html += '<div class="generated-at">' + t('generatedAt') + ' ' + formatDateTime(DATA.generatedAt) + ' · ' + (DATA.configDir || '') + '</div>';
+    content.innerHTML = html;
+    bindContentActions();
+    bindPeriodFilter();
+    drawCacheTrendChart(tokenEntries, days);
+    drawCacheHourlyChart(tokenEntries);
+  }
+
+  // Daily cache read/write tokens (area) with hit-ratio % overlay (line, y2)
+  function drawCacheTrendChart(tokenEntries, days) {
+    const el = document.getElementById('cache-trend-chart');
+    if (!el) return;
+    if (tokenEntries.length === 0) {
+      el.innerHTML = '<div style="text-align:center;color:#6c757d;padding:40px 0;font-size:13px">' + t('noUsageData') + '</div>';
+      return;
+    }
+
+    let numDays, endDate;
+    if (customDateRange) {
+      numDays = Math.ceil((customDateRange.end - customDateRange.start) / 86400000) + 1;
+      endDate = customDateRange.end;
+    } else if (days === 0) {
+      const dataRange = getDataDateRange();
+      if (dataRange) {
+        const startDay = new Date(dataRange.start.getFullYear(), dataRange.start.getMonth(), dataRange.start.getDate());
+        const endDay = new Date(dataRange.end.getFullYear(), dataRange.end.getMonth(), dataRange.end.getDate());
+        endDate = endDay;
+        numDays = Math.round((endDay - startDay) / 86400000) + 1;
+      } else {
+        numDays = 90;
+        endDate = new Date();
+      }
+    } else {
+      numDays = days;
+      endDate = new Date();
+    }
+
+    const daily = {};
+    const dateLabels = ['x'];
+    for (let i = 0; i < numDays; i++) {
+      const d = new Date(endDate);
+      d.setDate(d.getDate() - (numDays - 1 - i));
+      const key = dateKey(d);
+      daily[key] = { read: 0, write: 0, fresh: 0 };
+      dateLabels.push(key);
+    }
+    tokenEntries.forEach((e) => {
+      const ts = e.timestamp;
+      const key = typeof ts === 'string' ? ts.substring(0, 10) : typeof ts === 'number' ? new Date(ts).toISOString().substring(0, 10) : '';
+      if (daily.hasOwnProperty(key)) {
+        daily[key].read += e.cacheRead || 0;
+        daily[key].write += e.cacheCreation || 0;
+        daily[key].fresh += e.rawInput || 0;
+      }
+    });
+
+    const readKey = t('cacheRead'), writeKey = t('cacheWrite'), ratioKey = t('cacheEfficiencyUnit');
+    const readData = [readKey], writeData = [writeKey], ratioData = [ratioKey];
+    for (let j = 1; j < dateLabels.length; j++) {
+      const d = daily[dateLabels[j]];
+      readData.push(d.read);
+      writeData.push(d.write);
+      ratioData.push(cacheHitRatioPct(d.read, d.write, d.fresh));
+    }
+
+    bb.generate({
+      bindto: '#cache-trend-chart',
+      data: {
+        x: 'x',
+        columns: [dateLabels, readData, writeData, ratioData],
+        types: { [readKey]: 'area', [writeKey]: 'area', [ratioKey]: 'line' },
+        axes: { [ratioKey]: 'y2' },
+        colors: { [readKey]: '#4263eb', [writeKey]: '#e8590c', [ratioKey]: '#0ca678' },
+      },
+      axis: {
+        x: { type: 'timeseries', tick: { format: '%m-%d', count: 6, outer: false, text: { inner: true } } },
+        y: { min: 0, padding: { bottom: 0 }, tick: { count: 5, format: (v) => fmtCompact(v) } },
+        y2: {
+          show: true,
+          min: 0, max: 100,
+          padding: { bottom: 0, top: 0 },
+          label: { text: t('cacheEfficiencyUnit'), position: 'outer-middle' },
+          tick: { count: 5, format: (v) => +v.toFixed(0) + '%' },
+        },
+      },
+      point: { show: false },
+      legend: { show: true },
+      area: { linearGradient: true },
+      size: { height: 260 },
+      tooltip: { format: { title: fmtChartTooltipTitle, value: (v, ratio, id) => id === ratioKey ? v + '%' : fmtCompact(v) } },
+    });
+  }
+
+  // Hit ratio % per hour of day — reveals whether work bursts stay within
+  // the 5-minute cache TTL (warm cache) or scatter across the day (cold).
+  function drawCacheHourlyChart(tokenEntries) {
+    const el = document.getElementById('cache-hourly-chart');
+    if (!el) return;
+    if (tokenEntries.length === 0) {
+      el.innerHTML = '<div style="text-align:center;color:#6c757d;padding:40px 0;font-size:13px">' + t('noUsageData') + '</div>';
+      return;
+    }
+
+    const hours = Array.from({ length: 24 }, () => ({ read: 0, write: 0, fresh: 0 }));
+    tokenEntries.forEach((e) => {
+      const d = typeof e.timestamp === 'number' ? new Date(e.timestamp) : new Date(e.timestamp);
+      if (!isNaN(d.getTime())) {
+        const h = hours[d.getHours()];
+        h.read += e.cacheRead || 0;
+        h.write += e.cacheCreation || 0;
+        h.fresh += e.rawInput || 0;
+      }
+    });
+    const hourRatio = hours.map((h) => cacheHitRatioPct(h.read, h.write, h.fresh));
+
+    const categories = Array.from({ length: 24 }, (_, i) => i + t('unitHourSuffix'));
+    bb.generate({
+      bindto: '#cache-hourly-chart',
+      data: {
+        columns: [[t('cacheHitRate')].concat(hourRatio)],
+        type: 'bar',
+        color: (color, d) => {
+          const v = hourRatio[d.index] || 0;
+          return v > 70 ? '#0ca678' : v > 40 ? '#74c0a8' : '#c9e5db';
+        },
+      },
+      axis: {
+        x: { type: 'category', categories: categories, tick: { outer: false } },
+        y: { min: 0, max: 100, padding: { bottom: 0, top: 0 }, tick: { count: 5, format: (v) => +v.toFixed(0) + '%' } },
+      },
+      bar: { width: { ratio: 0.7 }, radius: { ratio: 0.2 } },
+      legend: { show: false },
+      tooltip: {
+        format: {
+          value: (v, ratio, id, index) => {
+            const h = hours[index];
+            return v + '% (' + fmtCompact(h.read) + ' / ' + fmtCompact(h.read + h.write + h.fresh) + ')';
+          },
+        },
+      },
+      size: { height: 200 },
+    });
   }
 
   // ── Tokens: Prompt sub-page ──
@@ -7342,7 +7594,7 @@ window.name = 'oh-my-hi';
         if (!view) return;
         currentView = view;
         currentDetail = null;
-        if (view === 'tokens-cost' || view === 'tokens-prompt' || view === 'tokens-session' || view === 'tokens') {
+        if (view === 'tokens-cost' || view === 'tokens-cache' || view === 'tokens-prompt' || view === 'tokens-session' || view === 'tokens') {
           expandedCategories._tokens = true;
         }
         pushState(true);
