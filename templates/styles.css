@@ -2847,11 +2847,13 @@ body.dark .budget-alert-dismiss:hover {
 }
 .anomaly-grid-line line {
   stroke: #dc2626 !important;
+  stroke-opacity: 0.25;
   stroke-dasharray: 4 3;
-  stroke-width: 1.2;
+  stroke-width: 1;
 }
 .anomaly-grid-line text {
   fill: #dc2626 !important;
+  fill-opacity: 0.55;
   font-size: 11px;
   font-weight: 600;
 }
