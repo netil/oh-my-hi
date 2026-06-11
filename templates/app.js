@@ -1700,6 +1700,37 @@ window.name = 'oh-my-hi';
       html += '</tbody></table></div></div>';
     }
 
+    // Per-machine breakdown — only shown when usage from more than one machine
+    // is present (after a cross-machine import via `node scripts/db.mjs --import`).
+    const machineMap = {};
+    tokenEntries.forEach((e) => {
+      const m = e.machine || '';
+      if (!machineMap[m]) machineMap[m] = { tokens: 0, calls: 0, cost: 0 };
+      machineMap[m].tokens += (e.rawInput || 0) + (e.outputTokens || 0) + (e.cacheRead || 0) + (e.cacheCreation || 0);
+      machineMap[m].calls += 1;
+      machineMap[m].cost += calcEntryCost(e);
+    });
+    const machineEntries = Object.entries(machineMap).sort((a, b) => b[1].tokens - a[1].tokens);
+    if (machineEntries.length > 1) {
+      html += '<div class="section"><div class="section-title">' + t('machinesTitle')
+        + ' <span class="section-title-sub">' + t('machinesCount').replace('{n}', String(machineEntries.length)) + '</span></div>'
+        + '<div class="section-subtitle">' + t('machinesDesc') + '</div>'
+        + '<div class="card" style="padding:16px;overflow-x:auto"><table class="config-table" style="width:100%">'
+        + '<thead><tr><th>' + t('machineLabel') + '</th>'
+        + '<th style="text-align:right">' + t('machineCalls') + '</th>'
+        + '<th style="text-align:right">' + t('totalTokens') + '</th>'
+        + '<th style="text-align:right">' + t('estimatedCost') + '</th></tr></thead><tbody>';
+      machineEntries.forEach((entry) => {
+        const label = entry[0] || t('machineUnknown');
+        const d = entry[1];
+        html += '<tr><td><strong>' + escapeHtml(label) + '</strong></td>'
+          + '<td style="text-align:right">' + fmtCompact(d.calls) + '</td>'
+          + '<td style="text-align:right">' + fmtCompact(d.tokens) + '</td>'
+          + '<td style="text-align:right">' + fmtCost(d.cost) + '</td></tr>';
+      });
+      html += '</tbody></table></div></div>';
+    }
+
     // Insights
     html += renderTokenInsights(tokenEntries, modelMapForInsights, days);
 
