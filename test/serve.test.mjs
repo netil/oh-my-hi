@@ -74,6 +74,78 @@ describe('serve.mjs — requestHandler', () => {
     });
   });
 
+  describe('GET /api/usage?format=csv — usage export (CSV)', () => {
+    let res;
+    // Nonexistent scope → deterministic empty result set on any machine.
+    before(async () => { res = await get(server, '/api/usage?format=csv&scope=__omh_test_none__'); });
+
+    it('should return 200 with text/csv', () => {
+      assert.strictEqual(res.status, 200);
+      assert.ok(res.headers['content-type'].startsWith('text/csv'));
+    });
+
+    it('should send a Content-Disposition attachment filename', () => {
+      assert.match(
+        res.headers['content-disposition'] || '',
+        /^attachment; filename="oh-my-hi-usage-\d{8}\.csv"$/
+      );
+    });
+
+    it('should start with the header row', () => {
+      const header = res.body.split('\r\n')[0];
+      assert.strictEqual(
+        header,
+        'timestamp,scope,sessionId,model,context,contextName,inputTokens,outputTokens,cacheRead,cacheWrite,cost'
+      );
+    });
+
+    it('should accept YYYY-MM-DD from/to filters', async () => {
+      const r = await get(server, '/api/usage?format=csv&scope=__omh_test_none__&from=2026-01-01&to=2026-01-31');
+      assert.strictEqual(r.status, 200);
+      assert.ok(r.headers['content-type'].startsWith('text/csv'));
+    });
+
+    it('should reject malformed from/to with 400', async () => {
+      const r = await get(server, '/api/usage?format=csv&from=yesterday');
+      assert.strictEqual(r.status, 400);
+      assert.strictEqual(JSON.parse(r.body).error, 'bad_from');
+    });
+  });
+
+  describe('GET /api/usage?format=json — usage export (JSON)', () => {
+    it('should return a JSON array with a .json attachment filename', async () => {
+      const res = await get(server, '/api/usage?format=json&scope=__omh_test_none__');
+      assert.strictEqual(res.status, 200);
+      assert.ok(res.headers['content-type'].startsWith('application/json'));
+      assert.match(
+        res.headers['content-disposition'] || '',
+        /^attachment; filename="oh-my-hi-usage-\d{8}\.json"$/
+      );
+      assert.ok(Array.isArray(JSON.parse(res.body)));
+    });
+
+    it('should reject unknown formats with 400', async () => {
+      const res = await get(server, '/api/usage?format=xml');
+      assert.strictEqual(res.status, 400);
+      assert.strictEqual(JSON.parse(res.body).error, 'bad_format');
+    });
+  });
+
+  describe('GET /api/usage — non-export path unchanged', () => {
+    it('should still return the usage payload object (no Content-Disposition)', async () => {
+      const res = await get(server, '/api/usage?scope=__omh_test_none__');
+      // 503 only on a clean checkout where neither SQLite nor data.json exist yet
+      assert.ok([200, 503].includes(res.status), `expected 200 or 503, got ${res.status}`);
+      assert.ok(res.headers['content-type'].startsWith('application/json'));
+      assert.strictEqual(res.headers['content-disposition'], undefined);
+      if (res.status === 200) {
+        const body = JSON.parse(res.body);
+        assert.ok(!Array.isArray(body), 'payload is an object, not an export array');
+        assert.ok(Array.isArray(body.tokenEntries));
+      }
+    });
+  });
+
   describe('GET /nonexistent — 404 for unknown paths', () => {
     it('should return 404', async () => {
       const res = await get(server, '/nonexistent-path-xyz');

@@ -32,6 +32,7 @@ window.name = 'oh-my-hi';
  *   // ── Calendar Picker ──               custom date range overlay
  *   // ── Tokens page ──                   #tokens root
  *   // ── Tokens: Cost sub-page ──         #tokens-cost
+ *   // ── Tokens: Cache sub-page ──        #tokens-cache
  *   // ── Tokens: Prompt sub-page ──       #tokens-prompt
  *   // ── Tokens: Session sub-page ──      #tokens-session + session detail
  *   // ── Overview page ──                 #overview
@@ -604,7 +605,7 @@ window.name = 'oh-my-hi';
       currentView = view;
       currentDetail = { category: view, name: name };
       expandedCategories[view] = true;
-    } else if (view === 'overview' || view === 'structure' || view === 'context' || view === 'tokens' || view === 'tokens-cost' || view === 'tokens-prompt' || view === 'tokens-session' || view === 'tokens-analysis' || view === 'breakdown' || view === 'help') {
+    } else if (view === 'overview' || view === 'structure' || view === 'context' || view === 'tokens' || view === 'tokens-cost' || view === 'tokens-cache' || view === 'tokens-prompt' || view === 'tokens-session' || view === 'tokens-analysis' || view === 'breakdown' || view === 'help') {
       currentView = view === 'tokens-analysis' ? 'tokens-prompt' : view;
       currentDetail = null;
       if (view.startsWith('tokens') || view === 'breakdown') expandedCategories._tokens = true;
@@ -1113,6 +1114,79 @@ window.name = 'oh-my-hi';
       + (entry.cacheCreation || 0) * p.cacheCreation) / 1e6;
   }
 
+  // ── Usage export (CSV / JSON) ──
+  // Client-side export of the currently filtered token entries via Blob +
+  // anchor click — works on file:// and static hosting, no server required.
+  // serve.mjs produces the same rows at /api/usage?format=csv|json for
+  // scripting use; keep columns and escaping in sync with scripts/export.mjs.
+  const EXPORT_COLUMNS = [
+    'timestamp', 'scope', 'sessionId', 'model', 'context', 'contextName',
+    'inputTokens', 'outputTokens', 'cacheRead', 'cacheWrite', 'cost',
+  ];
+
+  /** RFC 4180 field escaping: quote when the value contains `"`, `,`, CR or LF. */
+  function csvEscape(value) {
+    if (value == null) return '';
+    const s = String(value);
+    return /[",\n\r]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+  }
+
+  function buildUsageExportRows(entries) {
+    return entries.map((e) => {
+      const ts = Number(e.timestamp) || new Date(e.timestamp).getTime();
+      return {
+        timestamp: ts > 0 ? new Date(ts).toISOString() : '',
+        scope: currentScope,
+        sessionId: e.sessionId || '',
+        model: e.model || '',
+        context: e.context || '',
+        contextName: e.contextName || '',
+        inputTokens: e.rawInput || 0,
+        outputTokens: e.outputTokens || 0,
+        cacheRead: e.cacheRead || 0,
+        cacheWrite: e.cacheCreation || 0,
+        cost: Math.round(calcEntryCost(e) * 1e6) / 1e6,
+      };
+    });
+  }
+
+  function usageRowsToCsv(rows) {
+    const lines = [EXPORT_COLUMNS.map(csvEscape).join(',')];
+    rows.forEach((row) => {
+      lines.push(EXPORT_COLUMNS.map((c) => csvEscape(row[c])).join(','));
+    });
+    return lines.join('\r\n') + '\r\n';
+  }
+
+  function exportUsageData(format) {
+    const usage = getUsage();
+    const days = customDateRange ? 0 : currentPeriod;
+    const entries = filterByPeriod(usage.tokenEntries || [], 'timestamp', days);
+    const rows = buildUsageExportRows(entries);
+    const isCsv = format === 'csv';
+    const body = isCsv ? usageRowsToCsv(rows) : JSON.stringify(rows, null, 2);
+    const now = new Date();
+    const stamp = String(now.getFullYear())
+      + String(now.getMonth() + 1).padStart(2, '0')
+      + String(now.getDate()).padStart(2, '0');
+    const blob = new Blob([body], { type: isCsv ? 'text/csv;charset=utf-8' : 'application/json;charset=utf-8' });
+    const href = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = href;
+    a.download = 'oh-my-hi-usage-' + stamp + '.' + (isCsv ? 'csv' : 'json');
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => { URL.revokeObjectURL(href); }, 1000);
+  }
+
+  function renderExportButtons() {
+    return '<div class="export-actions" title="' + escapeHtml(t('exportTooltip')) + '">'
+      + '<button type="button" class="export-btn" data-export="csv">⬇ ' + t('exportCsv') + '</button>'
+      + '<button type="button" class="export-btn" data-export="json">⬇ ' + t('exportJson') + '</button>'
+      + '</div>';
+  }
+
   // F2: Efficiency aggregation over tokenEntries.
   // Returns per-item stats for a given context type ('skill' or 'agent').
   // Cached per scope/entries-reference to avoid recomputing across renders.
@@ -1210,20 +1284,22 @@ window.name = 'oh-my-hi';
     let html = '';
 
     html += navItem('overview', '📊', t('overview'), null, currentView === 'overview' && !currentDetail);
-    const isTokensArea = currentView === 'tokens' || currentView === 'tokens-cost' || currentView === 'breakdown';
+    const isTokensArea = currentView === 'tokens' || currentView === 'tokens-cost' || currentView === 'tokens-cache' || currentView === 'breakdown';
     // Tokens group is always expanded — no collapse toggle, sub-items
     // visible from first render. Clicking the header still navigates
     // to the Tokens overview.
     html += navItem('tokens', '🪙', t('tokens'), null, currentView === 'tokens');
     html += '<div class="nav-sub">'
       + navItem('tokens-cost', '💰', t('tokensCost'), null, currentView === 'tokens-cost')
+      + navItem('tokens-cache', '♻️', t('tokensCache'), null, currentView === 'tokens-cache')
       + navItem('breakdown', '📊', t('bdTitle'), null, currentView === 'breakdown')
       + '</div>';
     html += '<div class="nav-section-label">' + t('usageAnalysis') + '</div>';
     html += navItem('context', '🪟', t('contextExplorer'), null, currentView === 'context' && !currentDetail);
     html += navItem('tokens-prompt', '💬', t('tokensPrompt'), null, currentView === 'tokens-prompt');
     html += navItem('tokens-session', '📋', t('tokensSession'), null, currentView === 'tokens-session' || currentView === 'session');
-    html += navItem('structure', '🗂️', t('structure'), null, currentView === 'structure' && !currentDetail);
+    const lintCount = (sd.lint || []).length;
+    html += navItem('structure', '🗂️', t('structure'), lintCount > 0 ? '⚠️ ' + fmtNum(lintCount) : null, currentView === 'structure' && !currentDetail);
     html += '<div class="nav-separator"></div>';
 
     // F2: top 3 cost contributors for 🔥 badges on sidebar.
@@ -1397,6 +1473,8 @@ window.name = 'oh-my-hi';
       renderTokensPage();
     } else if (currentView === 'tokens-cost') {
       renderTokensCost();
+    } else if (currentView === 'tokens-cache') {
+      renderTokensCache();
     } else if (currentView === 'tokens-prompt') {
       renderTokensPrompt();
     } else if (currentView === 'tokens-session') {
@@ -1416,6 +1494,9 @@ window.name = 'oh-my-hi';
     } else {
       renderCategoryOverview();
     }
+
+    // Budget threshold alert — prepended to whatever page was just rendered
+    renderBudgetAlertBanner();
   }
 
   // ── Period filter with calendar ──
@@ -1697,7 +1778,7 @@ window.name = 'oh-my-hi';
     }
 
     let html = '<div class="page-header">'
-      + '<h1>🪙 ' + t('tokensTitle') + '</h1>'
+      + '<div class="page-header-row"><h1>🪙 ' + t('tokensTitle') + '</h1>' + renderExportButtons() + '</div>'
       + '<div class="page-desc">' + t('tokensDesc') + '</div>'
       + '</div>'
       + renderPeriodFilter()
@@ -1802,6 +1883,37 @@ window.name = 'oh-my-hi';
       html += '</tbody></table></div></div>';
     }
 
+    // Per-machine breakdown — only shown when usage from more than one machine
+    // is present (after a cross-machine import via `node scripts/db.mjs --import`).
+    const machineMap = {};
+    tokenEntries.forEach((e) => {
+      const m = e.machine || '';
+      if (!machineMap[m]) machineMap[m] = { tokens: 0, calls: 0, cost: 0 };
+      machineMap[m].tokens += (e.rawInput || 0) + (e.outputTokens || 0) + (e.cacheRead || 0) + (e.cacheCreation || 0);
+      machineMap[m].calls += 1;
+      machineMap[m].cost += calcEntryCost(e);
+    });
+    const machineEntries = Object.entries(machineMap).sort((a, b) => b[1].tokens - a[1].tokens);
+    if (machineEntries.length > 1) {
+      html += '<div class="section"><div class="section-title">' + t('machinesTitle')
+        + ' <span class="section-title-sub">' + t('machinesCount').replace('{n}', String(machineEntries.length)) + '</span></div>'
+        + '<div class="section-subtitle">' + t('machinesDesc') + '</div>'
+        + '<div class="card" style="padding:16px;overflow-x:auto"><table class="config-table" style="width:100%">'
+        + '<thead><tr><th>' + t('machineLabel') + '</th>'
+        + '<th style="text-align:right">' + t('machineCalls') + '</th>'
+        + '<th style="text-align:right">' + t('totalTokens') + '</th>'
+        + '<th style="text-align:right">' + t('estimatedCost') + '</th></tr></thead><tbody>';
+      machineEntries.forEach((entry) => {
+        const label = entry[0] || t('machineUnknown');
+        const d = entry[1];
+        html += '<tr><td><strong>' + escapeHtml(label) + '</strong></td>'
+          + '<td style="text-align:right">' + fmtCompact(d.calls) + '</td>'
+          + '<td style="text-align:right">' + fmtCompact(d.tokens) + '</td>'
+          + '<td style="text-align:right">' + fmtCost(d.cost) + '</td></tr>';
+      });
+      html += '</tbody></table></div></div>';
+    }
+
     // Insights
     html += renderTokenInsights(tokenEntries, modelMapForInsights, days);
 
@@ -1857,7 +1969,7 @@ window.name = 'oh-my-hi';
     const changeOutputCost = calcTokenChange(allTokenEntries, days, (e) => { const k = resolvePricingKey(e.model); return k ? (e.outputTokens || 0) * MODEL_PRICING[k].output / 1e6 : 0; });
     const changeCacheCost  = calcTokenChange(allTokenEntries, days, (e) => { const k = resolvePricingKey(e.model); return k ? ((e.cacheRead || 0) * MODEL_PRICING[k].cacheRead + (e.cacheCreation || 0) * MODEL_PRICING[k].cacheCreation) / 1e6 : 0; });
 
-    let html = '<div class="page-header"><h1>💰 ' + t('tokensCost') + '</h1></div>'
+    let html = '<div class="page-header"><div class="page-header-row"><h1>💰 ' + t('tokensCost') + '</h1>' + renderExportButtons() + '</div></div>'
       + renderPeriodFilter()
       + '<div class="overview-hero solo">'
       + renderBarCard({
@@ -1922,6 +2034,254 @@ window.name = 'oh-my-hi';
     bindPeriodFilter();
     bindBudgetActions();
     drawCostTrendCharts(costDailyMap, days);
+  }
+
+  // ── Tokens: Cache sub-page ──
+  // Hit ratio formula: cacheRead / (cacheRead + cacheCreation + rawInput).
+  // Same denominator as the Prompt page's cache composition — the share of
+  // all input-side tokens served from the prompt cache.
+  function cacheHitRatioPct(read, write, fresh) {
+    const denom = read + write + fresh;
+    return denom > 0 ? Math.round((read / denom) * 100) : 0;
+  }
+
+  // Estimated cost avoided by the prompt cache vs. sending everything as
+  // fresh input: reads are billed at 0.1× the input rate (saves 0.9×),
+  // writes at 1.25× (costs an extra 0.25×). Uses per-model pricing.
+  function calcEntryCacheSavings(e) {
+    const key = resolvePricingKey(e.model);
+    if (!key) return 0;
+    const p = MODEL_PRICING[key];
+    return ((e.cacheRead || 0) * (p.input - p.cacheRead)
+      - (e.cacheCreation || 0) * (p.cacheCreation - p.input)) / 1e6;
+  }
+
+  function renderTokensCache() {
+    const usage = getUsage();
+    const days = customDateRange ? 0 : currentPeriod;
+    const allTokenEntries = usage.tokenEntries || [];
+    const tokenEntries = filterByPeriod(allTokenEntries, 'timestamp', days);
+
+    let totalRead = 0, totalWrite = 0, totalFresh = 0, totalSavings = 0;
+    tokenEntries.forEach((e) => {
+      totalRead += e.cacheRead || 0;
+      totalWrite += e.cacheCreation || 0;
+      totalFresh += e.rawInput || 0;
+      totalSavings += calcEntryCacheSavings(e);
+    });
+    const hitPct = cacheHitRatioPct(totalRead, totalWrite, totalFresh);
+    const changeRead = calcTokenChange(allTokenEntries, days, (e) => e.cacheRead || 0);
+    const changeWrite = calcTokenChange(allTokenEntries, days, (e) => e.cacheCreation || 0);
+    const savingsStr = (totalSavings < 0 ? '-' : '') + fmtCost(Math.abs(totalSavings));
+
+    let html = '<div class="page-header"><h1>♻️ ' + t('tokensCache') + '</h1>'
+      + '<div class="page-desc">' + t('cachePageDesc') + '</div></div>'
+      + renderPeriodFilter();
+
+    // Headline metrics
+    html += '<div class="section"><div class="section-title">' + t('cacheEfficiency')
+      + ' <span class="section-title-sub">' + t('cacheFormulaNote') + '</span></div>'
+      + '<div class="card-grid">'
+      + statCard(t('cacheHitRate'), hitPct + '%', null, { raw: true, note: t('cacheFormulaNote') })
+      + statCard(t('cacheRead'), totalRead, changeRead, { si: true })
+      + statCard(t('cacheWrite'), totalWrite, changeWrite, { si: true })
+      + statCard(t('cacheEstSavings'), savingsStr, null, { raw: true, valueColor: totalSavings >= 0 ? '#0ca678' : '#ef4444', note: t('cacheEstSavingsNote') })
+      + '</div></div>';
+
+    // Daily trend: read/write areas + hit-ratio overlay
+    html += '<div class="section"><div class="section-title">' + t('cacheTrendTitle')
+      + ' <span class="section-title-sub">' + t('cacheTrendDesc') + '</span></div>'
+      + '<div class="card chart-card"><div id="cache-trend-chart" style="padding-top:10px"></div></div>'
+      + '</div>';
+
+    // Hour-of-day efficiency
+    html += '<div class="section"><div class="section-title">' + t('cacheHourlyTitle')
+      + ' <span class="section-title-sub">' + t('cacheHourlyDesc') + '</span></div>'
+      + '<div class="card chart-card"><div id="cache-hourly-chart"></div></div>'
+      + '</div>';
+
+    // Per-workspace breakdown, sorted by cache volume
+    const scopeRows = [];
+    (DATA.scopes || []).forEach((s) => {
+      const su = (DATA.scopeData[s.id] && DATA.scopeData[s.id].usage) || {};
+      const entries = filterByPeriod(su.tokenEntries || [], 'timestamp', days);
+      let read = 0, write = 0, fresh = 0, savings = 0;
+      entries.forEach((e) => {
+        read += e.cacheRead || 0;
+        write += e.cacheCreation || 0;
+        fresh += e.rawInput || 0;
+        savings += calcEntryCacheSavings(e);
+      });
+      if (read + write + fresh === 0) return;
+      scopeRows.push({ id: s.id, label: s.label, read, write, fresh, savings, hit: cacheHitRatioPct(read, write, fresh) });
+    });
+    scopeRows.sort((a, b) => (b.read + b.write) - (a.read + a.write));
+
+    if (scopeRows.length > 0) {
+      html += '<div class="section"><div class="section-title">' + t('cacheByProjectTitle')
+        + ' <span class="section-title-sub">' + t('cacheByProjectDesc') + '</span></div>'
+        + '<div class="card" style="padding:16px;overflow-x:auto"><table class="config-table" style="width:100%">'
+        + '<thead><tr><th>' + t('cacheColWorkspace') + '</th>'
+        + '<th style="text-align:right">' + t('cacheRead') + '</th>'
+        + '<th style="text-align:right">' + t('cacheWrite') + '</th>'
+        + '<th style="text-align:right">' + t('freshInput') + '</th>'
+        + '<th style="text-align:right">' + t('cacheHitRate') + '</th>'
+        + '<th style="text-align:right">' + t('cacheEstSavings') + '</th></tr></thead><tbody>';
+      scopeRows.forEach((r) => {
+        const rowSavings = (r.savings < 0 ? '-' : '') + fmtCost(Math.abs(r.savings));
+        html += '<tr>'
+          + '<td><strong>' + escapeHtml(r.label) + '</strong>' + (r.id === currentScope ? ' <span class="badge">' + t('cacheCurrentScope') + '</span>' : '') + '</td>'
+          + '<td style="text-align:right">' + fmtCompact(r.read) + '</td>'
+          + '<td style="text-align:right">' + fmtCompact(r.write) + '</td>'
+          + '<td style="text-align:right">' + fmtCompact(r.fresh) + '</td>'
+          + '<td style="text-align:right"><strong>' + r.hit + '%</strong></td>'
+          + '<td style="text-align:right">' + rowSavings + '</td></tr>';
+      });
+      html += '</tbody></table></div></div>';
+    }
+
+    html += '<div class="generated-at">' + t('generatedAt') + ' ' + formatDateTime(DATA.generatedAt) + ' · ' + (DATA.configDir || '') + '</div>';
+    content.innerHTML = html;
+    bindContentActions();
+    bindPeriodFilter();
+    drawCacheTrendChart(tokenEntries, days);
+    drawCacheHourlyChart(tokenEntries);
+  }
+
+  // Daily cache read/write tokens (area) with hit-ratio % overlay (line, y2)
+  function drawCacheTrendChart(tokenEntries, days) {
+    const el = document.getElementById('cache-trend-chart');
+    if (!el) return;
+    if (tokenEntries.length === 0) {
+      el.innerHTML = '<div style="text-align:center;color:#6c757d;padding:40px 0;font-size:13px">' + t('noUsageData') + '</div>';
+      return;
+    }
+
+    let numDays, endDate;
+    if (customDateRange) {
+      numDays = Math.ceil((customDateRange.end - customDateRange.start) / 86400000) + 1;
+      endDate = customDateRange.end;
+    } else if (days === 0) {
+      const dataRange = getDataDateRange();
+      if (dataRange) {
+        const startDay = new Date(dataRange.start.getFullYear(), dataRange.start.getMonth(), dataRange.start.getDate());
+        const endDay = new Date(dataRange.end.getFullYear(), dataRange.end.getMonth(), dataRange.end.getDate());
+        endDate = endDay;
+        numDays = Math.round((endDay - startDay) / 86400000) + 1;
+      } else {
+        numDays = 90;
+        endDate = new Date();
+      }
+    } else {
+      numDays = days;
+      endDate = new Date();
+    }
+
+    const daily = {};
+    const dateLabels = ['x'];
+    for (let i = 0; i < numDays; i++) {
+      const d = new Date(endDate);
+      d.setDate(d.getDate() - (numDays - 1 - i));
+      const key = dateKey(d);
+      daily[key] = { read: 0, write: 0, fresh: 0 };
+      dateLabels.push(key);
+    }
+    tokenEntries.forEach((e) => {
+      const ts = e.timestamp;
+      const key = typeof ts === 'string' ? ts.substring(0, 10) : typeof ts === 'number' ? new Date(ts).toISOString().substring(0, 10) : '';
+      if (daily.hasOwnProperty(key)) {
+        daily[key].read += e.cacheRead || 0;
+        daily[key].write += e.cacheCreation || 0;
+        daily[key].fresh += e.rawInput || 0;
+      }
+    });
+
+    const readKey = t('cacheRead'), writeKey = t('cacheWrite'), ratioKey = t('cacheEfficiencyUnit');
+    const readData = [readKey], writeData = [writeKey], ratioData = [ratioKey];
+    for (let j = 1; j < dateLabels.length; j++) {
+      const d = daily[dateLabels[j]];
+      readData.push(d.read);
+      writeData.push(d.write);
+      ratioData.push(cacheHitRatioPct(d.read, d.write, d.fresh));
+    }
+
+    makeChart({
+      bindto: '#cache-trend-chart',
+      data: {
+        x: 'x',
+        columns: [dateLabels, readData, writeData, ratioData],
+        types: { [readKey]: 'area', [writeKey]: 'area', [ratioKey]: 'line' },
+        axes: { [ratioKey]: 'y2' },
+        colors: { [readKey]: '#4263eb', [writeKey]: '#e8590c', [ratioKey]: '#0ca678' },
+      },
+      axis: {
+        x: { type: 'timeseries', tick: { format: '%m-%d', count: 6, outer: false, text: { inner: true } } },
+        y: { min: 0, padding: { bottom: 0 }, tick: { count: 5, format: (v) => fmtCompact(v) } },
+        y2: {
+          show: true,
+          min: 0, max: 100,
+          padding: { bottom: 0, top: 0 },
+          label: { text: t('cacheEfficiencyUnit'), position: 'outer-middle' },
+          tick: { count: 5, format: (v) => +v.toFixed(0) + '%' },
+        },
+      },
+      point: { show: false },
+      legend: { show: true },
+      area: { linearGradient: true },
+      size: { height: 260 },
+      tooltip: { format: { title: fmtChartTooltipTitle, value: (v, ratio, id) => id === ratioKey ? v + '%' : fmtCompact(v) } },
+    });
+  }
+
+  // Hit ratio % per hour of day — reveals whether work bursts stay within
+  // the 5-minute cache TTL (warm cache) or scatter across the day (cold).
+  function drawCacheHourlyChart(tokenEntries) {
+    const el = document.getElementById('cache-hourly-chart');
+    if (!el) return;
+    if (tokenEntries.length === 0) {
+      el.innerHTML = '<div style="text-align:center;color:#6c757d;padding:40px 0;font-size:13px">' + t('noUsageData') + '</div>';
+      return;
+    }
+
+    const hours = Array.from({ length: 24 }, () => ({ read: 0, write: 0, fresh: 0 }));
+    tokenEntries.forEach((e) => {
+      const d = typeof e.timestamp === 'number' ? new Date(e.timestamp) : new Date(e.timestamp);
+      if (!isNaN(d.getTime())) {
+        const h = hours[d.getHours()];
+        h.read += e.cacheRead || 0;
+        h.write += e.cacheCreation || 0;
+        h.fresh += e.rawInput || 0;
+      }
+    });
+    const hourRatio = hours.map((h) => cacheHitRatioPct(h.read, h.write, h.fresh));
+
+    const categories = Array.from({ length: 24 }, (_, i) => i + t('unitHourSuffix'));
+    makeChart({
+      bindto: '#cache-hourly-chart',
+      data: {
+        columns: [[t('cacheHitRate')].concat(hourRatio)],
+        type: 'bar',
+        color: (color, d) => {
+          const v = hourRatio[d.index] || 0;
+          return v > 70 ? '#0ca678' : v > 40 ? '#74c0a8' : '#c9e5db';
+        },
+      },
+      axis: {
+        x: { type: 'category', categories: categories, tick: { outer: false } },
+        y: { min: 0, max: 100, padding: { bottom: 0, top: 0 }, tick: { count: 5, format: (v) => +v.toFixed(0) + '%' } },
+      },
+      bar: { width: { ratio: 0.7 }, radius: { ratio: 0.2 } },
+      legend: { show: false },
+      tooltip: {
+        format: {
+          value: (v, ratio, id, index) => {
+            const h = hours[index];
+            return v + '% (' + fmtCompact(h.read) + ' / ' + fmtCompact(h.read + h.write + h.fresh) + ')';
+          },
+        },
+      },
+      size: { height: 200 },
+    });
   }
 
   // ── Tokens: Prompt sub-page ──
@@ -2058,6 +2418,88 @@ window.name = 'oh-my-hi';
   function _loadBm() { return loadBookmarks(localStorage.getItem('harness-bookmarks')); }
   function _saveBm(map) { localStorage.setItem('harness-bookmarks', saveBookmarks(map)); }
 
+  // ── Session full-text search (#tokens-session) ──
+  // Needs the serve.mjs HTTP API (/api/search) — rendered only in API mode.
+  var _sessionSearchQuery = '';
+  var _sessionSearchAbort = null;
+  var _sessionSearchTimer = null;
+
+  function renderSessionSearchBox() {
+    return '<div class="card session-search-card">'
+      + '<input type="search" id="session-search-input" class="session-search-input"'
+      + ' placeholder="' + escapeHtml(t('sessionSearchPlaceholder')) + '"'
+      + ' aria-label="' + escapeHtml(t('sessionSearchPlaceholder')) + '"'
+      + ' value="' + escapeHtml(_sessionSearchQuery) + '">'
+      + '<div id="session-search-results" class="session-search-results"></div>'
+      + '</div>';
+  }
+
+  function bindSessionSearch() {
+    var input = document.getElementById('session-search-input');
+    if (!input) return;
+    input.addEventListener('input', function () {
+      _sessionSearchQuery = input.value;
+      if (_sessionSearchTimer) clearTimeout(_sessionSearchTimer);
+      _sessionSearchTimer = setTimeout(runSessionSearch, 250);
+    });
+    // Restore results when returning to the page with a previous query
+    if (_sessionSearchQuery.trim()) runSessionSearch();
+  }
+
+  async function runSessionSearch() {
+    var box = document.getElementById('session-search-results');
+    if (!box) return;
+    var q = _sessionSearchQuery.trim();
+    if (!q) { box.innerHTML = ''; return; }
+    if (_sessionSearchAbort) _sessionSearchAbort.abort();
+    _sessionSearchAbort = new AbortController();
+    try {
+      var res = await fetch('/api/search?' + new URLSearchParams({ q: q, limit: '20' }), { signal: _sessionSearchAbort.signal });
+      if (!res.ok) throw new Error('search returned ' + res.status);
+      var data = await res.json();
+      renderSessionSearchResults(box, data.results || []);
+    } catch (e) {
+      if (e.name === 'AbortError') return;
+      box.innerHTML = '<div class="session-search-empty">' + t('sessionSearchError') + '</div>';
+    }
+  }
+
+  function renderSessionSearchResults(box, results) {
+    if (results.length === 0) {
+      box.innerHTML = '<div class="session-search-empty">' + t('sessionSearchNoResults') + '</div>';
+      return;
+    }
+    var html = '';
+    results.forEach(function (r) {
+      var scope = (DATA.scopes || []).find(function (s) { return s.id === r.scope; });
+      var scopeLabel = scope ? scope.label : (r.scope || '');
+      // Server marks matches with \u0001/\u0002 sentinels — escape HTML first,
+      // then convert sentinels to <mark> so prompt content can never inject markup.
+      var snippet = escapeHtml(r.snippet || '').replace(/\u0001/g, '<mark>').replace(/\u0002/g, '</mark>');
+      var dateStr = r.timestamp ? formatDate(new Date(r.timestamp).toISOString()) : '';
+      html += '<a class="session-search-result" href="#session/' + encodeURIComponent(r.sessionId) + '" data-session-id="' + escapeHtml(r.sessionId) + '">'
+        + '<div class="session-search-result-meta">'
+        + '<span>' + dateStr + '</span>'
+        + '<span class="session-search-result-scope">' + escapeHtml(scopeLabel) + '</span>'
+        + (r.matches > 1 ? '<span>' + t('sessionSearchMatches', fmtNum(r.matches)) + '</span>' : '')
+        + '</div>'
+        + '<div class="session-search-result-snippet">' + snippet + '</div>'
+        + '</a>';
+    });
+    box.innerHTML = html;
+    box.querySelectorAll('.session-search-result').forEach(function (el) {
+      el.addEventListener('click', function (e) {
+        e.preventDefault();
+        currentView = 'session';
+        currentSessionId = el.dataset.sessionId;
+        currentDetail = null;
+        expandedCategories._tokens = true;
+        pushState(true);
+        render();
+      });
+    });
+  }
+
   function renderTokensSession() {
     const usage = getUsage();
     const days = customDateRange ? 0 : currentPeriod;
@@ -2080,8 +2522,11 @@ window.name = 'oh-my-hi';
     const sessions = Object.values(sessionMap).filter((s) => s.count > 1);
     const bmMap = _loadBm();
 
-    let html = '<div class="page-header"><h1>📋 ' + t('tokensSession') + '</h1></div>'
+    let html = '<div class="page-header"><div class="page-header-row"><h1>📋 ' + t('tokensSession') + '</h1>' + renderExportButtons() + '</div></div>'
       + renderPeriodFilter();
+
+    // Prompt search needs the serve.mjs API — hidden when not served (e.g. file://)
+    if (DATA._apiMode) html += renderSessionSearchBox();
 
     if (sessions.length > 0) {
       const totalSessions = sessions.length;
@@ -2192,6 +2637,7 @@ window.name = 'oh-my-hi';
     html += '<div class="generated-at">' + t('generatedAt') + ' ' + formatDateTime(DATA.generatedAt) + ' · ' + (DATA.configDir || '') + '</div>';
     content.innerHTML = html;
     bindContentActions();
+    if (DATA._apiMode) bindSessionSearch();
   }
 
   function renderSessionDetail() {
@@ -2790,6 +3236,12 @@ window.name = 'oh-my-hi';
       colors[prevLabel] = '#adb5bd';
     }
 
+    // Mark anomalous days (spike vs trailing 7-day baseline) with x-grid lines
+    const anomalySeries = buildDailyUsageSeries(tokenEntries, calcEntryCost);
+    const anomalyGridLines = detectDailyAnomalies(anomalySeries.dailyMap, anomalySeries.sortedDates)
+      .filter((a) => dailyInput.hasOwnProperty(a.date))
+      .map((a) => ({ value: a.date, text: '⚠ ' + t('anomalyGridLabel'), class: 'anomaly-grid-line' }));
+
     makeChart({
       bindto: '#token-trend-chart',
       data: {
@@ -2825,6 +3277,7 @@ window.name = 'oh-my-hi';
           }
         }
       },
+      grid: { x: { lines: anomalyGridLines } },
       point: { r: 3, focus: { only: true } },
       legend: { show: true },
       size: { height: 280 },
@@ -3022,6 +3475,100 @@ window.name = 'oh-my-hi';
         renderContent();
       });
     }
+  }
+
+  // ── Budget threshold alert banner ──
+  // Shown at the top of the content area on every page when spend reaches 80%
+  // (warning) or 100% (error) of a configured budget. Dismissals persist per
+  // period+threshold in localStorage, so a new day/week/month or crossing a
+  // higher threshold shows the banner again.
+  const BUDGET_ALERT_DISMISS_KEY = 'harness-budget-alert-dismissed';
+
+  function getBudgetAlertDismissals() {
+    try { return JSON.parse(localStorage.getItem(BUDGET_ALERT_DISMISS_KEY) || '{}') || {}; }
+    catch (e) { return {}; }
+  }
+
+  // Returns [{ type, labelKey, spent, budget, pct, threshold, dismissKey }]
+  // for every configured budget at >= 80% spend. Spend windows mirror
+  // renderBudgetSection: daily = today, weekly = last 7 days, monthly = last 30.
+  function computeBudgetAlerts() {
+    if (!tokenBudget) return [];
+    const entries = getUsage().tokenEntries || [];
+    if (entries.length === 0) return [];
+    const costDailyMap = {};
+    entries.forEach((e) => {
+      const dk = new Date(e.timestamp).toISOString().substring(0, 10);
+      costDailyMap[dk] = (costDailyMap[dk] || 0) + calcEntryCost(e);
+    });
+    const sumLastDays = (n) => {
+      let s = 0;
+      for (let i = 0; i < n; i++) {
+        const d = new Date(); d.setDate(d.getDate() - i);
+        s += costDailyMap[d.toISOString().substring(0, 10)] || 0;
+      }
+      return s;
+    };
+    const today = new Date().toISOString().substring(0, 10);
+    // Dismissal period keys: calendar day / week (Monday) / month — a new
+    // period produces a new key, which un-hides the banner.
+    const wd = new Date();
+    const dow = wd.getDay();
+    wd.setDate(wd.getDate() + (dow === 0 ? -6 : 1 - dow));
+    const weekKey = wd.toISOString().substring(0, 10);
+    const monthKey = today.substring(0, 7);
+    const defs = [
+      { type: 'daily', labelKey: 'budgetDaily', spent: costDailyMap[today] || 0, budget: tokenBudget.daily, periodKey: today },
+      { type: 'weekly', labelKey: 'budgetWeekly', spent: sumLastDays(7), budget: tokenBudget.weekly, periodKey: weekKey },
+      { type: 'monthly', labelKey: 'budgetMonthly', spent: sumLastDays(30), budget: tokenBudget.monthly, periodKey: monthKey },
+    ];
+    const alerts = [];
+    defs.forEach((d) => {
+      if (!d.budget) return;
+      const pct = (d.spent / d.budget) * 100;
+      if (pct < 80) return;
+      const threshold = pct >= 100 ? 100 : 80;
+      alerts.push({
+        type: d.type, labelKey: d.labelKey, spent: d.spent, budget: d.budget,
+        pct: Math.round(pct), threshold,
+        dismissKey: d.type + ':' + d.periodKey + ':' + threshold,
+      });
+    });
+    return alerts;
+  }
+
+  function renderBudgetAlertBanner() {
+    const old = document.getElementById('budget-alert-banner');
+    if (old) old.remove();
+    const dismissed = getBudgetAlertDismissals();
+    const allAlerts = computeBudgetAlerts();
+    const alerts = allAlerts.filter((a) => !dismissed[a.dismissKey]);
+    if (alerts.length === 0) return;
+    const severe = alerts.some((a) => a.threshold >= 100);
+    const banner = document.createElement('div');
+    banner.id = 'budget-alert-banner';
+    banner.className = 'budget-alert-banner ' + (severe ? 'error' : 'warning');
+    const linesHtml = alerts.map((a) =>
+      '<span class="budget-alert-line">' + t('budgetAlertLine', t(a.labelKey), fmtCost(a.spent), fmtCost(a.budget), fmtCompact(a.pct)) + '</span>'
+    ).join('');
+    banner.innerHTML = '<span class="budget-alert-icon">' + (severe ? '🚨' : '⚠️') + '</span>'
+      + '<div class="budget-alert-body">'
+      + '<span class="budget-alert-title">' + (severe ? t('budgetAlertOverTitle') : t('budgetAlertWarnTitle')) + '</span>'
+      + '<span class="budget-alert-lines">' + linesHtml + '</span>'
+      + '</div>'
+      + '<button class="budget-alert-dismiss" title="' + escapeHtml(t('budgetAlertDismiss')) + '">✕</button>';
+    banner.querySelector('.budget-alert-dismiss').addEventListener('click', () => {
+      const prev = getBudgetAlertDismissals();
+      // Keep only keys still relevant to the current periods (auto-prune),
+      // then add every alert shown in this banner.
+      const currentKeys = allAlerts.map((a) => a.dismissKey);
+      const next = {};
+      Object.keys(prev).forEach((k) => { if (currentKeys.indexOf(k) !== -1) next[k] = true; });
+      alerts.forEach((a) => { next[a.dismissKey] = true; });
+      localStorage.setItem(BUDGET_ALERT_DISMISS_KEY, JSON.stringify(next));
+      banner.remove();
+    });
+    content.insertBefore(banner, content.firstChild);
   }
 
   function drawCostTrendCharts(costDailyMap, days) {
@@ -3493,6 +4040,40 @@ window.name = 'oh-my-hi';
   }
 
   // ── Overview page ──
+  // ── Weekly digest (Overview) ──
+  // Build-time summary (DATA.weeklyDigest, per scope): last 7 days' cost /
+  // tokens / sessions with % deltas vs the previous 7 days.
+  function renderWeeklyDigestCard() {
+    const digest = DATA.weeklyDigest && DATA.weeklyDigest[currentScope];
+    if (!digest || !digest.current) return '';
+    const cur = digest.current;
+    const prev = digest.previous || {};
+    const delta = digest.delta || {};
+    const deltaBadge = (d) => {
+      if (d === null || d === undefined) return '<span class="digest-delta flat">—</span>';
+      const cls = d > 0 ? 'up' : d < 0 ? 'down' : 'flat';
+      const arrow = d > 0 ? '▲' : d < 0 ? '▼' : '◆';
+      const prefix = d > 0 ? '+' : '';
+      return '<span class="digest-delta ' + cls + '" title="' + escapeHtml(t('digestVsPrev')) + '">'
+        + arrow + ' ' + prefix + fmtCompact(d) + '%</span>';
+    };
+    const metric = (label, valueHtml, d, prevHtml) =>
+      '<div class="digest-metric">'
+      + '<div class="digest-metric-label">' + label + '</div>'
+      + '<div class="digest-metric-value">' + valueHtml + '</div>'
+      + '<div class="digest-metric-sub">' + deltaBadge(d)
+      + ' <span class="digest-prev">' + t('digestPrevWeek', prevHtml) + '</span></div>'
+      + '</div>';
+    return '<div class="section">'
+      + '<div class="section-title">' + t('digestTitle')
+      + ' <span class="section-title-sub">' + t('digestDesc') + '</span></div>'
+      + '<div class="card digest-card">'
+      + metric(t('digestCost'), fmtCost(cur.cost || 0), delta.cost, fmtCost(prev.cost || 0))
+      + metric(t('digestTokens'), fmtCompact(cur.tokens || 0), delta.tokens, fmtCompact(prev.tokens || 0))
+      + metric(t('digestSessions'), fmtNum(cur.sessions || 0), delta.sessions, fmtNum(prev.sessions || 0))
+      + '</div></div>';
+  }
+
   function renderOverview() {
     let scope = DATA.scopes.find((s) => { return s.id === currentScope; });
     const scopePath = scope ? (scope.projectPath || scope.configPath || currentScope) : currentScope;
@@ -3570,6 +4151,9 @@ window.name = 'oh-my-hi';
       +   usageBarHtml
       + '</div>';
 
+    // Weekly digest (build-time, last 7 days vs previous 7)
+    html += renderWeeklyDigestCard();
+
     // Category distribution + Daily trend chart
     html += '<div class="chart-row">'
       + '<div class="section chart-section chart-section-small">'
@@ -3581,6 +4165,42 @@ window.name = 'oh-my-hi';
       + '<div class="card chart-card"><div id="trend-chart" style="padding-top:10px"></div></div>'
       + '</div>'
       + '</div>';
+
+    // Anomalies — daily token/cost spikes vs trailing 7-day baseline.
+    // Baselines are computed over the full available history so the rolling
+    // mean stays accurate; the period filter only narrows which days are shown.
+    const anomalySeries = buildDailyUsageSeries(usage.tokenEntries || [], calcEntryCost);
+    const allAnomalies = detectDailyAnomalies(anomalySeries.dailyMap, anomalySeries.sortedDates);
+    const anomalyList = filterByPeriod(
+      allAnomalies.map((a) => Object.assign({ timestamp: a.date + 'T12:00:00' }, a)),
+      'timestamp', days
+    );
+    if (anomalyList.length > 0) {
+      const shownAnomalies = anomalyList.slice(0, 5);
+      const moreAnomalies = anomalyList.length - shownAnomalies.length;
+      html += '<div class="section">'
+        + '<div class="section-title">' + t('anomalyTitle') + ' (' + anomalyList.length + ') <span class="section-title-sub">' + t('anomalyDesc') + '</span></div>'
+        + '<div class="card anomaly-list">';
+      shownAnomalies.forEach((a) => {
+        const isTok = a.kind !== 'cost';
+        const ratio = isTok ? a.tokenRatio : a.costRatio;
+        const kindLabel = a.kind === 'cost' ? t('anomalyKindCost') : a.kind === 'both' ? t('anomalyKindBoth') : t('anomalyKindTokens');
+        const valueHtml = a.kind === 'cost' ? fmtCost(a.cost)
+          : a.kind === 'both' ? fmtCompact(a.tokens) + ' · ' + fmtCost(a.cost)
+          : fmtCompact(a.tokens);
+        html += '<div class="anomaly-item" data-action="goto-anomaly-day" data-date="' + a.date + '" title="' + t('anomalyClickHint') + '">'
+          + '<span class="anomaly-icon">⚠️</span>'
+          + '<span class="anomaly-date">' + a.date.replace(/-/g, '.') + '</span>'
+          + '<span class="anomaly-kind">' + kindLabel + '</span>'
+          + '<span class="anomaly-value">' + valueHtml + '</span>'
+          + '<span class="anomaly-mult">' + t('anomalyVsAvg', fmtCompact(Math.round(ratio * 10) / 10)) + '</span>'
+          + '</div>';
+      });
+      if (moreAnomalies > 0) {
+        html += '<div class="anomaly-more">' + t('anomalyMore', moreAnomalies) + '</div>';
+      }
+      html += '</div></div>';
+    }
 
     // Popular Skills
     if (popularSkills.length > 0) {
@@ -4406,12 +5026,50 @@ window.name = 'oh-my-hi';
   }
 
   // ── Structure page ──
+  function getLintWarnings() {
+    return getScopeData().lint || [];
+  }
+
+  function lintMessage(w) {
+    return t.apply(null, ['lint_' + w.code].concat(w.args || []));
+  }
+
   function renderStructure() {
     let sd = getScopeData();
     let html = '<div class="page-header">'
       + '<h1>' + t('structure') + '</h1>'
       + '<div class="subtext">' + t('structureSub') + '</div>'
       + '</div>';
+
+    // Health check summary
+    const lint = getLintWarnings();
+    html += '<div class="section">'
+      + '<div class="section-title">' + t('lintTitle') + '</div>';
+    if (lint.length === 0) {
+      html += '<div class="card lint-card"><div class="lint-all-clear">✅ ' + t('lintAllClear') + '</div></div>';
+    } else {
+      html += '<div class="card lint-card">'
+        + '<div class="lint-summary">⚠️ ' + t('lintWarnCount', fmtNum(lint.length)) + '</div>';
+      CATEGORIES.forEach((cat) => {
+        const group = lint.filter((w) => { return w.category === cat.key; });
+        if (group.length === 0) return;
+        html += '<div class="lint-group">'
+          + '<div class="lint-group-header">'
+          + '<span class="tree-icon">' + cat.icon + '</span>'
+          + '<span class="lint-group-label">' + getCatLabel(cat) + '</span>'
+          + '<span class="lint-warn-badge">' + fmtNum(group.length) + '</span>'
+          + '</div>';
+        group.forEach((w) => {
+          html += '<div class="lint-item">'
+            + '<div class="lint-item-msg">' + escapeHtml(lintMessage(w)) + '</div>'
+            + '<div class="lint-item-file">' + escapeHtml(w.file || '') + '</div>'
+            + '</div>';
+        });
+        html += '</div>';
+      });
+      html += '</div>';
+    }
+    html += '</div>';
 
     // Flowchart
     html += '<div class="section">'
@@ -4428,12 +5086,14 @@ window.name = 'oh-my-hi';
       let items = sd[cat.key] || [];
       if (items.length === 0) return;
       const isExpanded = expandedCategories['tree_' + cat.key] || false;
+      const catWarns = lint.filter((w) => { return w.category === cat.key; }).length;
 
       html += '<div class="tree-category">'
         + '<div class="tree-category-header" data-action="toggle-tree" data-tree-key="' + cat.key + '">'
         + '<span class="tree-icon">' + cat.icon + '</span>'
         + '<span class="tree-label">' + getCatLabel(cat) + '</span>'
         + '<span class="tree-count" style="background:' + cat.color + '">' + fmtNum(items.length) + '</span>'
+        + (catWarns > 0 ? '<span class="lint-warn-badge" title="' + escapeHtml(t('lintWarnCount', fmtNum(catWarns))) + '">⚠️ ' + fmtNum(catWarns) + '</span>' : '')
         + '<span class="tree-chevron' + (isExpanded ? ' expanded' : '') + '">▶</span>'
         + '</div>'
         + '<div class="tree-items' + (isExpanded ? ' open' : '') + '" data-tree-items="' + cat.key + '">';
@@ -7477,6 +8137,10 @@ window.name = 'oh-my-hi';
 
   // ── Content action binding ──
   function bindContentActions() {
+    // Usage export buttons (CSV / JSON)
+    content.querySelectorAll('[data-export]').forEach((el) => {
+      el.addEventListener('click', () => { exportUsageData(el.dataset.export); });
+    });
     content.querySelectorAll('[data-action="goto-detail"]').forEach((el) => {
       el.addEventListener('click', () => {
         const cat = el.dataset.category;
@@ -7501,6 +8165,36 @@ window.name = 'oh-my-hi';
         render();
       });
     });
+    // Anomaly row click → tokens page filtered to that single day.
+    // Reuses the calendar-picker custom range path (customDateRange +
+    // currentPeriod = -1), so no new drill-down infrastructure is needed.
+    content.querySelectorAll('[data-action="goto-anomaly-day"]').forEach((el) => {
+      el.addEventListener('click', () => {
+        const dk = el.dataset.date;
+        if (!dk) return;
+        const p = dk.split('-').map((x) => parseInt(x, 10));
+        customDateRange = {
+          start: new Date(p[0], p[1] - 1, p[2]),
+          end: new Date(p[0], p[1] - 1, p[2], 23, 59, 59)
+        };
+        currentPeriod = -1;
+        localStorage.setItem('harness-period', String(currentPeriod));
+        currentView = 'tokens';
+        currentDetail = null;
+        expandedCategories._tokens = true;
+        pushState(true);
+        render();
+        // API mode: refetch usage for the selected day.
+        if (DATA._apiMode) {
+          const range = computeCurrentPeriodRange();
+          if (range) {
+            fetchUsageForPeriod(currentScope, range.from, range.to).then((ok) => {
+              if (ok) render();
+            });
+          }
+        }
+      });
+    });
     // F5: Regression banner insight → navigate to sub-page
     content.querySelectorAll('[data-action="nav-view"]').forEach((el) => {
       el.addEventListener('click', (e) => {
@@ -7509,7 +8203,7 @@ window.name = 'oh-my-hi';
         if (!view) return;
         currentView = view;
         currentDetail = null;
-        if (view === 'tokens-cost' || view === 'tokens-prompt' || view === 'tokens-session' || view === 'tokens') {
+        if (view === 'tokens-cost' || view === 'tokens-cache' || view === 'tokens-prompt' || view === 'tokens-session' || view === 'tokens') {
           expandedCategories._tokens = true;
         }
         pushState(true);

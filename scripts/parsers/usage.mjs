@@ -56,7 +56,11 @@ import { toMonthKey } from '../util.mjs';
 const PARALLEL_CONCURRENCY = Math.max(os.cpus().length, 4);
 
 // Increment when parser output schema changes (forces full re-parse via mtime index invalidation)
-const CACHE_SCHEMA_VERSION = 2;
+// v3: promptStats entries carry full `text` for FTS5 session search
+const CACHE_SCHEMA_VERSION = 3;
+
+// Max chars of prompt text kept for full-text search indexing
+const FTS_TEXT_MAX = 5000;
 
 /**
  * Run async functions in parallel with concurrency limit
@@ -391,9 +395,9 @@ async function cachedParseTranscriptFile(fp, cache) {
     if (cached && cached.mtimeMs === stat.mtimeMs) {
       // Full cache hit (has result) or mtime-only stub (skip — already processed)
       if (cached.size === stat.size) {
-        // Schema check: if promptStats entries lack 'preview', cache is stale — re-parse
+        // Schema check: if promptStats entries lack 'preview' or 'text', cache is stale — re-parse
         const ps = cached.result?.promptStats;
-        if (!ps || ps.length === 0 || 'preview' in ps[0]) return cached.result;
+        if (!ps || ps.length === 0 || ('preview' in ps[0] && 'text' in ps[0])) return cached.result;
       }
       // Mtime match but size=0 means mtime-only stub from lightweight mode — skip
       if (cached.size === 0) return null;
@@ -580,7 +584,10 @@ async function parseTranscriptFile(jsonlPath, cutoffMs) {
             previewText = previewText.trim();
           }
           const preview = previewText.slice(0, 120);
-          promptStats.push({ timestamp: tsMs || entry.timestamp, charLen, sessionId: entry.sessionId ?? null, preview });
+          // Full(-ish) prompt text for FTS5 search. Capped to keep cache/DB lean —
+          // pathological pasted blobs (logs, file dumps) add little search value past this.
+          const text = previewText.slice(0, FTS_TEXT_MAX);
+          promptStats.push({ timestamp: tsMs || entry.timestamp, charLen, sessionId: entry.sessionId ?? null, preview, text });
         }
         continue;
       }

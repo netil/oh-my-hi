@@ -6,12 +6,18 @@
 // the SQLite snapshot written by generate-dashboard.mjs:
 //   GET /api/meta         — data.json with usage arrays stripped + segment index
 //   GET /api/usage?...    — queried usage payload from SQLite
+//   GET /api/usage?format=csv|json&from=&to=&scope=
+//                         — token-usage export download (see handleUsageExport)
+//   GET /api/search?q=... — FTS5 full-text search over user prompts
 
 import http from 'http';
 import fs from 'fs';
 import path from 'path';
 import { execSync, spawnSync } from 'child_process';
 import { fileURLToPath } from 'url';
+import {
+  buildExportRows, toCsv, parseDateParam, exportFilename, PRICING_FALLBACK,
+} from './export.mjs';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -161,7 +167,68 @@ function handleUsageFallback(res, scope) {
   }
 }
 
+/** Pricing table for export cost estimates: build-time fetch (data.json) or fallback. */
+function loadPricing() {
+  try {
+    const data = JSON.parse(fs.readFileSync(DATA_JSON, 'utf-8'));
+    if (data.modelPricing) return data.modelPricing;
+  } catch { /* fall back */ }
+  return PRICING_FALLBACK;
+}
+
+/**
+ * GET /api/usage?format=csv|json — download token usage entries.
+ * Filters:
+ *   from / to — 'YYYY-MM-DD' (UTC day, inclusive) or epoch ms
+ *   scope     — scope id (alias: project), default 'global'
+ * Always responds 200 with a header row / empty array when no data matches.
+ */
+function handleUsageExport(req, res, url, format) {
+  if (format !== 'csv' && format !== 'json') {
+    return sendJson(res, 400, { error: 'bad_format', detail: 'format must be csv or json' });
+  }
+  const scope = url.searchParams.get('scope') || url.searchParams.get('project') || 'global';
+  const fromRaw = url.searchParams.get('from');
+  const toRaw = url.searchParams.get('to');
+  const from = parseDateParam(fromRaw, false);
+  const to = parseDateParam(toRaw, true);
+  if (fromRaw && from == null) return sendJson(res, 400, { error: 'bad_from', detail: 'use YYYY-MM-DD or epoch ms' });
+  if (toRaw && to == null) return sendJson(res, 400, { error: 'bad_to', detail: 'use YYYY-MM-DD or epoch ms' });
+  const fromMs = from ?? 0;
+  const toMs = to ?? Number.MAX_SAFE_INTEGER;
+
+  let entries = [];
+  const dbs = dbModule ? getDbsForRange(fromMs, toMs) : [];
+  if (dbs.length > 0) {
+    try {
+      entries = dbModule.queryTokenEntriesMultiDb(dbs, scope, fromMs, toMs);
+    } catch (e) {
+      return sendJson(res, 500, { error: 'query_failed', detail: e.message });
+    }
+  } else {
+    // SQLite unavailable — fall back to data.json usage when present.
+    try {
+      const data = JSON.parse(fs.readFileSync(DATA_JSON, 'utf-8'));
+      entries = (data.scopeData?.[scope]?.usage?.tokenEntries || [])
+        .filter((e) => { const ts = Number(e.timestamp); return ts >= fromMs && ts <= toMs; });
+    } catch { entries = []; }
+  }
+
+  const rows = buildExportRows(entries, scope, loadPricing());
+  const filename = exportFilename(format);
+  const body = format === 'csv' ? toCsv(rows) : JSON.stringify(rows);
+  res.writeHead(200, {
+    'Content-Type': format === 'csv' ? 'text/csv; charset=utf-8' : 'application/json; charset=utf-8',
+    'Content-Length': Buffer.byteLength(body),
+    'Content-Disposition': `attachment; filename="${filename}"`,
+    'Cache-Control': 'no-store',
+  });
+  res.end(body);
+}
+
 function handleUsage(req, res, url) {
+  const format = url.searchParams.get('format');
+  if (format != null) return handleUsageExport(req, res, url, format.toLowerCase());
   const scope = url.searchParams.get('scope') || 'global';
   const fromRaw = url.searchParams.get('from');
   const toRaw = url.searchParams.get('to');
@@ -178,6 +245,24 @@ function handleUsage(req, res, url) {
     sendJson(res, 200, payload);
   } catch (e) {
     sendJson(res, 500, { error: 'query_failed', detail: e.message });
+  }
+}
+
+/**
+ * GET /api/search?q=...&limit=N — full-text search over user prompts (FTS5).
+ * Returns sessions grouped best-match-first; snippet highlights use the
+ * \u0001/\u0002 sentinels the frontend converts to <mark> after HTML-escaping.
+ */
+function handleSearch(req, res, url) {
+  if (!dbModule) return sendJson(res, 503, { error: 'search_unavailable' });
+  const q = url.searchParams.get('q') || '';
+  const limitRaw = parseInt(url.searchParams.get('limit') || '', 10);
+  const limit = Number.isFinite(limitRaw) ? Math.min(Math.max(limitRaw, 1), 100) : 20;
+  try {
+    const results = dbModule.searchPrompts(OUTPUT_DIR, q, { limit });
+    sendJson(res, 200, { query: q, results });
+  } catch (e) {
+    sendJson(res, 500, { error: 'search_failed', detail: e.message });
   }
 }
 
@@ -235,6 +320,7 @@ function requestHandler(req, res) {
     const pathname = url.pathname;
     if (pathname === '/api/meta') return handleMeta(req, res);
     if (pathname === '/api/usage') return handleUsage(req, res, url);
+    if (pathname === '/api/search') return handleSearch(req, res, url);
     if (pathname === '/open') return handleOpen(req, res);
     serveStatic(req, res, pathname);
   } catch (e) {

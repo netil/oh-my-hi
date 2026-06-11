@@ -48,7 +48,7 @@ describe('Web UI — Templates', () => {
 
     it('should define all page render functions', () => {
       const fns = [
-        'renderOverview', 'renderTokensPage', 'renderTokensCost',
+        'renderOverview', 'renderTokensPage', 'renderTokensCost', 'renderTokensCache',
         'renderTokensPrompt', 'renderTokensSession', 'renderSessionDetail',
         'renderStructure', 'renderHelp', 'renderCategoryOverview', 'renderDetailView',
       ];
@@ -58,21 +58,29 @@ describe('Web UI — Templates', () => {
     });
 
     it('should define all chart draw functions', () => {
-      const fns = ['drawTokenTrendChart', 'drawTokenModelDonut', 'drawCostTrendCharts', 'drawHourlyDistChart', 'drawRotatedBar'];
+      const fns = ['drawTokenTrendChart', 'drawTokenModelDonut', 'drawCostTrendCharts', 'drawHourlyDistChart', 'drawRotatedBar', 'drawCacheTrendChart', 'drawCacheHourlyChart'];
       for (const fn of fns) {
         assert.ok(js.includes(`function ${fn}`), `missing function: ${fn}`);
       }
     });
 
+    it('should wire client-side usage export (CSV/JSON via Blob download)', () => {
+      for (const fn of ['exportUsageData', 'buildUsageExportRows', 'usageRowsToCsv', 'csvEscape', 'renderExportButtons']) {
+        assert.ok(js.includes(`function ${fn}`), `missing function: ${fn}`);
+      }
+      assert.ok(js.includes("querySelectorAll('[data-export]')"), 'export buttons must be bound in bindContentActions');
+      assert.ok(js.includes('new Blob('), 'client-side export must use Blob download (works on file://)');
+    });
+
     it('should handle all hash routes in applyHash', () => {
-      const routes = ['overview', 'structure', 'tokens', 'tokens-cost', 'tokens-prompt', 'tokens-session', 'session', 'help'];
+      const routes = ['overview', 'structure', 'tokens', 'tokens-cost', 'tokens-cache', 'tokens-prompt', 'tokens-session', 'session', 'help'];
       for (const route of routes) {
         assert.ok(js.includes(`'${route}'`), `missing route: ${route}`);
       }
     });
 
     it('should dispatch all views in renderContent', () => {
-      const views = ['tokens-cost', 'tokens-prompt', 'tokens-session', 'session'];
+      const views = ['tokens-cost', 'tokens-cache', 'tokens-prompt', 'tokens-session', 'session'];
       for (const v of views) {
         assert.ok(js.includes(`currentView === '${v}'`), `missing dispatch: ${v}`);
       }
@@ -101,6 +109,18 @@ describe('Web UI — Templates', () => {
     it('should have budget feature functions', () => {
       assert.ok(js.includes('function renderBudgetSection'));
       assert.ok(js.includes('function bindBudgetActions'));
+    });
+
+    it('should have budget threshold alert banner', () => {
+      assert.ok(js.includes('function renderBudgetAlertBanner'), 'banner render function');
+      assert.ok(js.includes('function computeBudgetAlerts'), 'alert computation function');
+      assert.ok(js.includes("'harness-budget-alert-dismissed'"), 'dismissal localStorage key');
+      assert.ok(js.includes('budget-alert-dismiss'), 'dismiss button class');
+    });
+
+    it('should have weekly digest card on overview', () => {
+      assert.ok(js.includes('function renderWeeklyDigestCard'), 'digest render function');
+      assert.ok(js.includes('DATA.weeklyDigest'), 'reads build-time digest from DATA');
     });
 
     it('should have cache tips feature', () => {
@@ -370,6 +390,45 @@ describe('Web UI — Templates', () => {
       assert.ok(js.includes('helpCweTimeline'), 'helpCweTimeline key used');
     });
 
+    // ── Tokens: Cache sub-page ───────────────────────────────────────────
+    it('should compute cache hit ratio over read+write+fresh input', () => {
+      const fnIdx = js.indexOf('function cacheHitRatioPct');
+      assert.ok(fnIdx !== -1, 'cacheHitRatioPct defined');
+      const snippet = js.slice(fnIdx, fnIdx + 300);
+      assert.ok(snippet.includes('read + write + fresh'), 'denominator = read+write+fresh');
+    });
+
+    it('should estimate cache savings using per-model pricing', () => {
+      const fnIdx = js.indexOf('function calcEntryCacheSavings');
+      assert.ok(fnIdx !== -1, 'calcEntryCacheSavings defined');
+      const snippet = js.slice(fnIdx, fnIdx + 500);
+      assert.ok(snippet.includes('resolvePricingKey'), 'uses per-model pricing key');
+      assert.ok(snippet.includes('p.input - p.cacheRead'), 'read savings vs input rate');
+      assert.ok(snippet.includes('p.cacheCreation - p.input'), 'write surcharge vs input rate');
+    });
+
+    it('should render workspace cache table sorted by cache volume', () => {
+      const fnIdx = js.indexOf('function renderTokensCache');
+      const snippet = js.slice(fnIdx, fnIdx + 6000);
+      assert.ok(snippet.includes('DATA.scopes'), 'iterates scopes');
+      assert.ok(snippet.includes('(b.read + b.write) - (a.read + a.write)'), 'sorted by cache volume');
+      assert.ok(snippet.includes('cacheByProjectTitle'), 'i18n title key used');
+      assert.ok(snippet.includes('cacheFormulaNote'), 'hit-ratio formula stated in UI');
+    });
+
+    it('should have cache page i18n keys in both locales', () => {
+      const en = JSON.parse(fs.readFileSync(path.join(TEMPLATES, 'locales', 'en.json'), 'utf-8'));
+      const ko = JSON.parse(fs.readFileSync(path.join(TEMPLATES, 'locales', 'ko.json'), 'utf-8'));
+      const keys = ['tokensCache', 'cachePageDesc', 'cacheFormulaNote', 'cacheWrite',
+        'cacheEstSavings', 'cacheEstSavingsNote', 'cacheTrendTitle', 'cacheTrendDesc',
+        'cacheHourlyTitle', 'cacheHourlyDesc', 'cacheByProjectTitle', 'cacheByProjectDesc',
+        'cacheColWorkspace', 'cacheCurrentScope'];
+      for (const key of keys) {
+        assert.ok(en[key], `en.json missing: ${key}`);
+        assert.ok(ko[key], `ko.json missing: ${key}`);
+      }
+    });
+
     // ── F8 Token Breakdown ────────────────────────────────────────────────
     it('should define renderBreakdown function', () => {
       assert.ok(js.includes('function renderBreakdown'));
@@ -379,7 +438,7 @@ describe('Web UI — Templates', () => {
       assert.ok(js.includes("'breakdown'"), 'breakdown route literal');
       // breakdown should expand _tokens area
       const applyHashIdx = js.indexOf('function applyHash');
-      const snippet = js.slice(applyHashIdx, applyHashIdx + 1500);
+      const snippet = js.slice(applyHashIdx, applyHashIdx + 2500);
       assert.ok(snippet.includes("'breakdown'"), 'breakdown in applyHash');
       assert.ok(snippet.includes('_tokens'), 'breakdown expands tokens group');
     });
@@ -467,6 +526,20 @@ describe('Web UI — Templates', () => {
       assert.ok(headValueIdx !== -1, 'usage-bar-head-value present');
       // value-label div must come BEFORE head-value div (above the number)
       assert.ok(valLabelIdx < headValueIdx, 'value label rendered before total');
+    });
+
+    it('should have daily usage anomaly section on overview', () => {
+      // Pure detection logic lives in templates/anomaly.mjs (unit-tested in
+      // test/anomaly.test.mjs); app.js renders the list and binds navigation.
+      assert.ok(js.includes('buildDailyUsageSeries'), 'daily series builder used');
+      assert.ok(js.includes('detectDailyAnomalies'), 'anomaly detector used');
+      assert.ok(js.includes("t('anomalyTitle')"), 'section title localized');
+      assert.ok(js.includes("t('anomalyVsAvg'"), 'multiplier label localized');
+      // Clicking a flagged day reuses the existing custom-date-range path
+      assert.ok(js.includes('data-action="goto-anomaly-day"'), 'row click action rendered');
+      assert.ok(js.includes("[data-action=\"goto-anomaly-day\"]"), 'click handler bound');
+      // Token trend chart marks anomalous days via x-grid lines
+      assert.ok(js.includes('anomaly-grid-line'), 'grid line class used on token trend chart');
     });
 
     it('should render changeBadge before total (% then number order)', () => {
@@ -636,6 +709,8 @@ describe('Web UI — Templates', () => {
         'tokensCost', 'tokensPrompt', 'tokensSession',
         'costTrend', 'budgetTitle', 'budgetDaily', 'budgetWeekly', 'budgetMonthly',
         'budgetSave', 'budgetClear', 'budgetExceeded', 'budgetExceededDetail', 'budgetDesc',
+        'budgetAlertWarnTitle', 'budgetAlertOverTitle', 'budgetAlertLine', 'budgetAlertDismiss',
+        'digestTitle', 'digestDesc', 'digestCost', 'digestTokens', 'digestSessions', 'digestPrevWeek', 'digestVsPrev',
         'sessionDetail', 'sessionBackToSession', 'sessionDuration', 'sessionMessages',
         'sessionModels', 'sessionInvoked', 'sessionTimeline', 'sessionTopList', 'sessionTopListHint',
         'compareToggle', 'comparePrev',
@@ -667,6 +742,10 @@ describe('Web UI — Templates', () => {
         'bdStartupPerSession', 'bdStartupSessions', 'bdStartupNote',
         'bdStartupClaudeMd', 'bdStartupSkills', 'bdStartupPrinciples',
         'bdStartupMcp', 'bdStartupMemory',
+        // Daily usage anomalies
+        'anomalyTitle', 'anomalyDesc', 'anomalyKindTokens', 'anomalyKindCost',
+        'anomalyKindBoth', 'anomalyVsAvg', 'anomalyMore', 'anomalyClickHint',
+        'anomalyGridLabel',
       ];
       for (const key of requiredKeys) {
         assert.ok(en[key], `missing en key: ${key}`);

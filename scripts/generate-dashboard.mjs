@@ -45,8 +45,10 @@ import { parseTeams } from './parsers/teams.mjs';
 import { parsePlans } from './parsers/plans.mjs';
 import { parseTodos } from './parsers/todos.mjs';
 import { parseConfigFiles } from './parsers/config-files.mjs';
+import { lintScope } from './parsers/lint.mjs';
 import { parseUsage, loadMtimeIndex, saveMtimeIndex, scanTranscriptMonths } from './parsers/usage.mjs';
 import { detectScopes } from './parsers/scopes.mjs';
+import { computeWeeklyDigestsFromDb } from './digest.mjs';
 import { toMonthKey } from './util.mjs';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -743,6 +745,12 @@ async function main() {
       try {
         const existingData = JSON.parse(fs.readFileSync(dataPath, 'utf-8'));
         existingData.generatedAt = new Date().toISOString();
+        // Refresh the weekly digest (cheap: 14-day SQLite query per scope)
+        if (dbModule) {
+          const digestScopes = Object.keys(existingData.scopeData || { global: true });
+          const digest = computeWeeklyDigestsFromDb(dbModule, OUTPUT, digestScopes, existingData.modelPricing || null);
+          if (Object.keys(digest).length > 0) existingData.weeklyDigest = digest;
+        }
         if (!existingData.pricingFetchedAt && fs.existsSync(PRICING_CACHE_FILE)) {
           try {
             const pc = JSON.parse(fs.readFileSync(PRICING_CACHE_FILE, 'utf-8'));
@@ -826,7 +834,8 @@ async function main() {
       try { fs.unlinkSync(path.join(OUTPUT, 'cache', 'mtime-index.json')); } catch { /* ignore */ }
     }
     const dbCtxNames = getDbCtxNames();
-    const phase2Data = buildDataObject(scopes, phase2ScopeData, systemLocale, dbCtxNames, { _firstRun: true, _dateRange: getDbDateRange(), modelPricing, pricingFetchedAt });
+    const weeklyDigest = computeWeeklyDigestsFromDb(dbModule, OUTPUT, scopes.map(s => s.id), modelPricing);
+    const phase2Data = buildDataObject(scopes, phase2ScopeData, systemLocale, dbCtxNames, { _firstRun: true, _dateRange: getDbDateRange(), modelPricing, pricingFetchedAt, weeklyDigest });
     writeDataJs(phase2Data, dataPath);
   } else {
     // Normal mode: structure scan + incremental SQLite update
@@ -918,7 +927,8 @@ async function main() {
     }
 
     const dbCtxNames = getDbCtxNames();
-    const data = buildDataObject(scopes, scopeData, systemLocale, dbCtxNames, { _dateRange: getDbDateRange(), modelPricing, pricingFetchedAt });
+    const weeklyDigest = computeWeeklyDigestsFromDb(dbModule, OUTPUT, scopes.map(s => s.id), modelPricing);
+    const data = buildDataObject(scopes, scopeData, systemLocale, dbCtxNames, { _dateRange: getDbDateRange(), modelPricing, pricingFetchedAt, weeklyDigest });
     writeDataJs(data, dataPath);
 
     if (!needsMigration && !process.env.CI) {
@@ -1220,6 +1230,7 @@ function writeHtml(indexPath, systemLocale) {
     'context-optimizer.mjs',
     'session-bookmarks.mjs',
     'cache-ttl.mjs',
+    'anomaly.mjs',
   ].map(f => stripExports(fs.readFileSync(path.join(TEMPLATES, f), 'utf-8'))).join('\n');
 
   const rawAppJs = (INLINED_MODULES + '\n' + fs.readFileSync(path.join(TEMPLATES, 'app.js'), 'utf-8'))
@@ -1265,7 +1276,7 @@ function needsHtmlRebuild(indexPath) {
     if (!fs.existsSync(path.join(staticDir, `styles-${pkg.version}.css`))) return true;
     // Rebuild if any template file is newer than the output
     const outMtime = fs.statSync(indexPath).mtimeMs;
-    const templateFiles = ['app.js', 'styles.css', 'dashboard.html', 'session-events.mjs', 'context-example.mjs', 'cost-projection.mjs', 'canvas-bars.mjs', 'regression.mjs', 'health-score.mjs', 'context-optimizer.mjs', 'session-bookmarks.mjs', 'cache-ttl.mjs'].map(f => path.join(TEMPLATES, f));
+    const templateFiles = ['app.js', 'styles.css', 'dashboard.html', 'session-events.mjs', 'context-example.mjs', 'cost-projection.mjs', 'canvas-bars.mjs', 'regression.mjs', 'health-score.mjs', 'context-optimizer.mjs', 'session-bookmarks.mjs', 'cache-ttl.mjs', 'anomaly.mjs'].map(f => path.join(TEMPLATES, f));
     return templateFiles.some(f => fs.existsSync(f) && fs.statSync(f).mtimeMs > outMtime);
   } catch { return true; }
 }
@@ -1298,8 +1309,12 @@ async function collectScopeData(configDir, { days = 0, cache, cachePath, skipUsa
 
   const usage = skipUsage ? emptyScopeData().usage : await parseUsage(configDir, days, null, { cache, cachePath });
 
+  const lint = safeCall(() => lintScope(syncData, {
+    settingsPath: path.join(configDir, 'settings.json'),
+    claudeConfigDir: CLAUDE_CONFIG_DIR,
+  }));
   const contextStats = computeContextStats(syncData, configDir, { type: 'global', configPath: configDir });
-  return { ...syncData, contextStats, usage };
+  return { ...syncData, lint, contextStats, usage };
 }
 
 /** Collect project scope data */
@@ -1329,8 +1344,12 @@ async function collectProjectData(configPath, projectPath, { days = 0, cache, ca
     try { usage = await parseUsage(CLAUDE_CONFIG_DIR, days, configPath, { cache, cachePath }); } catch { /* fallback */ }
   }
 
+  const lint = safeCall(() => lintScope(syncData, {
+    settingsPath: path.join(projectClaudeDir, 'settings.json'),
+    claudeConfigDir: CLAUDE_CONFIG_DIR,
+  }));
   const contextStats = computeContextStats(syncData, CLAUDE_CONFIG_DIR, { type: 'project', configPath, projectPath });
-  return { ...syncData, contextStats, usage };
+  return { ...syncData, lint, contextStats, usage };
 }
 
 /**
@@ -1409,7 +1428,7 @@ function emptyScopeData() {
   return {
     configFiles: [], skills: [], agents: [], plugins: [], hooks: [],
     memory: [], mcpServers: [], rules: [], principles: [],
-    commands: [], teams: [], plans: [], todos: [],
+    commands: [], teams: [], plans: [], todos: [], lint: [],
     contextStats: null,
     usage: { commands: [], skills: [], agents: [], mcpCalls: [], tokenEntries: [], promptStats: [], latencyEntries: [], dailyActivity: [] },
   };
