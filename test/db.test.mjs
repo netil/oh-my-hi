@@ -9,6 +9,7 @@ import { createRequire } from 'module';
 import {
   openDb,
   getSchemaVersion,
+  getMachineId,
   appendUsage,
   upsertUsage,
   queryUsage,
@@ -44,9 +45,18 @@ function cleanDir(dir) {
 // ── Schema ──────────────────────────────────────────────────────────────────
 
 describe('Schema', () => {
-  it('openDb creates a v1 schema (fresh install)', () => {
+  it('openDb creates a v2 schema (fresh install)', () => {
     const db = freshDb();
-    assert.equal(getSchemaVersion(db), 1);
+    assert.equal(getSchemaVersion(db), 2);
+    db.close();
+  });
+
+  it('all usage-bearing tables have a machine column', () => {
+    const db = freshDb();
+    for (const table of ['token_entries', 'prompt_entries', 'skill_usage', 'agent_usage', 'mcp_calls', 'latency_entries']) {
+      const cols = db.prepare(`PRAGMA table_info(${table})`).all().map(r => r.name);
+      assert.ok(cols.includes('machine'), `${table} has machine column`);
+    }
     db.close();
   });
 

@@ -89,25 +89,28 @@ export function getSchemaVersion(db) {
  */
 function migrate(db) {
   const v = getSchemaVersion(db);
-  if (v === 0) { initSchema(db); return; }
-  // Add latency_entries for DBs created before it was added to the schema (user_version <= 6)
-  const hasLatency = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='latency_entries'").get();
-  if (!hasLatency) {
-    db.transaction(() => {
-      db.exec(`
-        CREATE TABLE latency_entries (
-          scope      TEXT    NOT NULL,
-          session_id TEXT,
-          timestamp  INTEGER NOT NULL,
-          latency_ms INTEGER NOT NULL,
-          model      TEXT,
-          UNIQUE(scope, timestamp, session_id)
-        );
-        CREATE INDEX idx_le_scope_ts ON latency_entries(scope, timestamp);
-      `);
-    })();
+  if (v === 0) {
+    initSchema(db);
+  } else {
+    // Add latency_entries for DBs created before it was added to the schema (user_version <= 6)
+    const hasLatency = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='latency_entries'").get();
+    if (!hasLatency) {
+      db.transaction(() => {
+        db.exec(`
+          CREATE TABLE latency_entries (
+            scope      TEXT    NOT NULL,
+            session_id TEXT,
+            timestamp  INTEGER NOT NULL,
+            latency_ms INTEGER NOT NULL,
+            model      TEXT,
+            UNIQUE(scope, timestamp, session_id)
+          );
+          CREATE INDEX idx_le_scope_ts ON latency_entries(scope, timestamp);
+        `);
+      })();
+    }
+    if (v < 2) migrateToV2(db);
   }
-  if (v < 2) migrateToV2(db);
   // Full-text search over user prompt texts (FTS5 virtual table).
   // Created lazily for both fresh and pre-existing DBs. Wrapped in try/catch:
   // if this SQLite build lacks FTS5, search is silently unavailable —
