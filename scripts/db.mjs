@@ -115,6 +115,15 @@ function migrate(db) {
   // Created lazily for both fresh and pre-existing DBs. Wrapped in try/catch:
   // if this SQLite build lacks FTS5, search is silently unavailable —
   // writers/readers check table existence via hasFtsTable().
+  // A pre-release prompt_fts without the machine column is dropped and
+  // recreated (the index repopulates on the next full parse) — cheaper and
+  // safer than altering a virtual table.
+  if (hasFtsTable(db)) {
+    try {
+      const cols = db.prepare('PRAGMA table_info(prompt_fts)').all().map((r) => r.name);
+      if (!cols.includes('machine')) db.exec('DROP TABLE prompt_fts');
+    } catch { /* leave as-is — writers gate on hasFtsTable */ }
+  }
   if (!hasFtsTable(db)) {
     try {
       db.exec(`
