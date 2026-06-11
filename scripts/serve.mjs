@@ -6,12 +6,17 @@
 // the SQLite snapshot written by generate-dashboard.mjs:
 //   GET /api/meta         — data.json with usage arrays stripped + segment index
 //   GET /api/usage?...    — queried usage payload from SQLite
+//   GET /api/usage?format=csv|json&from=&to=&scope=
+//                         — token-usage export download (see handleUsageExport)
 
 import http from 'http';
 import fs from 'fs';
 import path from 'path';
 import { execSync, spawnSync } from 'child_process';
 import { fileURLToPath } from 'url';
+import {
+  buildExportRows, toCsv, parseDateParam, exportFilename, PRICING_FALLBACK,
+} from './export.mjs';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -161,7 +166,68 @@ function handleUsageFallback(res, scope) {
   }
 }
 
+/** Pricing table for export cost estimates: build-time fetch (data.json) or fallback. */
+function loadPricing() {
+  try {
+    const data = JSON.parse(fs.readFileSync(DATA_JSON, 'utf-8'));
+    if (data.modelPricing) return data.modelPricing;
+  } catch { /* fall back */ }
+  return PRICING_FALLBACK;
+}
+
+/**
+ * GET /api/usage?format=csv|json — download token usage entries.
+ * Filters:
+ *   from / to — 'YYYY-MM-DD' (UTC day, inclusive) or epoch ms
+ *   scope     — scope id (alias: project), default 'global'
+ * Always responds 200 with a header row / empty array when no data matches.
+ */
+function handleUsageExport(req, res, url, format) {
+  if (format !== 'csv' && format !== 'json') {
+    return sendJson(res, 400, { error: 'bad_format', detail: 'format must be csv or json' });
+  }
+  const scope = url.searchParams.get('scope') || url.searchParams.get('project') || 'global';
+  const fromRaw = url.searchParams.get('from');
+  const toRaw = url.searchParams.get('to');
+  const from = parseDateParam(fromRaw, false);
+  const to = parseDateParam(toRaw, true);
+  if (fromRaw && from == null) return sendJson(res, 400, { error: 'bad_from', detail: 'use YYYY-MM-DD or epoch ms' });
+  if (toRaw && to == null) return sendJson(res, 400, { error: 'bad_to', detail: 'use YYYY-MM-DD or epoch ms' });
+  const fromMs = from ?? 0;
+  const toMs = to ?? Number.MAX_SAFE_INTEGER;
+
+  let entries = [];
+  const dbs = dbModule ? getDbsForRange(fromMs, toMs) : [];
+  if (dbs.length > 0) {
+    try {
+      entries = dbModule.queryTokenEntriesMultiDb(dbs, scope, fromMs, toMs);
+    } catch (e) {
+      return sendJson(res, 500, { error: 'query_failed', detail: e.message });
+    }
+  } else {
+    // SQLite unavailable — fall back to data.json usage when present.
+    try {
+      const data = JSON.parse(fs.readFileSync(DATA_JSON, 'utf-8'));
+      entries = (data.scopeData?.[scope]?.usage?.tokenEntries || [])
+        .filter((e) => { const ts = Number(e.timestamp); return ts >= fromMs && ts <= toMs; });
+    } catch { entries = []; }
+  }
+
+  const rows = buildExportRows(entries, scope, loadPricing());
+  const filename = exportFilename(format);
+  const body = format === 'csv' ? toCsv(rows) : JSON.stringify(rows);
+  res.writeHead(200, {
+    'Content-Type': format === 'csv' ? 'text/csv; charset=utf-8' : 'application/json; charset=utf-8',
+    'Content-Length': Buffer.byteLength(body),
+    'Content-Disposition': `attachment; filename="${filename}"`,
+    'Cache-Control': 'no-store',
+  });
+  res.end(body);
+}
+
 function handleUsage(req, res, url) {
+  const format = url.searchParams.get('format');
+  if (format != null) return handleUsageExport(req, res, url, format.toLowerCase());
   const scope = url.searchParams.get('scope') || 'global';
   const fromRaw = url.searchParams.get('from');
   const toRaw = url.searchParams.get('to');

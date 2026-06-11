@@ -935,6 +935,36 @@ body.dark .sidebar-period-range {
   line-height: 1.6;
 }
 
+.page-header-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+/* ── Usage Export Buttons ── */
+.export-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.export-btn {
+  padding: 5px 12px;
+  border-radius: var(--radius);
+  font-size: 12px;
+  cursor: pointer;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  color: var(--text-secondary);
+  transition: all var(--transition);
+}
+
+.export-btn:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
 /* ── Period Filter ── */
 .period-filter {
   display: flex;
