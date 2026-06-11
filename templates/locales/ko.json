@@ -832,5 +832,14 @@
   "bdStartupSkills": "스킬 설명",
   "bdStartupPrinciples": "원칙 / 규칙",
   "bdStartupMcp": "MCP 툴 목록",
-  "bdStartupMemory": "메모리 (MEMORY.md)"
+  "bdStartupMemory": "메모리 (MEMORY.md)",
+  "anomalyTitle": "이상 사용 감지",
+  "anomalyDesc": "토큰 또는 추정 비용이 직전 7일 평균의 2배를 초과한 날",
+  "anomalyKindTokens": "토큰",
+  "anomalyKindCost": "비용",
+  "anomalyKindBoth": "토큰 · 비용",
+  "anomalyVsAvg": "7일 평균의 {0}배",
+  "anomalyMore": "+{0}건 더 있음",
+  "anomalyClickHint": "토큰 페이지에서 이 날짜 보기",
+  "anomalyGridLabel": "급증"
 }

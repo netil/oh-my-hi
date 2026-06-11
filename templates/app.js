@@ -2865,6 +2865,12 @@ window.name = 'oh-my-hi';
       colors[prevLabel] = '#adb5bd';
     }
 
+    // Mark anomalous days (spike vs trailing 7-day baseline) with x-grid lines
+    const anomalySeries = buildDailyUsageSeries(tokenEntries, calcEntryCost);
+    const anomalyGridLines = detectDailyAnomalies(anomalySeries.dailyMap, anomalySeries.sortedDates)
+      .filter((a) => dailyInput.hasOwnProperty(a.date))
+      .map((a) => ({ value: a.date, text: '⚠ ' + t('anomalyGridLabel'), class: 'anomaly-grid-line' }));
+
     makeChart({
       bindto: '#token-trend-chart',
       data: {
@@ -2900,6 +2906,7 @@ window.name = 'oh-my-hi';
           }
         }
       },
+      grid: { x: { lines: anomalyGridLines } },
       point: { r: 3, focus: { only: true } },
       legend: { show: true },
       size: { height: 280 },
@@ -3656,6 +3663,42 @@ window.name = 'oh-my-hi';
       + '<div class="card chart-card"><div id="trend-chart" style="padding-top:10px"></div></div>'
       + '</div>'
       + '</div>';
+
+    // Anomalies — daily token/cost spikes vs trailing 7-day baseline.
+    // Baselines are computed over the full available history so the rolling
+    // mean stays accurate; the period filter only narrows which days are shown.
+    const anomalySeries = buildDailyUsageSeries(usage.tokenEntries || [], calcEntryCost);
+    const allAnomalies = detectDailyAnomalies(anomalySeries.dailyMap, anomalySeries.sortedDates);
+    const anomalyList = filterByPeriod(
+      allAnomalies.map((a) => Object.assign({ timestamp: a.date + 'T12:00:00' }, a)),
+      'timestamp', days
+    );
+    if (anomalyList.length > 0) {
+      const shownAnomalies = anomalyList.slice(0, 5);
+      const moreAnomalies = anomalyList.length - shownAnomalies.length;
+      html += '<div class="section">'
+        + '<div class="section-title">' + t('anomalyTitle') + ' (' + anomalyList.length + ') <span class="section-title-sub">' + t('anomalyDesc') + '</span></div>'
+        + '<div class="card anomaly-list">';
+      shownAnomalies.forEach((a) => {
+        const isTok = a.kind !== 'cost';
+        const ratio = isTok ? a.tokenRatio : a.costRatio;
+        const kindLabel = a.kind === 'cost' ? t('anomalyKindCost') : a.kind === 'both' ? t('anomalyKindBoth') : t('anomalyKindTokens');
+        const valueHtml = a.kind === 'cost' ? fmtCost(a.cost)
+          : a.kind === 'both' ? fmtCompact(a.tokens) + ' · ' + fmtCost(a.cost)
+          : fmtCompact(a.tokens);
+        html += '<div class="anomaly-item" data-action="goto-anomaly-day" data-date="' + a.date + '" title="' + t('anomalyClickHint') + '">'
+          + '<span class="anomaly-icon">⚠️</span>'
+          + '<span class="anomaly-date">' + a.date.replace(/-/g, '.') + '</span>'
+          + '<span class="anomaly-kind">' + kindLabel + '</span>'
+          + '<span class="anomaly-value">' + valueHtml + '</span>'
+          + '<span class="anomaly-mult">' + t('anomalyVsAvg', fmtCompact(Math.round(ratio * 10) / 10)) + '</span>'
+          + '</div>';
+      });
+      if (moreAnomalies > 0) {
+        html += '<div class="anomaly-more">' + t('anomalyMore', moreAnomalies) + '</div>';
+      }
+      html += '</div></div>';
+    }
 
     // Popular Skills
     if (popularSkills.length > 0) {
@@ -7584,6 +7627,36 @@ window.name = 'oh-my-hi';
         expandedCategories._tokens = true;
         pushState(true);
         render();
+      });
+    });
+    // Anomaly row click → tokens page filtered to that single day.
+    // Reuses the calendar-picker custom range path (customDateRange +
+    // currentPeriod = -1), so no new drill-down infrastructure is needed.
+    content.querySelectorAll('[data-action="goto-anomaly-day"]').forEach((el) => {
+      el.addEventListener('click', () => {
+        const dk = el.dataset.date;
+        if (!dk) return;
+        const p = dk.split('-').map((x) => parseInt(x, 10));
+        customDateRange = {
+          start: new Date(p[0], p[1] - 1, p[2]),
+          end: new Date(p[0], p[1] - 1, p[2], 23, 59, 59)
+        };
+        currentPeriod = -1;
+        localStorage.setItem('harness-period', String(currentPeriod));
+        currentView = 'tokens';
+        currentDetail = null;
+        expandedCategories._tokens = true;
+        pushState(true);
+        render();
+        // API mode: refetch usage for the selected day.
+        if (DATA._apiMode) {
+          const range = computeCurrentPeriodRange();
+          if (range) {
+            fetchUsageForPeriod(currentScope, range.from, range.to).then((ok) => {
+              if (ok) render();
+            });
+          }
+        }
       });
     });
     // F5: Regression banner insight → navigate to sub-page

@@ -832,5 +832,14 @@
   "bdStartupSkills": "Skill descriptions",
   "bdStartupPrinciples": "Principles / Rules",
   "bdStartupMcp": "MCP tool listings",
-  "bdStartupMemory": "Memory (MEMORY.md)"
+  "bdStartupMemory": "Memory (MEMORY.md)",
+  "anomalyTitle": "Anomalies",
+  "anomalyDesc": "Days where tokens or estimated cost exceeded 2× the trailing 7-day average",
+  "anomalyKindTokens": "Tokens",
+  "anomalyKindCost": "Cost",
+  "anomalyKindBoth": "Tokens · Cost",
+  "anomalyVsAvg": "{0}× of 7-day avg",
+  "anomalyMore": "+{0} more",
+  "anomalyClickHint": "View this day on the Tokens page",
+  "anomalyGridLabel": "spike"
 }
