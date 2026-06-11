@@ -1915,7 +1915,7 @@ window.name = 'oh-my-hi';
       ratioData.push(cacheHitRatioPct(d.read, d.write, d.fresh));
     }
 
-    bb.generate({
+    makeChart({
       bindto: '#cache-trend-chart',
       data: {
         x: 'x',
@@ -1966,7 +1966,7 @@ window.name = 'oh-my-hi';
     const hourRatio = hours.map((h) => cacheHitRatioPct(h.read, h.write, h.fresh));
 
     const categories = Array.from({ length: 24 }, (_, i) => i + t('unitHourSuffix'));
-    bb.generate({
+    makeChart({
       bindto: '#cache-hourly-chart',
       data: {
         columns: [[t('cacheHitRate')].concat(hourRatio)],
