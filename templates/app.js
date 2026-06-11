@@ -981,7 +981,8 @@ window.name = 'oh-my-hi';
     html += navItem('context', '🪟', t('contextExplorer'), null, currentView === 'context' && !currentDetail);
     html += navItem('tokens-prompt', '💬', t('tokensPrompt'), null, currentView === 'tokens-prompt');
     html += navItem('tokens-session', '📋', t('tokensSession'), null, currentView === 'tokens-session' || currentView === 'session');
-    html += navItem('structure', '🗂️', t('structure'), null, currentView === 'structure' && !currentDetail);
+    const lintCount = (sd.lint || []).length;
+    html += navItem('structure', '🗂️', t('structure'), lintCount > 0 ? '⚠️ ' + fmtNum(lintCount) : null, currentView === 'structure' && !currentDetail);
     html += '<div class="nav-separator"></div>';
 
     // F2: top 3 cost contributors for 🔥 badges on sidebar.
@@ -4151,12 +4152,50 @@ window.name = 'oh-my-hi';
   }
 
   // ── Structure page ──
+  function getLintWarnings() {
+    return getScopeData().lint || [];
+  }
+
+  function lintMessage(w) {
+    return t.apply(null, ['lint_' + w.code].concat(w.args || []));
+  }
+
   function renderStructure() {
     let sd = getScopeData();
     let html = '<div class="page-header">'
       + '<h1>' + t('structure') + '</h1>'
       + '<div class="subtext">' + t('structureSub') + '</div>'
       + '</div>';
+
+    // Health check summary
+    const lint = getLintWarnings();
+    html += '<div class="section">'
+      + '<div class="section-title">' + t('lintTitle') + '</div>';
+    if (lint.length === 0) {
+      html += '<div class="card lint-card"><div class="lint-all-clear">✅ ' + t('lintAllClear') + '</div></div>';
+    } else {
+      html += '<div class="card lint-card">'
+        + '<div class="lint-summary">⚠️ ' + t('lintWarnCount', fmtNum(lint.length)) + '</div>';
+      CATEGORIES.forEach((cat) => {
+        const group = lint.filter((w) => { return w.category === cat.key; });
+        if (group.length === 0) return;
+        html += '<div class="lint-group">'
+          + '<div class="lint-group-header">'
+          + '<span class="tree-icon">' + cat.icon + '</span>'
+          + '<span class="lint-group-label">' + getCatLabel(cat) + '</span>'
+          + '<span class="lint-warn-badge">' + fmtNum(group.length) + '</span>'
+          + '</div>';
+        group.forEach((w) => {
+          html += '<div class="lint-item">'
+            + '<div class="lint-item-msg">' + escapeHtml(lintMessage(w)) + '</div>'
+            + '<div class="lint-item-file">' + escapeHtml(w.file || '') + '</div>'
+            + '</div>';
+        });
+        html += '</div>';
+      });
+      html += '</div>';
+    }
+    html += '</div>';
 
     // Flowchart
     html += '<div class="section">'
@@ -4173,12 +4212,14 @@ window.name = 'oh-my-hi';
       let items = sd[cat.key] || [];
       if (items.length === 0) return;
       const isExpanded = expandedCategories['tree_' + cat.key] || false;
+      const catWarns = lint.filter((w) => { return w.category === cat.key; }).length;
 
       html += '<div class="tree-category">'
         + '<div class="tree-category-header" data-action="toggle-tree" data-tree-key="' + cat.key + '">'
         + '<span class="tree-icon">' + cat.icon + '</span>'
         + '<span class="tree-label">' + getCatLabel(cat) + '</span>'
         + '<span class="tree-count" style="background:' + cat.color + '">' + fmtNum(items.length) + '</span>'
+        + (catWarns > 0 ? '<span class="lint-warn-badge" title="' + escapeHtml(t('lintWarnCount', fmtNum(catWarns))) + '">⚠️ ' + fmtNum(catWarns) + '</span>' : '')
         + '<span class="tree-chevron' + (isExpanded ? ' expanded' : '') + '">▶</span>'
         + '</div>'
         + '<div class="tree-items' + (isExpanded ? ' open' : '') + '" data-tree-items="' + cat.key + '">';

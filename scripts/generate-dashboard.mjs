@@ -45,6 +45,7 @@ import { parseTeams } from './parsers/teams.mjs';
 import { parsePlans } from './parsers/plans.mjs';
 import { parseTodos } from './parsers/todos.mjs';
 import { parseConfigFiles } from './parsers/config-files.mjs';
+import { lintScope } from './parsers/lint.mjs';
 import { parseUsage, savePending, mergePending, hasPending, loadMtimeIndex, saveMtimeIndex, scanTranscriptMonths } from './parsers/usage.mjs';
 import { detectScopes } from './parsers/scopes.mjs';
 import { toMonthKey } from './util.mjs';
@@ -1286,8 +1287,12 @@ async function collectScopeData(configDir, { days = 0, cache, cachePath, skipUsa
 
   const usage = skipUsage ? emptyScopeData().usage : await parseUsage(configDir, days, null, { cache, cachePath });
 
+  const lint = safeCall(() => lintScope(syncData, {
+    settingsPath: path.join(configDir, 'settings.json'),
+    claudeConfigDir: CLAUDE_CONFIG_DIR,
+  }));
   const contextStats = computeContextStats(syncData, configDir, { type: 'global', configPath: configDir });
-  return { ...syncData, contextStats, usage };
+  return { ...syncData, lint, contextStats, usage };
 }
 
 /** Collect project scope data */
@@ -1317,8 +1322,12 @@ async function collectProjectData(configPath, projectPath, { days = 0, cache, ca
     try { usage = await parseUsage(CLAUDE_CONFIG_DIR, days, configPath, { cache, cachePath }); } catch { /* fallback */ }
   }
 
+  const lint = safeCall(() => lintScope(syncData, {
+    settingsPath: path.join(projectClaudeDir, 'settings.json'),
+    claudeConfigDir: CLAUDE_CONFIG_DIR,
+  }));
   const contextStats = computeContextStats(syncData, CLAUDE_CONFIG_DIR, { type: 'project', configPath, projectPath });
-  return { ...syncData, contextStats, usage };
+  return { ...syncData, lint, contextStats, usage };
 }
 
 /**
@@ -1397,7 +1406,7 @@ function emptyScopeData() {
   return {
     configFiles: [], skills: [], agents: [], plugins: [], hooks: [],
     memory: [], mcpServers: [], rules: [], principles: [],
-    commands: [], teams: [], plans: [], todos: [],
+    commands: [], teams: [], plans: [], todos: [], lint: [],
     contextStats: null,
     usage: { commands: [], skills: [], agents: [], mcpCalls: [], tokenEntries: [], promptStats: [], latencyEntries: [], dailyActivity: [] },
   };
