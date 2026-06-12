@@ -157,6 +157,9 @@ window.name = 'oh-my-hi';
   let currentView = 'overview';
   let currentDetail = null;
   let currentPeriod = parseInt(localStorage.getItem('harness-period') || '30');
+  // -1 means a custom date range was active, but customDateRange is not
+  // persisted across page loads. Reset to 30d to avoid invalid calculations.
+  if (currentPeriod < 0) { currentPeriod = 30; localStorage.setItem('harness-period', '30'); }
   let customDateRange = null; // { start: Date, end: Date }
   const expandedCategories = {};
   // Sidebar progressive rendering: categories with more children than
@@ -167,6 +170,7 @@ window.name = 'oh-my-hi';
   const SIDEBAR_ITEM_LIMIT = 50;
   const sidebarShowAll = new Set();
   let searchQuery = '';
+  let activeInsightSource = 'all';
   let tokenBudget = null;
   try { tokenBudget = JSON.parse(localStorage.getItem('harness-budget') || 'null'); } catch (e) { /* ignore corrupt value */ }
   let currentSessionId = null;
@@ -605,6 +609,9 @@ window.name = 'oh-my-hi';
       currentView = view;
       currentDetail = { category: view, name: name };
       expandedCategories[view] = true;
+    } else if (view === 'insights') {
+      currentView = 'insights';
+      currentDetail = null;
     } else if (view === 'overview' || view === 'structure' || view === 'context' || view === 'tokens' || view === 'tokens-cost' || view === 'tokens-cache' || view === 'tokens-prompt' || view === 'tokens-session' || view === 'tokens-analysis' || view === 'breakdown' || view === 'help') {
       currentView = view === 'tokens-analysis' ? 'tokens-prompt' : view;
       currentDetail = null;
@@ -812,7 +819,7 @@ window.name = 'oh-my-hi';
   }
 
   function filterByPeriod(items, dateField, days) {
-    if (days === 0 && !customDateRange) return items;
+    if ((days === 0 || days < 0) && !customDateRange) return items;
     if (customDateRange) {
       return items.filter((i) => {
         let d = new Date(i[dateField]);
@@ -1300,6 +1307,11 @@ window.name = 'oh-my-hi';
     html += navItem('tokens-session', '📋', t('tokensSession'), null, currentView === 'tokens-session' || currentView === 'session');
     const lintCount = (sd.lint || []).length;
     html += navItem('structure', '🗂️', t('structure'), lintCount > 0 ? '⚠️ ' + fmtNum(lintCount) : null, currentView === 'structure' && !currentDetail);
+    const usage = getUsage();
+    const insightsBadge = (typeof computeAllInsights === 'function')
+      ? (function() { var all = computeAllInsights(usage, currentPeriod, sd); return all.length > 0 ? fmtNum(all.length) : null; })()
+      : null;
+    html += navItem('insights', '💡', t('insights'), insightsBadge, currentView === 'insights');
     html += '<div class="nav-separator"></div>';
 
     // F2: top 3 cost contributors for 🔥 badges on sidebar.
@@ -1485,6 +1497,8 @@ window.name = 'oh-my-hi';
       renderSessionDetail();
     } else if (currentView === 'structure') {
       renderStructure();
+    } else if (currentView === 'insights') {
+      renderInsightsPage();
     } else if (currentView === 'context') {
       renderContextExplorer();
     } else if (currentView === 'compare') {
@@ -1513,7 +1527,7 @@ window.name = 'oh-my-hi';
     } else if (currentPeriod === 0) {
       const range = getDataDateRange();
       if (range) { rangeStart = range.start; rangeEnd = range.end; }
-    } else {
+    } else if (currentPeriod > 0) {
       rangeEnd = now;
       rangeStart = new Date(now);
       rangeStart.setDate(rangeStart.getDate() - (currentPeriod - 1));
@@ -4335,8 +4349,8 @@ window.name = 'oh-my-hi';
       html += '</div></div>';
     }
 
-    // Optimizer suggestions
-    html += renderOptimizerSection(usage, days, sd);
+    // Insights summary banner (compact; full view on #insights page)
+    html += renderInsightsBanner(usage, days, sd);
 
     html += '<div class="generated-at">' + t('generatedAt') + ' ' + formatDateTime(DATA.generatedAt) + ' · ' + (DATA.configDir || '') + '</div>';
 
@@ -4888,6 +4902,138 @@ window.name = 'oh-my-hi';
     return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
   }
 
+  // ── Insights page ──
+  // Render insight detail: if the string contains "text: item1, item2, ..." pattern,
+  // split at the first colon and render items after it as inline tag chips.
+  function renderInsightDetail(detail) {
+    var colonIdx = detail.indexOf(': ');
+    if (colonIdx === -1) return escapeHtml(detail);
+    var prose = detail.slice(0, colonIdx + 2); // "30일간 호출이 없는 MCP 서버 5개: "
+    var rest = detail.slice(colonIdx + 2);     // "naver-works-mcp, github, ..."
+    // Only treat as list if it looks like comma-separated short tokens (no spaces within items, or short words)
+    var items = rest.split(',').map(function(s) { return s.trim(); }).filter(Boolean);
+    if (items.length < 2) return escapeHtml(detail);
+    var chips = items.map(function(item) {
+      return '<code class="insight-detail-chip">' + escapeHtml(item) + '</code>';
+    }).join(' ');
+    return '<span class="insight-detail-prose">' + escapeHtml(prose) + '</span>' + chips;
+  }
+
+  function renderInsightsPage() {
+    var usage = getUsage();
+    var sd = getScopeData();
+    var allInsights = (typeof computeAllInsights === 'function')
+      ? computeAllInsights(usage, currentPeriod, sd)
+      : [];
+
+    // Source filter buttons
+    var sources = ['all', 'optimizer', 'anomaly', 'lint', 'cache'];
+    var counts = { all: allInsights.length };
+    sources.slice(1).forEach(function(src) {
+      counts[src] = allInsights.filter(function(i) { return i.source === src; }).length;
+    });
+
+    // Severity summary counts
+    var sevCounts = { high: 0, medium: 0, low: 0, info: 0 };
+    allInsights.forEach(function(i) { if (sevCounts[i.severity] !== undefined) sevCounts[i.severity]++; });
+
+    // Filter bar
+    var filterHtml = '<div class="insight-filter-bar">';
+    sources.forEach(function(src) {
+      var label = src === 'all' ? t('insightsAll') : t('insightsSource_' + src);
+      var isActive = activeInsightSource === src;
+      filterHtml += '<button class="insight-filter-btn' + (isActive ? ' active' : '') + '" data-action="insight-filter" data-source="' + src + '">'
+        + escapeHtml(label)
+        + (counts[src] > 0 ? ' <span>' + fmtNum(counts[src]) + '</span>' : '')
+        + '</button>';
+    });
+
+    // Severity summary (right-aligned via margin-left:auto on the element)
+    var sevHtml = '<div class="insight-severity-summary">';
+    if (sevCounts.high > 0)   sevHtml += '<span class="sev-high">● ' + fmtNum(sevCounts.high) + ' High</span>';
+    if (sevCounts.medium > 0) sevHtml += '<span class="sev-medium">● ' + fmtNum(sevCounts.medium) + ' Medium</span>';
+    if (sevCounts.low > 0)    sevHtml += '<span class="sev-low">● ' + fmtNum(sevCounts.low) + ' Low</span>';
+    if (sevCounts.info > 0)   sevHtml += '<span class="sev-info">● ' + fmtNum(sevCounts.info) + ' Info</span>';
+    sevHtml += '</div>';
+    filterHtml += sevHtml + '</div>';
+
+    // Filtered list
+    var filtered = activeInsightSource === 'all'
+      ? allInsights
+      : allInsights.filter(function(i) { return i.source === activeInsightSource; });
+
+    var listHtml = '';
+    if (filtered.length === 0) {
+      listHtml = '<div class="insight-empty">' + escapeHtml(t('insightsEmpty')) + '</div>';
+    } else {
+      listHtml = '<div class="insight-row-list">';
+      filtered.forEach(function(ins) {
+        // Click navigation
+        var actionAttr = '';
+        if (ins.source === 'optimizer') {
+          actionAttr = ' data-action="nav" data-view="overview"';
+        } else if (ins.source === 'lint') {
+          actionAttr = ' data-action="nav" data-view="structure"';
+        } else if (ins.source === 'anomaly' && ins.meta && ins.meta.date) {
+          actionAttr = ' data-action="goto-anomaly-day" data-date="' + escapeHtml(ins.meta.date) + '"';
+        }
+
+        // Impact block — tokens + cost as labeled pairs
+        var impactHtml = '';
+        if (ins.impact && (ins.impact.tokens || ins.impact.cost)) {
+          var isAnomaly = ins.source === 'anomaly';
+          impactHtml = '<div class="insight-row-impact">';
+          if (ins.impact.tokens) {
+            impactHtml += '<div class="insight-impact-item">'
+              + '<span class="insight-impact-label">' + (isAnomaly ? t('insImpactUsage') : t('insImpactSave')) + '</span>'
+              + '<span class="insight-impact-val">' + (isAnomaly ? '' : '−') + fmtCompact(ins.impact.tokens) + '</span>'
+              + '</div>';
+          }
+          if (ins.impact.cost) {
+            impactHtml += '<div class="insight-impact-item">'
+              + '<span class="insight-impact-label">' + t('insImpactCost') + '</span>'
+              + '<span class="insight-impact-val">' + (isAnomaly ? '' : '−') + fmtCost(ins.impact.cost) + '</span>'
+              + '</div>';
+          }
+          impactHtml += '</div>';
+        }
+
+        var sourceLabel = t('insightsSource_' + ins.source) || ins.source || '';
+        listHtml += '<div class="insight-row" data-sev="' + escapeHtml(ins.severity || 'low') + '"' + actionAttr + '>'
+          + '<span class="insight-row-dot" data-sev="' + escapeHtml(ins.severity || 'low') + '"></span>'
+          + '<div class="insight-row-body">'
+          + '<div class="insight-row-header">'
+          + '<span class="insight-row-title">' + escapeHtml(ins.title || '') + '</span>'
+          + '<span class="insight-source-chip" data-source="' + escapeHtml(ins.source || '') + '">' + escapeHtml(sourceLabel) + '</span>'
+          + '</div>'
+          + (ins.detail ? '<div class="insight-row-detail">' + renderInsightDetail(ins.detail) + '</div>' : '')
+          + '</div>'
+          + impactHtml
+          + '</div>';
+      });
+      listHtml += '</div>';
+    }
+
+    var html = '<div class="page-header">'
+      + '<h1 class="page-title">' + t('insights') + '</h1>'
+      + '</div>'
+      + '<div class="section">'
+      + filterHtml
+      + listHtml
+      + '</div>';
+
+    content.innerHTML = html;
+    bindContentActions();
+
+    // Wire filter buttons
+    content.querySelectorAll('[data-action="insight-filter"]').forEach(function(btn) {
+      btn.addEventListener('click', function() {
+        activeInsightSource = btn.dataset.source || 'all';
+        renderInsightsPage();
+      });
+    });
+  }
+
   // ── Help page ──
   function renderHelp() {
     function helpRow(titleKey, descKey, icon) {
@@ -4995,11 +5141,28 @@ window.name = 'oh-my-hi';
     html += '<div class="section">'
       + '<div class="section-title">💡 ' + t('helpInsightsTitle') + '</div>'
       + '<div class="card help-list">'
-      + helpRow('helpUsageBar', 'helpUsageBarDesc', '▭')
-      + helpRow('helpLogScale', 'helpLogScaleDesc', '📐')
-      + helpRow('helpRegression', 'helpRegressionDesc', '⚠️')
-      + helpRow('helpCostProjection', 'helpCostProjectionDesc', '💰')
+      + helpRow('helpInsightsPage', 'helpInsightsPageDesc', '💡')
+      + helpRow('helpAnomalyDetection', 'helpAnomalyDetectionDesc', '⚠️')
+      + helpRow('helpBudgetAlerts', 'helpBudgetAlertsDesc', '🎯')
+      + helpRow('helpWeeklyDigest', 'helpWeeklyDigestDesc', '📊')
+      + helpRow('helpRegression', 'helpRegressionDesc', '📉')
       + helpRow('helpEfficiency', 'helpEfficiencyDesc', '⚡')
+      + '</div></div>';
+
+    // 🪙 토큰 > 📦 캐시
+    html += '<div class="section">'
+      + '<div class="section-title">' + breadcrumb('🪙 ' + t('tokens'), '📦', t('tokensCache')) + '</div>'
+      + '<div class="card help-list">'
+      + helpRow('helpCachePage', 'helpCachePageDesc', '📦')
+      + '</div></div>';
+
+    // 📤 내보내기 & 검색
+    html += '<div class="section">'
+      + '<div class="section-title">📤 ' + t('helpExport') + ' / 🔍 ' + t('helpFtsSearch') + '</div>'
+      + '<div class="card help-list">'
+      + helpRow('helpExport', 'helpExportDesc', '📤')
+      + helpRow('helpFtsSearch', 'helpFtsSearchDesc', '🔍')
+      + helpRow('helpMultiMachine', 'helpMultiMachineDesc', '🖥️')
       + '</div></div>';
 
     // Data parsing reference
@@ -5142,225 +5305,247 @@ window.name = 'oh-my-hi';
     if (!svg) return;
 
     const sd = getScopeData();
-    let containerW = svg.parentElement.clientWidth - 40;
-    if (containerW < 500) containerW = 500;
 
     const S = 'http://www.w3.org/2000/svg';
-    const nodeH = 36, nodeRx = 8, pad = 16, gap = 12, groupPad = 14, groupRx = 12;
-    const font = '-apple-system, sans-serif';
-    const arrowColor = '#adb5bd';
+    // Horizontal layout constants
+    const nodeW = 148, nodeH = 50, nodeRx = 6;
+    const pad = 24, vGap = 10, groupPad = 16, groupRx = 8, hGap = 32;
+    const font = '-apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
 
-    // --- Data: groups with child nodes ---
+    // Read live CSS variables for theme compatibility
+    const cs = getComputedStyle(document.documentElement);
+    const isDark = document.body.classList.contains('dark');
+    const bgCard   = cs.getPropertyValue('--card-bg').trim()   || (isDark ? '#1c1c1b' : '#ffffff');
+    const bgPage   = cs.getPropertyValue('--bg').trim()        || (isDark ? '#111110' : '#f5f5f4');
+    const clrBorder= cs.getPropertyValue('--border').trim()    || (isDark ? '#2a2927' : '#e7e5e4');
+    const clrBorderStrong = cs.getPropertyValue('--border-strong').trim() || (isDark ? '#3a3937' : '#d6d3d1');
+    const clrText  = cs.getPropertyValue('--text').trim()      || (isDark ? '#e7e5e4' : '#1c1917');
+    const clrMuted = cs.getPropertyValue('--text-secondary').trim() || (isDark ? '#a8a29e' : '#78716c');
+    const clrTertiary = cs.getPropertyValue('--text-tertiary').trim() || (isDark ? '#78716c' : '#a8a29e');
+    const clrAccent= cs.getPropertyValue('--accent').trim()    || (isDark ? '#14b8a6' : '#0f766e');
+    const arrowColor = clrBorderStrong;
+
+    // Category accent colors (from CSS vars, matching sidebar)
+    const catColors = {
+      claudemd: cs.getPropertyValue('--color-skills').trim()     || '#2563eb',
+      rules:    cs.getPropertyValue('--color-rules').trim()      || '#6b7280',
+      memory:   cs.getPropertyValue('--color-memory').trim()     || '#0284c7',
+      hooks:    cs.getPropertyValue('--color-hooks').trim()      || '#d97706',
+      skills:   cs.getPropertyValue('--color-agents').trim()     || '#7c3aed',
+      commands: cs.getPropertyValue('--color-principles').trim() || '#4f46e5',
+      mcp:      cs.getPropertyValue('--color-mcp').trim()        || '#dc2626',
+    };
+
+    // --- Data ---
     let groups = [
-      { id: 'context', label: t('flowContextGroup'), color: '#f1f3f5', borderColor: '#dee2e6',
+      { id: 'context', label: t('flowContextGroup'),
         children: [
-          { id: 'claudemd', label: 'CLAUDE.md', color: '#4263eb', nav: 'configFiles', count: (sd.configFiles || []).length },
-          { id: 'rules', label: t('flowRules'), color: '#6b7280', nav: 'rules', count: (sd.rules || []).length + (sd.principles || []).length },
-          { id: 'memory', label: t('flowMemory'), color: '#0891b2', nav: 'memory', count: (sd.memory || []).length },
+          { id: 'claudemd', label: 'CLAUDE.md',      nav: 'configFiles', count: (sd.configFiles || []).length },
+          { id: 'rules',    label: t('flowRules'),    nav: 'rules',       count: (sd.rules || []).length + (sd.principles || []).length },
+          { id: 'memory',   label: t('flowMemory'),   nav: 'memory',      count: (sd.memory || []).length },
         ]
       },
-      { id: 'event', label: t('flowEventGroup'), color: '#fff4e6', borderColor: '#ffd8a8',
+      { id: 'event', label: t('flowEventGroup'),
         children: [
-          { id: 'hooks', label: t('flowHooksNode'), color: '#e8590c', nav: 'hooks', count: (sd.hooks || []).length },
+          { id: 'hooks', label: t('flowHooksNode'), nav: 'hooks', count: (sd.hooks || []).length },
         ]
       },
-      { id: 'invoke', label: t('flowInvokeGroup'), color: '#f3f0ff', borderColor: '#d0bfff',
+      { id: 'invoke', label: t('flowInvokeGroup'),
         children: [
-          { id: 'skills', label: t('flowSkillsNode'), color: '#7c3aed', nav: 'skills', count: (sd.skills || []).length + (sd.agents || []).length },
-          { id: 'commands', label: t('flowCommandsNode'), color: '#6366f1', nav: 'commands', count: (sd.commands || []).length },
-          { id: 'mcp', label: t('flowMcpNode'), color: '#dc2626', nav: 'mcpServers', count: (sd.mcpServers || []).length },
+          { id: 'skills',   label: t('flowSkillsNode'),   nav: 'skills',     count: (sd.skills || []).length + (sd.agents || []).length },
+          { id: 'commands', label: t('flowCommandsNode'), nav: 'commands',    count: (sd.commands || []).length },
+          { id: 'mcp',      label: t('flowMcpNode'),      nav: 'mcpServers',  count: (sd.mcpServers || []).length },
         ]
       },
     ];
+    groups.forEach((g) => { g.children = g.children.filter((c) => c.count === undefined || c.count > 0); });
+    groups = groups.filter((g) => g.children.length > 0);
 
-    // Filter children with 0 count, remove empty groups
+    // --- Horizontal layout ---
+    // Children stack vertically inside each group; groups flow left → right.
+    const labelH = 24;  // group label area height
+
     groups.forEach((g) => {
-      g.children = g.children.filter((c) => { return c.count === undefined || c.count > 0; });
+      g.innerH = g.children.length * nodeH + (g.children.length - 1) * vGap;
+      g.w = nodeW + groupPad * 2;
+      g.h = labelH + groupPad + g.innerH + groupPad;
     });
-    groups = groups.filter((g) => { return g.children.length > 0; });
 
-    // --- Measure node widths ---
-    function textWidth(str) { return Math.max(90, str.length * 7.5 + 30); }
+    const maxGroupH = groups.reduce(function(m, g) { return Math.max(m, g.h); }, 0);
+    const termH = nodeH;          // prompt / output node height
+    const svgH = Math.max(maxGroupH, termH) + pad * 2;
 
-    // --- Layout ---
-    const promptNode = { id: 'prompt', label: t('flowPromptNode'), color: '#e9ecef', textColor: '#212529', w: 0, h: nodeH };
-    const outputNode = { id: 'output', label: t('flowOutputNode'), color: '#0ca678', textColor: '#fff', w: 0, h: nodeH };
-    promptNode.w = textWidth(promptNode.label);
-    outputNode.w = textWidth(outputNode.label);
+    // Horizontal positions
+    const promptNode = { id: 'prompt', label: t('flowPromptNode'), w: 120, h: termH };
+    const outputNode = { id: 'output', label: t('flowOutputNode'), w: 110, h: termH };
 
-    // Calculate group dimensions
-    let maxGroupW = 0;
+    let curX = pad;
+    promptNode.x = curX; promptNode.y = svgH / 2 - termH / 2;
+    curX += promptNode.w + hGap;
+
     groups.forEach((g) => {
-      let childrenW = 0;
+      g.x = curX; g.y = svgH / 2 - g.h / 2;
+      var startY = g.y + labelH + groupPad;
       g.children.forEach((c) => {
-        c.w = textWidth(c.label);
-        c.h = nodeH;
-        childrenW += c.w;
+        c.x = g.x + groupPad; c.y = startY; c.w = nodeW; c.h = nodeH;
+        startY += nodeH + vGap;
       });
-      childrenW += (g.children.length - 1) * gap;
-      g.innerW = childrenW;
-      g.w = childrenW + groupPad * 2;
-      g.innerH = nodeH;
-      g.h = nodeH + groupPad * 2 + 22; // 22 for label
-      if (g.w > maxGroupW) maxGroupW = g.w;
+      curX += g.w + hGap;
     });
 
-    // Normalize group widths
-    const groupW = Math.max(maxGroupW, 300);
-    groups.forEach((g) => { g.w = groupW; });
+    outputNode.x = curX; outputNode.y = svgH / 2 - termH / 2;
+    curX += outputNode.w + pad;
 
-    // Vertical layout: prompt → groups → output
-    let curY = pad;
-    promptNode.x = containerW / 2 - promptNode.w / 2;
-    promptNode.y = curY;
-    curY += promptNode.h + gap * 2;
-
-    groups.forEach((g) => {
-      g.x = containerW / 2 - g.w / 2;
-      g.y = curY;
-      // Position children centered inside group
-      let startX = g.x + (g.w - g.innerW) / 2;
-      g.children.forEach((c) => {
-        c.x = startX;
-        c.y = g.y + 22 + groupPad;
-        startX += c.w + gap;
-      });
-      curY += g.h + gap;
-    });
-
-    outputNode.x = containerW / 2 - outputNode.w / 2;
-    outputNode.y = curY;
-    curY += outputNode.h + pad;
-
-    const svgH = curY;
-    svg.setAttribute('viewBox', '0 0 ' + containerW + ' ' + svgH);
+    const svgW = curX;
+    svg.setAttribute('viewBox', '0 0 ' + svgW + ' ' + svgH);
     svg.setAttribute('preserveAspectRatio', 'xMidYMid meet');
-    svg.removeAttribute('width');
-    svg.removeAttribute('height');
+    svg.removeAttribute('width'); svg.removeAttribute('height');
     svg.innerHTML = '';
 
-    // --- Defs ---
+    // --- Defs: arrowhead + drop shadows ---
     const defs = document.createElementNS(S, 'defs');
+
     const marker = document.createElementNS(S, 'marker');
-    marker.setAttribute('id', 'arrowhead');
-    marker.setAttribute('markerWidth', '8');
-    marker.setAttribute('markerHeight', '6');
-    marker.setAttribute('refX', '8');
-    marker.setAttribute('refY', '3');
-    marker.setAttribute('orient', 'auto');
+    marker.setAttribute('id', 'fc-arrow'); marker.setAttribute('markerWidth', '7');
+    marker.setAttribute('markerHeight', '5'); marker.setAttribute('refX', '6');
+    marker.setAttribute('refY', '2.5'); marker.setAttribute('orient', 'auto');
     const ap = document.createElementNS(S, 'path');
-    ap.setAttribute('d', 'M0,0 L8,3 L0,6 Z');
-    ap.setAttribute('fill', arrowColor);
-    marker.appendChild(ap);
-    defs.appendChild(marker);
+    ap.setAttribute('d', 'M0,0 L7,2.5 L0,5 Z');
+    ap.setAttribute('fill', arrowColor); marker.appendChild(ap); defs.appendChild(marker);
+
+    const filter = document.createElementNS(S, 'filter');
+    filter.setAttribute('id', 'fc-shadow'); filter.setAttribute('x', '-5%'); filter.setAttribute('y', '-10%');
+    filter.setAttribute('width', '110%'); filter.setAttribute('height', '130%');
+    const fe = document.createElementNS(S, 'feDropShadow');
+    fe.setAttribute('dx', '0'); fe.setAttribute('dy', '1'); fe.setAttribute('stdDeviation', '1.5');
+    fe.setAttribute('flood-color', isDark ? 'rgba(0,0,0,0.35)' : 'rgba(0,0,0,0.08)');
+    filter.appendChild(fe); defs.appendChild(filter);
     svg.appendChild(defs);
 
     // --- Draw helpers ---
-    function drawArrow(x1, y1, x2, y2) {
-      const line = document.createElementNS(S, 'line');
-      line.setAttribute('x1', x1); line.setAttribute('y1', y1);
-      line.setAttribute('x2', x2); line.setAttribute('y2', y2);
-      line.setAttribute('stroke', arrowColor);
-      line.setAttribute('stroke-width', '2');
-      line.setAttribute('marker-end', 'url(#arrowhead)');
-      svg.appendChild(line);
+    // Horizontal bezier arrow: exits from right edge of source, enters left edge of target
+    function drawHArrow(x1, y1, x2, y2) {
+      var midX = (x1 + x2) / 2;
+      var path = document.createElementNS(S, 'path');
+      path.setAttribute('d', 'M' + x1 + ',' + y1 + ' C' + midX + ',' + y1 + ' ' + midX + ',' + y2 + ' ' + x2 + ',' + y2);
+      path.setAttribute('stroke', arrowColor); path.setAttribute('stroke-width', '1.5');
+      path.setAttribute('fill', 'none'); path.setAttribute('marker-end', 'url(#fc-arrow)');
+      svg.appendChild(path);
     }
 
-    function drawNode(n, isWhite) {
-      const g = document.createElementNS(S, 'g');
+    // Card node: white bg + left accent bar
+    function drawNode(n, accentColor, isSpecial) {
+      var g = document.createElementNS(S, 'g');
       g.setAttribute('class', 'flowchart-node');
       if (n.nav) {
         g.style.cursor = 'pointer';
-        g.addEventListener('click', function () {
-          currentView = n.nav;
-          currentDetail = null;
-          expandedCategories[n.nav] = true;
-          pushState(true);
-          render();
+        g.addEventListener('click', function() {
+          currentView = n.nav; currentDetail = null;
+          expandedCategories[n.nav] = true; pushState(true); render();
         });
       }
-      const rect = document.createElementNS(S, 'rect');
+      var rect = document.createElementNS(S, 'rect');
       rect.setAttribute('x', n.x); rect.setAttribute('y', n.y);
       rect.setAttribute('width', n.w); rect.setAttribute('height', n.h);
       rect.setAttribute('rx', nodeRx);
-      rect.setAttribute('fill', n.color);
+      rect.setAttribute('fill', isSpecial ? accentColor : bgCard);
+      rect.setAttribute('stroke', isSpecial ? 'none' : clrBorder);
+      rect.setAttribute('stroke-width', '1');
+      rect.setAttribute('filter', 'url(#fc-shadow)');
       g.appendChild(rect);
 
-      const hasCount = n.count !== undefined;
-      const txt = document.createElementNS(S, 'text');
-      txt.setAttribute('x', n.x + n.w / 2);
-      txt.setAttribute('y', n.y + n.h / 2 + (hasCount ? -3 : 4));
-      txt.setAttribute('text-anchor', 'middle');
-      txt.setAttribute('fill', isWhite ? n.textColor || '#212529' : '#fff');
-      txt.setAttribute('font-size', '11');
-      txt.setAttribute('font-weight', '600');
-      txt.setAttribute('font-family', font);
-      txt.textContent = n.label;
-      g.appendChild(txt);
+      // No decorative accent bar — category color applied to label text only
+
+      var hasCount = n.count !== undefined;
+      // Category nodes: use accent color for label text; special nodes use white
+      var textColor = isSpecial ? '#fff' : (accentColor || clrText);
+      var offsetX = 0;
+      var txt = document.createElementNS(S, 'text');
+      txt.setAttribute('x', n.x + n.w / 2 + offsetX);
+      txt.setAttribute('y', n.y + n.h / 2 + (hasCount ? -5 : 5));
+      txt.setAttribute('text-anchor', 'middle'); txt.setAttribute('fill', textColor);
+      txt.setAttribute('font-size', '13'); txt.setAttribute('font-weight', '600');
+      txt.setAttribute('font-family', font); txt.textContent = n.label; g.appendChild(txt);
 
       if (hasCount) {
-        const ct = document.createElementNS(S, 'text');
-        ct.setAttribute('x', n.x + n.w / 2);
+        var ct = document.createElementNS(S, 'text');
+        ct.setAttribute('x', n.x + n.w / 2 + offsetX);
         ct.setAttribute('y', n.y + n.h / 2 + 12);
         ct.setAttribute('text-anchor', 'middle');
-        ct.setAttribute('fill', isWhite ? '#6b7280' : '#fff');
-        ct.setAttribute('font-size', '9');
-        ct.setAttribute('opacity', '0.8');
-        ct.setAttribute('font-family', font);
-        ct.textContent = '(' + n.count + ')';
-        g.appendChild(ct);
+        ct.setAttribute('fill', isSpecial ? 'rgba(255,255,255,0.75)' : clrMuted);
+        ct.setAttribute('font-size', '11'); ct.setAttribute('font-family', font);
+        ct.textContent = n.count; g.appendChild(ct);
       }
       svg.appendChild(g);
     }
 
-    // --- Draw ---
-    // Prompt
-    drawNode(promptNode, true);
+    // Per-group tint colors (bg + border), themed
+    var groupTints = {
+      context: {
+        bg:     isDark ? 'rgba(37,99,235,0.12)'  : 'rgba(37,99,235,0.07)',
+        border: isDark ? 'rgba(37,99,235,0.35)'  : 'rgba(37,99,235,0.22)',
+        label:  isDark ? '#93c5fd'                : '#1d4ed8',
+      },
+      event: {
+        bg:     isDark ? 'rgba(217,119,87,0.12)' : 'rgba(217,119,87,0.08)',
+        border: isDark ? 'rgba(217,119,87,0.35)' : 'rgba(217,119,87,0.25)',
+        label:  isDark ? '#fdba74'                : '#c2410c',
+      },
+      invoke: {
+        bg:     isDark ? 'rgba(124,58,237,0.12)' : 'rgba(124,58,237,0.07)',
+        border: isDark ? 'rgba(124,58,237,0.35)' : 'rgba(124,58,237,0.22)',
+        label:  isDark ? '#c4b5fd'                : '#6d28d9',
+      },
+    };
+    // User Prompt: stone-500 fill (more visible than border-strong)
+    var promptFill = isDark ? '#57534e' : '#78716c';
 
-    // Arrow: prompt → first group
+    // --- Draw ---
+    drawNode(promptNode, promptFill, true);
+
+    // prompt → first group (right edge of prompt → left edge of group, at vertical centers)
     if (groups.length > 0) {
-      drawArrow(containerW / 2, promptNode.y + promptNode.h, containerW / 2, groups[0].y);
+      drawHArrow(promptNode.x + promptNode.w, promptNode.y + promptNode.h / 2,
+                 groups[0].x, groups[0].y + groups[0].h / 2);
     }
 
-    // Groups
     groups.forEach((g, gi) => {
-      // Group rect
-      const grect = document.createElementNS(S, 'rect');
+      var tint = groupTints[g.id] || { bg: bgPage, border: clrBorder };
+      // Group container
+      var grect = document.createElementNS(S, 'rect');
       grect.setAttribute('x', g.x); grect.setAttribute('y', g.y);
       grect.setAttribute('width', g.w); grect.setAttribute('height', g.h);
-      grect.setAttribute('rx', groupRx);
-      grect.setAttribute('fill', g.color);
-      grect.setAttribute('stroke', g.borderColor);
-      grect.setAttribute('stroke-width', '1.5');
+      grect.setAttribute('rx', groupRx); grect.setAttribute('fill', tint.bg);
+      grect.setAttribute('stroke', tint.border); grect.setAttribute('stroke-width', '1.5');
       svg.appendChild(grect);
 
-      // Group label
-      const glabel = document.createElementNS(S, 'text');
+      var glabel = document.createElementNS(S, 'text');
       glabel.setAttribute('x', g.x + groupPad);
       glabel.setAttribute('y', g.y + 16);
-      glabel.setAttribute('fill', '#6b7280');
-      glabel.setAttribute('font-size', '11');
-      glabel.setAttribute('font-weight', '500');
+      glabel.setAttribute('fill', tint.label || clrMuted);
+      glabel.setAttribute('font-size', '9');
+      glabel.setAttribute('font-weight', '600');
+      glabel.setAttribute('letter-spacing', '0.07em');
       glabel.setAttribute('font-family', font);
-      glabel.textContent = g.label;
+      glabel.textContent = g.label.toUpperCase();
       svg.appendChild(glabel);
 
-      // Children
-      g.children.forEach((c) => { drawNode(c, false); });
+      g.children.forEach((c) => { drawNode(c, catColors[c.id] || clrAccent, false); });
 
-      // Arrow to next group
+      // Arrow to next group: right edge → left edge at vertical centers
       if (gi < groups.length - 1) {
-        drawArrow(containerW / 2, g.y + g.h, containerW / 2, groups[gi + 1].y);
+        drawHArrow(g.x + g.w, g.y + g.h / 2,
+                   groups[gi + 1].x, groups[gi + 1].y + groups[gi + 1].h / 2);
       }
     });
 
-    // Arrow: last group → output
+    // last group → output
     if (groups.length > 0) {
-      drawArrow(containerW / 2, groups[groups.length - 1].y + groups[groups.length - 1].h, containerW / 2, outputNode.y);
+      var lg = groups[groups.length - 1];
+      drawHArrow(lg.x + lg.w, lg.y + lg.h / 2,
+                 outputNode.x, outputNode.y + outputNode.h / 2);
     }
-
-    // Output
-    drawNode(outputNode, false);
+    drawNode(outputNode, clrAccent, true);
   }
 
   // ── Context Window Explorer ──
@@ -7815,7 +8000,48 @@ window.name = 'oh-my-hi';
   }
 
   // ── Optimizer section ──
-  // Rule-based suggestions for #overview, powered by context-optimizer.mjs.
+  // Compact insights banner shown on #overview — replaces the full optimizer section.
+  // Full detail lives on the #insights page.
+  function renderInsightsBanner(usage, days, sd) {
+    var suggestions = computeSuggestions({
+      tokenEntries: filterByPeriod(usage.tokenEntries || [], 'timestamp', days),
+      contextStats: sd.contextStats,
+      skills: sd.skills || [], agents: sd.agents || [],
+      mcpServers: sd.mcpServers || [],
+      memory: sd.memory || [],
+      usage: { skills: usage.skills || [], agents: usage.agents || [], mcpCalls: usage.mcpCalls || [] },
+      dismissed: [],
+      calcEntryCostFn: calcEntryCost,
+    });
+
+    var lintCount = getLintWarnings().length;
+    var counts = { high: 0, medium: lintCount, low: 0 };
+    for (var i = 0; i < suggestions.length; i++) {
+      var sev = suggestions[i].severity;
+      if (counts[sev] != null) counts[sev]++;
+    }
+    var total = counts.high + counts.medium + counts.low;
+    if (total === 0) return '';
+
+    var top = suggestions.length > 0 ? t(suggestions[0].titleKey) : '';
+
+    var countsHtml = '';
+    if (counts.high > 0)   countsHtml += '<span class="insights-count high">● ' + counts.high + ' High</span>';
+    if (counts.medium > 0) countsHtml += '<span class="insights-count medium">● ' + counts.medium + ' Medium</span>';
+    if (counts.low > 0)    countsHtml += '<span class="insights-count low">● ' + counts.low + ' Low</span>';
+
+    return '<div class="card insights-banner">'
+      + '<div class="insights-banner-head">'
+      + '<span class="section-title">' + t('insightsBannerTitle') + '</span>'
+      + '<a class="insights-banner-link" data-action="nav" data-view="insights" href="#insights">'
+      + t('insightsBannerViewAll') + ' →</a>'
+      + '</div>'
+      + '<div class="insights-banner-counts">' + countsHtml + '</div>'
+      + (top ? '<div class="insights-banner-top">' + escapeHtml(top) + '</div>' : '')
+      + '</div>';
+  }
+
+  // Rule-based suggestions for #insights page, powered by context-optimizer.mjs.
 
   function renderOptimizerSection(usage, days, sd) {
     var suggestions = computeSuggestions({
@@ -7844,27 +8070,160 @@ window.name = 'oh-my-hi';
         for (var j = 0; j < s.descArgs.length; j++) {
           desc = desc.replace('{' + j + '}', escapeHtml(s.descArgs[j]));
         }
-        html += '<div class="card optimizer-card" data-severity="' + s.severity + '">'
-          + '<div class="optimizer-card-header">'
-          + '<span class="optimizer-card-title">' + t(s.titleKey) + '</span>'
-          + '<span class="optimizer-severity" data-sev="' + s.severity + '">' + s.severity + '</span>'
-          + '</div>'
-          + '<div class="optimizer-card-desc">' + desc + '</div>';
+        var savings = '';
         if (s.savingsTokens > 0) {
-          html += '<div class="optimizer-savings">'
-            + t('optSavingsTokens', fmtCompact(s.savingsTokens));
-          if (s.savingsCost > 0.001) {
-            html += ' · ' + t('optSavingsCost', fmtCost(s.savingsCost));
-          }
-          html += '</div>';
+          savings = '−' + fmtCompact(s.savingsTokens);
+          if (s.savingsCost > 0.001) savings += ' / ' + fmtCost(s.savingsCost);
         }
-        html += '</div>';
+        html += '<div class="optimizer-card" data-severity="' + s.severity + '">'
+          + '<span class="optimizer-severity" data-sev="' + s.severity + '"></span>'
+          + '<span class="optimizer-card-title">' + t(s.titleKey) + '</span>'
+          + (savings ? '<span class="optimizer-savings">' + savings + '</span>' : '<span></span>')
+          + '<div class="optimizer-card-desc">' + desc + '</div>'
+          + '</div>';
       }
       html += '</div>';
     }
 
     html += '</div>';
     return html;
+  }
+
+  // ── Insights aggregator ──
+  // computeAllInsights(usage, days, sd) collects findings from 4 sources:
+  //   1. optimizer suggestions (computeSuggestions)
+  //   2. daily anomalies (buildDailyUsageSeries + detectDailyAnomalies)
+  //   3. lint warnings (getLintWarnings)
+  //   4. cache inefficiencies (tokenEntries cache fields)
+  // Returns a unified sorted array. Each item has the schema:
+  //   { id, source, severity, title, detail, impact: {tokens, cost}, meta }
+  // Sorted descending by: severity weight * 1000 + impact.cost * 100 + impact.tokens / 1e6
+  function computeAllInsights(usage, days, sd) {
+    var items = [];
+    var sevWeight = { high: 3, medium: 2, low: 1, info: 0 };
+
+    // ── 1. Optimizer suggestions ──
+    try {
+      var suggestions = computeSuggestions({
+        tokenEntries: filterByPeriod(usage.tokenEntries || [], 'timestamp', days),
+        contextStats: sd.contextStats,
+        skills: sd.skills || [], agents: sd.agents || [],
+        mcpServers: sd.mcpServers || [],
+        memory: sd.memory || [],
+        usage: { skills: usage.skills || [], agents: usage.agents || [], mcpCalls: usage.mcpCalls || [] },
+        dismissed: [],
+        calcEntryCostFn: calcEntryCost,
+      });
+      for (var si = 0; si < suggestions.length; si++) {
+        var s = suggestions[si];
+        var desc = t(s.descKey);
+        for (var di = 0; di < s.descArgs.length; di++) {
+          desc = desc.replace('{' + di + '}', s.descArgs[di]);
+        }
+        items.push({
+          id: 'opt-' + s.titleKey,
+          source: 'optimizer',
+          severity: s.severity || 'medium',
+          title: t(s.titleKey),
+          detail: desc,
+          impact: { tokens: s.savingsTokens || 0, cost: s.savingsCost || 0 },
+          meta: { titleKey: s.titleKey, descKey: s.descKey },
+        });
+      }
+    } catch (e) { /* computeSuggestions not available or failed */ }
+
+    // ── 2. Daily anomalies ──
+    try {
+      var anomalySeries = buildDailyUsageSeries(usage.tokenEntries || [], calcEntryCost);
+      var allAnomalies = detectDailyAnomalies(anomalySeries.dailyMap, anomalySeries.sortedDates);
+      var anomalyList = filterByPeriod(
+        allAnomalies.map(function(a) { return Object.assign({ timestamp: a.date + 'T12:00:00' }, a); }),
+        'timestamp', days
+      );
+      for (var ai = 0; ai < anomalyList.length; ai++) {
+        var a = anomalyList[ai];
+        var isTok = a.kind !== 'cost';
+        var ratio = isTok ? a.tokenRatio : a.costRatio;
+        var roundedRatio = Math.round(ratio * 10) / 10;
+        var kindLabel = a.kind === 'cost' ? t('anomalyKindCost') : a.kind === 'both' ? t('anomalyKindBoth') : t('anomalyKindTokens');
+        var aSev = ratio >= 5 ? 'high' : ratio >= 3 ? 'medium' : 'low';
+        var aDetail = t('anomalyVsAvg', fmtCompact(roundedRatio));
+        if (a.kind === 'both') {
+          aDetail += ' · ' + fmtCompact(a.tokens) + ' / ' + fmtCost(a.cost);
+        } else if (a.kind === 'cost') {
+          aDetail += ' · ' + fmtCost(a.cost);
+        } else {
+          aDetail += ' · ' + fmtCompact(a.tokens);
+        }
+        items.push({
+          id: 'anomaly-' + a.date,
+          source: 'anomaly',
+          severity: aSev,
+          title: a.date + ' · ' + kindLabel,
+          detail: aDetail,
+          impact: { tokens: a.tokens || 0, cost: a.cost || 0 },
+          meta: { date: a.date, kind: a.kind, tokenRatio: a.tokenRatio, costRatio: a.costRatio },
+        });
+      }
+    } catch (e) { /* anomaly detection not available or failed */ }
+
+    // ── 3. Lint warnings ──
+    try {
+      var lintWarnings = getLintWarnings();
+      for (var li = 0; li < lintWarnings.length; li++) {
+        var w = lintWarnings[li];
+        items.push({
+          id: 'lint-' + (w.code || 'unknown') + '-' + li,
+          source: 'lint',
+          severity: w.severity || 'medium',
+          title: lintMessage(w),
+          detail: w.path || w.file || '',
+          impact: { tokens: 0, cost: 0 },
+          meta: { code: w.code, category: w.category, file: w.file, path: w.path },
+        });
+      }
+    } catch (e) { /* getLintWarnings not available or failed */ }
+
+    // ── 4. Cache inefficiencies ──
+    // TODO: Per-day cache efficiency breakdown would require building a
+    // dailyCacheMap (by iterating tokenEntries day-by-day). That logic is
+    // non-trivial to extract cleanly without duplicating drawCacheEfficiencyChart.
+    // For now, flag a single overall insight when the aggregate hit rate is below 30%.
+    try {
+      var cacheEntries = filterByPeriod(usage.tokenEntries || [], 'timestamp', days);
+      var cTotalRead = 0, cTotalWrite = 0, cTotalFresh = 0;
+      for (var ci = 0; ci < cacheEntries.length; ci++) {
+        var ce = cacheEntries[ci];
+        cTotalRead += ce.cacheRead || 0;
+        cTotalWrite += ce.cacheCreation || 0;
+        cTotalFresh += ce.rawInput || 0;
+      }
+      var cTotal = cTotalRead + cTotalWrite + cTotalFresh;
+      if (cTotal > 0) {
+        var hitPct = Math.round((cTotalRead / cTotal) * 100);
+        if (hitPct < 30) {
+          var cacheSev = hitPct < 10 ? 'high' : 'medium';
+          items.push({
+            id: 'cache-low-hit-rate',
+            source: 'cache',
+            severity: cacheSev,
+            title: t('cacheTipLowHitTitle'),
+            detail: t('cacheTipLowHitDetail', hitPct),
+            impact: { tokens: 0, cost: 0 },
+            meta: { hitPct: hitPct, totalRead: cTotalRead, totalWrite: cTotalWrite, totalFresh: cTotalFresh },
+          });
+        }
+      }
+    } catch (e) { /* cache data not available or failed */ }
+
+    // ── Sort: severity weight * 1000 + impact.cost * 100 + impact.tokens / 1e6 ──
+    items.sort(function(a, b) {
+      var scoreA = (sevWeight[a.severity] || 0) * 1000 + a.impact.cost * 100 + a.impact.tokens / 1e6;
+      var scoreB = (sevWeight[b.severity] || 0) * 1000 + b.impact.cost * 100 + b.impact.tokens / 1e6;
+      return scoreB - scoreA;
+    });
+
+    return items;
   }
 
   // ── Detail-page helpers ──

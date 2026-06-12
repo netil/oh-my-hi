@@ -613,6 +613,60 @@ describe('Web UI — Templates', () => {
       assert.ok(snippet.includes('\\u0000-\\u0020'), 'control chars stripped before scheme check');
       assert.ok(!snippet.includes('<a href="$2"'), 'raw $2 href substitution removed');
     });
+
+    // ── Date range bug regression (fix: currentPeriod negative guard) ────────
+    it('should reset currentPeriod to 30 when loaded as -1 from localStorage', () => {
+      assert.ok(
+        js.includes('if (currentPeriod < 0)') && js.includes("localStorage.setItem('harness-period', '30')"),
+        'initialization resets negative period to 30'
+      );
+    });
+
+    it('filterByPeriod should treat negative days as all-time when no customDateRange', () => {
+      const fnIdx = js.indexOf('function filterByPeriod');
+      const snippet = js.slice(fnIdx, fnIdx + 400);
+      assert.ok(
+        snippet.includes('days < 0'),
+        'filterByPeriod guards against negative days producing a future cutoff'
+      );
+    });
+
+    it('renderSidebarPeriod range calc should only run for positive periods', () => {
+      assert.ok(
+        js.includes('else if (currentPeriod > 0)'),
+        'renderSidebarPeriod else branch is guarded with currentPeriod > 0'
+      );
+    });
+
+    // ── Insights page ─────────────────────────────────────────────────────────
+    it('computeAllInsights function is defined', () => {
+      assert.ok(js.includes('function computeAllInsights'), 'computeAllInsights defined');
+    });
+
+    it('renderInsightDetail handles colon-split and wraps items as chips', () => {
+      const fnIdx = js.indexOf('function renderInsightDetail');
+      assert.ok(fnIdx !== -1, 'renderInsightDetail defined');
+      const snippet = js.slice(fnIdx, fnIdx + 900);
+      assert.ok(snippet.includes('indexOf('), 'uses indexOf to find colon separator');
+      assert.ok(snippet.includes('insight-detail-chip'), 'wraps list items as chips');
+    });
+
+    it('insight rows apply severity via data-sev attribute on the row element', () => {
+      // data-sev on the row div (not just inner dot span) enables CSS border-top per severity
+      assert.ok(js.includes('data-sev="'), 'data-sev attribute present');
+      // The row div itself must carry data-sev (not only the hidden dot span)
+      assert.ok(
+        js.includes('"insight-row" data-sev=') || js.includes("'insight-row' data-sev=") ||
+        js.includes('class="insight-row" data-sev'),
+        'insight-row div carries data-sev'
+      );
+    });
+
+    it('insight impact shows labeled pairs with insImpactSave/insImpactCost/insImpactUsage keys', () => {
+      assert.ok(js.includes('insImpactSave'), 'savings label key used');
+      assert.ok(js.includes('insImpactCost'), 'cost label key used');
+      assert.ok(js.includes('insImpactUsage'), 'usage label key used for anomaly rows');
+    });
   });
 
   describe('styles.css', () => {
@@ -685,6 +739,35 @@ describe('Web UI — Templates', () => {
     it('should have breakdown accordion styles via bd-accordion-header', () => {
       assert.ok(css.includes('.usage-bar-card--fill') ||
                 js.includes('bd-accordion-header'), 'accordion header class used');
+    });
+
+    // ── Nail-tip pattern removal ──────────────────────────────────────────────
+    it('regression-card uses border-top accent, not border-left', () => {
+      const idx = css.indexOf('.regression-card {');
+      const block = css.slice(idx, idx + 300);
+      assert.ok(block.includes('border-top'), 'regression-card has border-top accent');
+      assert.ok(!block.includes('border-left'), 'regression-card has no border-left');
+    });
+
+    it('insight-row-dot is hidden (nail-tip circle dot removed)', () => {
+      assert.ok(
+        css.includes('.insight-row-dot { display: none; }'),
+        'insight dot is display:none'
+      );
+    });
+
+    it('optimizer-severity dot is hidden', () => {
+      assert.ok(
+        css.includes('.optimizer-severity { display: none; }'),
+        'optimizer severity dot is display:none'
+      );
+    });
+
+    it('insight rows use border-top per data-sev for severity indicator', () => {
+      assert.ok(css.includes('.insight-row[data-sev="high"]'), 'high severity targets row via data-sev');
+      const idx = css.indexOf('.insight-row[data-sev="high"]');
+      const block = css.slice(idx, idx + 100);
+      assert.ok(block.includes('border-top'), 'border-top used as severity indicator');
     });
   });
 

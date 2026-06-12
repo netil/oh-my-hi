@@ -1,5 +1,52 @@
 # Changelog
 
+## [0.12.0] - 2026-06-12
+
+### Added
+- **`#insights` page** — unified inbox for all findings: optimizer suggestions, daily usage anomalies, harness lint warnings, and cache efficiency issues, sorted by severity × impact. Filter bar per source, labeled impact pairs (SAVINGS/USAGE + COST), detail chip rendering for list-type descriptions (e.g. server names rendered as inline code tags). `computeAllInsights()` aggregator, `renderInsightDetail()` colon-split formatter.
+- **Overview insights banner** — replaces full optimizer card grid with a compact severity count badge + "View all →" link to `#insights`.
+- **Harness health lint (`#structure`)** — checks for broken hook paths, missing frontmatter, unresolved memory links. Severity badges in sidebar.
+- **Cache efficiency analysis (`#tokens-cache`)** — hit rate, daily cache read/write trend, session-level breakdown.
+- **Daily usage anomaly detection (`#overview`)** — rolling 7-day baseline, flags days exceeding 2× average for tokens or cost.
+- **Budget threshold alerts + weekly digest (`#overview`)** — configurable daily/weekly/monthly cost thresholds with banner alerts; weekly digest card showing 7d vs previous 7d for cost, tokens, and sessions.
+- **Usage data export (`#tokens-session`)** — CSV and JSON download via `/api/usage?format=csv|json`.
+- **Session full-text search (`#tokens-session`)** — SQLite FTS5 index on prompt content; search bar across all sessions.
+- **Multi-machine usage merge** — `machine` column in SQLite schema; `node scripts/db.mjs --import <dir>` merges DBs from other machines.
+- **Mobile off-canvas navigation** — hamburger button (44px touch target, aria) + slide-in sidebar + backdrop at ≤768px.
+- **Keyboard navigation** — sidebar nav items converted to `<a href="#...">` for Tab+Enter, middle-click, cmd-click.
+- **OS dark mode integration** — `prefers-color-scheme` fallback on first visit; `color-scheme: dark/light` on `body` for native scrollbar/input theming; `html lang` synced on language toggle.
+- **`fmtPct(n)` formatter** — adaptive percent: `|n| ≥ 10` → integer, else 1 decimal. Deduplicates 3× `fmtDur` and 2× `fmtMs` local definitions.
+- **Unified tooltip system** — single `#shared-tooltip` replaces three separate tooltip implementations (nav, period buttons, heatmap `::after`); `aria-describedby` + focus support.
+- **`prefers-reduced-motion` support** — global CSS block zeroing animations and transitions.
+- **Loading/error state for usage refetch** — content dims + CSS spinner while period/scope switch is in flight; dismissible error strip with Retry on failure.
+
+### Changed
+- **Design overhaul** — stone/slate color palette replacing generic grays; teal accent (`#0f766e` light, `#14b8a6` dark); `border` only on cards (no drop shadows); stat values 28→32px tabular-nums; section headings flattened; sidebar active indicator as left border.
+- **Flowchart (`#structure`) redesigned** — horizontal left-to-right layout; nodes as white cards with category-colored label text (no decorative bars); group backgrounds use live CSS variables (dark mode compatible); cubic bezier arrows.
+- **Context Explorer styles extracted** — 176 inline `style=""` reduced to 28 (84%); `--cw-*` CSS variables with dark-mode variants; removed from `THEME_REBUILD_VIEWS`.
+- **Optimizer section moved** — full card grid replaced by compact banner on Overview; detail in `#insights`.
+- **`pending/` mechanism removed** — pre-SQLite leftover; `savePending`/`mergePending`/`hasPending` deleted.
+
+### Fixed
+- **`--_update-cache` child ran a full concurrent build** — missing guard caused detached version-check process to also execute `main()`, racing with the parent and killing it mid-write via `process.exit(0)`.
+- **`--data-only` wrote new usage only to `global` scope** — per-project scope routing now mirrors full-build path via shared `collectNewUsageByScope()` helper.
+- **`appendUsageMonthly` non-idempotent on retry** — `completedMonths` Set tracks committed months; retries skip already-written months. Writer lock (`output/.write.lock`) serializes concurrent `--data-only` runs.
+- **`pending/` data-loss edge** — `dbModule` null no longer falsely sets `dataOnlyDbOk = true`; mtime index not saved when DB write fails.
+- **Serve crashed on malformed URL** — `decodeURIComponent` in `requestHandler` now wrapped in try/catch (URIError → 400, other → 500, `res.headersSent` guarded).
+- **Monthly DB handles stale after recovery** — `serve.mjs` now validates inode on each access; `recoverIfCorrupt` also unlinks `-wal`/`-shm` siblings.
+- **`commonPrefix` infinite loop on Windows** — replaced hardcoded `'/'` with `path.sep`; added `dirname(prefix) === prefix` loop guard (also fixes POSIX root edge case).
+- **`#session/{id}` deep link unreachable** — session branch in `applyHash()` was shadowed by the generic `parts.length > 1` branch; now checked first.
+- **`harness-budget` localStorage parse could crash the app** — top-level `JSON.parse` now wrapped in try/catch with null fallback.
+- **popstate restored wrong session/compare/context** — handler now always calls `applyHash()` from hash instead of trusting partial `e.state`.
+- **billboard.js chart instances never destroyed** — `makeChart()` helper + `activeCharts` array; `renderContent()` destroys all before re-render.
+- **Context Explorer listeners leaked on navigation** — `teardownContextExplorer()` called on every nav; `_cwMouseHandler` stored and removed.
+- **Period/scope switch showed stale data silently** — `refetchUsage()` with abort controller; error strip + `_usageReady` flag now wired.
+- **`renderMarkdown` allowed `javascript:` hrefs** — scheme allowlist (`http/https/mailto/#`), control-char strip, `rel="noopener noreferrer"`.
+- **Date range showed start after end (`2026.06.14 ~ 2026.06.12`)** — `currentPeriod = -1` persisted in localStorage but `customDateRange` (not persisted) was null on reload, causing `setDate(today + 2)`. Now resets to 30d on init; `filterByPeriod` and `renderSidebarPeriod` guard against negative period.
+
+### Tests
+- 685 tests passing (up from 566 at v0.11.11); +119 new tests covering: `appendUsageMonthly` completedMonths retry, writer lock, `commonPrefix` loop guard, pending removal, DB handle inode recovery, chart lifecycle, context teardown, refetch error/loading, markdown scheme filtering, date range guards, insights page functions, CSS accent direction changes.
+
 ## [0.11.11] - 2026-05-29
 
 ### Fixed
