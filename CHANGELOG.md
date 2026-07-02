@@ -4,10 +4,14 @@
 
 ### Changed
 - **billboard.js upgraded 3.18 → 4.0.1** — major dependency bump; bundled inline as before.
-- **Hourly cache efficiency chart** — bars recolored to darker teal shades (`#40a583`/`#0ca678`/`#087f5b`) for stronger contrast; `bar.radius` option removed (flat bars).
+- **Canvas render mode for all non-arc charts** — line/area/bar/scatter charts now render through billboard.js v4's `render.mode: 'canvas'` backend (injected centrally in `makeChart()`). Arc-family charts (donut/gauge/pie/polar/radar) stay on SVG since they rely on per-node DOM for labels/interaction.
+- **Hourly cache efficiency chart** — bars recolored to darker teal shades (`#087f5b`/`#0ca678`/`#40a583`) for stronger contrast; `bar.radius` option removed (flat bars).
+- **Hourly token distribution chart** — bars recolored to a deep blue (`#364fc7`); `bar.radius` removed. Canvas mode passes only the series id (no per-datum index) to the color callback, so the previous value-driven gradient is replaced by a single solid color.
+- **Bottom legend spacing** — in canvas mode billboard renders the legend as an HTML element pinned to the canvas' bottom edge via an inline `inset`, crowding the x-axis. The inline `inset` is now stripped on every render so the legend sits at its natural position below the axis.
 
 ### Fixed
 - **Chart tooltip header invisible** — billboard.js v4 renders its floating tooltip as `<table class="bb-tooltip">` inside `.content`, so the generic `.content table th` data-table styles leaked in and overrode the tooltip's white header text. Scoped all global data-table rules with `:not(.bb-tooltip)`.
+- **Anomaly grid-line labels garbled in canvas mode** — the canvas backend can't render rotated grid-line text; the "⚠ spike" label rendered as overlapping glyphs. Dropped the label text and kept the vertical marker line (anomaly details remain in the list below the chart).
 
 ## [0.12.0] - 2026-06-12
 
