@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.13.0] - 2026-07-02
+
+### Changed
+- **billboard.js upgraded 3.18 → 4.0.1** — major dependency bump; bundled inline as before.
+- **Hourly cache efficiency chart** — bars recolored to darker teal shades (`#40a583`/`#0ca678`/`#087f5b`) for stronger contrast; `bar.radius` option removed (flat bars).
+
+### Fixed
+- **Chart tooltip header invisible** — billboard.js v4 renders its floating tooltip as `<table class="bb-tooltip">` inside `.content`, so the generic `.content table th` data-table styles leaked in and overrode the tooltip's white header text. Scoped all global data-table rules with `:not(.bb-tooltip)`.
+
 ## [0.12.0] - 2026-06-12
 
 ### Added

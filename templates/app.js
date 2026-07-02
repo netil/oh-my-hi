@@ -1441,7 +1441,36 @@ window.name = 'oh-my-hi';
   // lazy/deferred chart draws too — anything created after the last render
   // is registered here and torn down on the next navigation.
   let activeCharts = [];
+  // Arc-family chart types stay on SVG rendering; every other chart uses the
+  // canvas backend (billboard.js v4 `render.mode`). Canvas draws all primitives
+  // into a single <canvas>, which is faster for the dense line/area/bar charts
+  // here but does not create per-shape SVG nodes — arc charts (donut/gauge/…)
+  // still rely on SVG DOM for their labels/interaction, so they are excluded.
+  const ARC_CHART_TYPES = new Set(['donut', 'pie', 'gauge', 'polar', 'radar', 'sunburst']);
+  function chartIsArc(cfg) {
+    const d = cfg.data || {};
+    if (d.type && ARC_CHART_TYPES.has(d.type)) return true;
+    if (d.types) {
+      for (const k in d.types) if (ARC_CHART_TYPES.has(d.types[k])) return true;
+    }
+    return false;
+  }
   function makeChart(cfg) {
+    if (!chartIsArc(cfg)) {
+      cfg.render = Object.assign({ mode: 'canvas' }, cfg.render, { mode: 'canvas' });
+      // In canvas mode billboard renders the bottom legend as an HTML element
+      // and pins it with an inline `inset` to the canvas' bottom edge, leaving
+      // it cramped against the x-axis tick labels. Strip that inline inset on
+      // every render so the legend sits at its natural in-flow bottom position;
+      // vertical spacing is then handled by the .bb-canvas-legend-bottom CSS.
+      const prevOnRendered = cfg.onrendered;
+      cfg.onrendered = function () {
+        const host = typeof cfg.bindto === 'string' ? document.querySelector(cfg.bindto) : cfg.bindto;
+        const leg = host && host.querySelector('.bb-canvas-legend-bottom');
+        if (leg) leg.style.removeProperty('inset');
+        if (prevOnRendered) return prevOnRendered.apply(this, arguments);
+      };
+    }
     const chart = bb.generate(cfg);
     activeCharts.push(chart);
     return chart;
@@ -2277,14 +2306,14 @@ window.name = 'oh-my-hi';
         type: 'bar',
         color: (color, d) => {
           const v = hourRatio[d.index] || 0;
-          return v > 70 ? '#0ca678' : v > 40 ? '#74c0a8' : '#c9e5db';
+          return v > 70 ? '#087f5b' : v > 40 ? '#0ca678' : '#40a583';
         },
       },
       axis: {
         x: { type: 'category', categories: categories, tick: { outer: false } },
         y: { min: 0, max: 100, padding: { bottom: 0, top: 0 }, tick: { count: 5, format: (v) => +v.toFixed(0) + '%' } },
       },
-      bar: { width: { ratio: 0.7 }, radius: { ratio: 0.2 } },
+      bar: { width: { ratio: 0.7 } },
       legend: { show: false },
       tooltip: {
         format: {
@@ -2938,12 +2967,10 @@ window.name = 'oh-my-hi';
       data: {
         columns: [values],
         type: 'bar',
-        color: (color, d) => {
-          const v = hourTokens[d.index] || 0;
-          const maxVal = Math.max(...hourTokens);
-          const ratio = maxVal > 0 ? v / maxVal : 0;
-          return ratio > 0.7 ? '#4263eb' : ratio > 0.3 ? '#748ffc' : '#c5d2f6';
-        }
+        // Canvas render mode invokes the per-datum color callback with only the
+        // series id (no index/value), so a value-driven gradient can't be
+        // computed here. Use a single deep blue for every bar instead.
+        colors: { tokens: '#364fc7' },
       },
       axis: {
         x: {
@@ -2955,7 +2982,7 @@ window.name = 'oh-my-hi';
           tick: { count: 5, format: (v) => fmtCompact(v), outer: false }
         }
       },
-      bar: { width: { ratio: 0.7 }, radius: { ratio: 0.2 } },
+      bar: { width: { ratio: 0.7 } },
       legend: { show: false },
       tooltip: {
         format: {

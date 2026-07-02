@@ -4558,11 +4558,15 @@ body.dark .cw-root {
 .cw-session-no-match { padding: 12px 14px; font-size: 12px; color: var(--cw-text-faint); }
 
 /* ── Global data table refinements ── */
-.content table {
+/* :not(.bb-tooltip): billboard's floating chart tooltip renders as a
+   <table class="bb-tooltip"> inside .content, so these generic data-table
+   styles must not leak into it (else .content table th would override
+   .bb-tooltip th's white header text → invisible header). */
+.content table:not(.bb-tooltip) {
   border-collapse: collapse;
   width: 100%;
 }
-.content table th {
+.content table:not(.bb-tooltip) th {
   font-size: 11px;
   font-weight: 600;
   text-transform: uppercase;
@@ -4573,19 +4577,19 @@ body.dark .cw-root {
   text-align: left;
   white-space: nowrap;
 }
-.content table td {
+.content table:not(.bb-tooltip) td {
   padding: 9px 12px;
   border-bottom: 1px solid var(--border);
   font-size: 13px;
   font-variant-numeric: tabular-nums;
 }
-.content table tr:last-child td {
+.content table:not(.bb-tooltip) tr:last-child td {
   border-bottom: none;
 }
-.content table tbody tr:hover td {
+.content table:not(.bb-tooltip) tbody tr:hover td {
   background: var(--accent-muted);
 }
-body.dark .content table tbody tr:hover td {
+body.dark .content table:not(.bb-tooltip) tbody tr:hover td {
   background: var(--accent-muted);
 }
 
