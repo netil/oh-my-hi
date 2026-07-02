@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.13.1] - 2026-07-02
+
+### Fixed
+- **Anomaly grid-line labels garbled in canvas mode** — the billboard.js v4 canvas backend can't render rotated grid-line text, so the "⚠ spike" anomaly labels on the daily token trend chart rendered as overlapping glyphs. Dropped the label text and kept the vertical marker line (anomaly details remain in the list below the chart).
+
 ## [0.13.0] - 2026-07-02
 
 ### Changed
@@ -11,7 +16,6 @@
 
 ### Fixed
 - **Chart tooltip header invisible** — billboard.js v4 renders its floating tooltip as `<table class="bb-tooltip">` inside `.content`, so the generic `.content table th` data-table styles leaked in and overrode the tooltip's white header text. Scoped all global data-table rules with `:not(.bb-tooltip)`.
-- **Anomaly grid-line labels garbled in canvas mode** — the canvas backend can't render rotated grid-line text; the "⚠ spike" label rendered as overlapping glyphs. Dropped the label text and kept the vertical marker line (anomaly details remain in the list below the chart).
 
 ## [0.12.0] - 2026-06-12
 
