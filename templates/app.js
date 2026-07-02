@@ -3281,7 +3281,9 @@ window.name = 'oh-my-hi';
     const anomalySeries = buildDailyUsageSeries(tokenEntries, calcEntryCost);
     const anomalyGridLines = detectDailyAnomalies(anomalySeries.dailyMap, anomalySeries.sortedDates)
       .filter((a) => dailyInput.hasOwnProperty(a.date))
-      .map((a) => ({ value: a.date, text: '⚠ ' + t('anomalyGridLabel'), class: 'anomaly-grid-line' }));
+      // No `text:` label — canvas render mode garbles rotated grid-line text.
+      // The vertical marker line stays; anomaly details are in the list below.
+      .map((a) => ({ value: a.date, class: 'anomaly-grid-line' }));
 
     makeChart({
       bindto: '#token-trend-chart',
