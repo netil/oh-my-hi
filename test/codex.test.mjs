@@ -6,6 +6,7 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 import { codexProvider, collectRolloutFiles } from '../scripts/providers/codex.mjs';
+import { calcEntryCost, resolvePricingKey, PRICING_FALLBACK } from '../scripts/export.mjs';
 
 function tmpCodexHome() {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'omh-codex-'));
@@ -124,6 +125,21 @@ test('parseUsage mtimeIndex skips unchanged files on re-parse', async () => {
   } finally {
     fs.rmSync(home, { recursive: true, force: true });
   }
+});
+
+test('pricing: gpt models resolve and cost is computed from Codex normalization', () => {
+  assert.strictEqual(resolvePricingKey('gpt-5.5', PRICING_FALLBACK), 'gpt-5.5');
+  assert.strictEqual(resolvePricingKey('gpt-5.1-codex-mini', PRICING_FALLBACK), 'gpt-5.1-codex-mini');
+  // A gpt-5.5 turn: rawInput 1000, cacheRead 4000, output 400.
+  const entry = { model: 'gpt-5.5', rawInput: 1000, cacheRead: 4000, cacheCreation: 0, outputTokens: 400 };
+  const cost = calcEntryCost(entry, PRICING_FALLBACK);
+  // 1000*5 + 400*30 + 4000*0.5 = 5000 + 12000 + 2000 = 19000 / 1e6 = 0.019
+  assert.ok(Math.abs(cost - 0.019) < 1e-9, `cost ${cost}`);
+});
+
+test('pricing: unknown gpt model yields 0 cost (no guessing)', () => {
+  assert.strictEqual(resolvePricingKey('gpt-9-imaginary', PRICING_FALLBACK), null);
+  assert.strictEqual(calcEntryCost({ model: 'gpt-9-imaginary', rawInput: 100 }, PRICING_FALLBACK), 0);
 });
 
 test('collectRolloutFiles finds sessions and archived_sessions', () => {

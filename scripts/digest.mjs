@@ -20,6 +20,14 @@ export const PRICING_FALLBACK = {
   'opus-3': { input: 15, output: 75, cacheRead: 1.5, cacheCreation: 18.75 },
   'sonnet-3': { input: 3, output: 15, cacheRead: 0.3, cacheCreation: 3.75 },
   'haiku-3': { input: 0.25, output: 1.25, cacheRead: 0.03, cacheCreation: 0.3 },
+  // OpenAI / Codex (USD per 1M tokens). Cached input = 10% of input; no cache-creation.
+  'gpt-5.5': { input: 5, output: 30, cacheRead: 0.5, cacheCreation: 0 },
+  'gpt-5.4': { input: 2.5, output: 15, cacheRead: 0.25, cacheCreation: 0 },
+  'gpt-5.1': { input: 0.63, output: 5, cacheRead: 0.063, cacheCreation: 0 },
+  'gpt-5.3-codex': { input: 1.75, output: 14, cacheRead: 0.175, cacheCreation: 0 },
+  'gpt-5.2-codex': { input: 1.75, output: 14, cacheRead: 0.175, cacheCreation: 0 },
+  'gpt-5.1-codex': { input: 1.25, output: 10, cacheRead: 0.125, cacheCreation: 0 },
+  'gpt-5.1-codex-mini': { input: 0.25, output: 2, cacheRead: 0.025, cacheCreation: 0 },
 };
 
 /** Resolve a raw model id to a pricing-table key (same logic as app.js). */
@@ -63,7 +71,8 @@ export function calcEntryCost(entry, pricing) {
  *   }
  */
 export function computeWeeklyDigest(tokenEntries, { pricing = null, now = Date.now() } = {}) {
-  const p = pricing || PRICING_FALLBACK;
+  // Merge fetched (Claude) pricing over the fallback so OpenAI/Codex entries persist.
+  const p = pricing ? { ...PRICING_FALLBACK, ...pricing } : PRICING_FALLBACK;
   const curStart = now - 7 * DAY_MS;
   const prevStart = now - 14 * DAY_MS;
   const cur = { cost: 0, tokens: 0, sessions: 0 };

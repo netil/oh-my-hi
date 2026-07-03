@@ -167,11 +167,13 @@ function handleUsageFallback(res, scope) {
   }
 }
 
-/** Pricing table for export cost estimates: build-time fetch (data.json) or fallback. */
+/** Pricing table for export cost estimates: build-time fetch (data.json) or fallback.
+ *  Merges the fetched (Claude) feed over the fallback so OpenAI/Codex entries,
+ *  which the Claude feed omits, are retained. */
 function loadPricing() {
   try {
     const data = JSON.parse(fs.readFileSync(DATA_JSON, 'utf-8'));
-    if (data.modelPricing) return data.modelPricing;
+    if (data.modelPricing) return { ...PRICING_FALLBACK, ...data.modelPricing };
   } catch { /* fall back */ }
   return PRICING_FALLBACK;
 }
