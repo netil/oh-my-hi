@@ -3956,7 +3956,7 @@ window.name = 'oh-my-hi';
     });
     const allItemsSorted = Object.entries(allItemsMap).sort((a, b) => b[1].tokens - a[1].tokens);
     html += renderTop5Card(
-      '🏆 ' + t('bdTop5All') + '<span style="margin-left:auto;font-size:11px;font-weight:400;color:var(--text-secondary)">전체</span>',
+      '🏆 ' + t('bdTop5All') + '<span style="margin-left:auto;font-size:11px;font-weight:400;color:var(--text-secondary)">' + t('bdAllTag') + '</span>',
       allItemsSorted,
       totalTokens
     );
@@ -5808,8 +5808,8 @@ window.name = 'oh-my-hi';
       +         '<div id="cw-session-list" class="cw-session-dropdown cw-scroll">'
       +           '<div id="cw-session-items"></div>'
       +           '<div id="cw-session-nav" class="cw-list-nav">'
-      +             '<button id="cw-list-top" class="cw-icon-btn cw-icon-btn--fade" title="맨 위로"><svg width="9" height="6" viewBox="0 0 9 6" fill="currentColor"><path d="M4.5 0L9 6H0z"/></svg></button>'
-      +             '<button id="cw-list-bottom" class="cw-icon-btn cw-icon-btn--fade" title="맨 아래로"><svg width="9" height="6" viewBox="0 0 9 6" fill="currentColor"><path d="M4.5 6L0 0H9z"/></svg></button>'
+      +             '<button id="cw-list-top" class="cw-icon-btn cw-icon-btn--fade" title="' + escapeHtml(t('navScrollTop')) + '"><svg width="9" height="6" viewBox="0 0 9 6" fill="currentColor"><path d="M4.5 0L9 6H0z"/></svg></button>'
+      +             '<button id="cw-list-bottom" class="cw-icon-btn cw-icon-btn--fade" title="' + escapeHtml(t('navScrollBottom')) + '"><svg width="9" height="6" viewBox="0 0 9 6" fill="currentColor"><path d="M4.5 6L0 0H9z"/></svg></button>'
       +           '</div>'
       +         '</div>'
       +       '</div>'
@@ -5848,8 +5848,8 @@ window.name = 'oh-my-hi';
       +     '<div class="cw-tl-wrap">'
       +       '<div id="cw-timeline" class="cw-timeline cw-scroll"></div>'
       +       '<div id="cw-tl-nav" class="cw-nav-overlay">'
-      +         '<button id="cw-tl-top" class="cw-icon-btn" title="맨 위로"><svg width="9" height="6" viewBox="0 0 9 6" fill="currentColor"><path d="M4.5 0L9 6H0z"/></svg></button>'
-      +         '<button id="cw-tl-bottom" class="cw-icon-btn" title="맨 아래로"><svg width="9" height="6" viewBox="0 0 9 6" fill="currentColor"><path d="M4.5 6L0 0H9z"/></svg></button>'
+      +         '<button id="cw-tl-top" class="cw-icon-btn" title="' + escapeHtml(t('navScrollTop')) + '"><svg width="9" height="6" viewBox="0 0 9 6" fill="currentColor"><path d="M4.5 0L9 6H0z"/></svg></button>'
+      +         '<button id="cw-tl-bottom" class="cw-icon-btn" title="' + escapeHtml(t('navScrollBottom')) + '"><svg width="9" height="6" viewBox="0 0 9 6" fill="currentColor"><path d="M4.5 6L0 0H9z"/></svg></button>'
       +       '</div>'
       +     '</div>'
       +     '<div class="cw-detail-wrap">'
