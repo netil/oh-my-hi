@@ -8,6 +8,10 @@
   },
   "author": "Jae Sung Park <alberto.park@gmail.com>",
   "license": "MIT",
+  "bin": {
+    "oh-my-hi": "bin/oh-my-hi.mjs",
+    "omh": "bin/oh-my-hi.mjs"
+  },
   "keywords": [
     "claude-code",
     "plugin",

@@ -50,6 +50,7 @@ import { parseUsage, loadMtimeIndex, saveMtimeIndex, scanTranscriptMonths } from
 import { detectScopes } from './parsers/scopes.mjs';
 import { computeWeeklyDigestsFromDb } from './digest.mjs';
 import { toMonthKey } from './util.mjs';
+import { claudeProvider } from './providers/claude.mjs';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -91,8 +92,8 @@ const IS_ACTUAL_DEV_REPO = (() => {
   } catch { return false; }
 })();
 
-const CLAUDE_CONFIG_DIR = process.env.CLAUDE_CONFIG_DIR
-  || path.join(process.env.HOME, '.claude');
+// Resolved via the Claude provider adapter (CLAUDE_CONFIG_DIR env → ~/.claude).
+const CLAUDE_CONFIG_DIR = claudeProvider.configDir();
 
 const args = process.argv.slice(2);
 if (args.includes('--help')) {
