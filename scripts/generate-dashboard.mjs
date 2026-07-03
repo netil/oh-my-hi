@@ -666,16 +666,26 @@ async function main() {
   // 'codex' scope, tagged provider='codex'. Additive & idempotent: rollout
   // logs are append-only and appendUsage uses INSERT OR IGNORE. No-op when
   // Codex isn't installed, so the Claude path is unaffected.
+  const CODEX_MTIME_PATH = path.join(OUTPUT, 'cache', 'codex-mtime-index.json');
   const ingestCodex = async (cutoffMs = 0) => {
     if (!dbModule) return;
     const dir = codexProvider.configDir();
     if (!fs.existsSync(dir)) return;
+    // Incremental: only parse rollout files new/changed since last build.
+    let mtimeIndex = {};
+    try { mtimeIndex = JSON.parse(fs.readFileSync(CODEX_MTIME_PATH, 'utf-8')); } catch { /* first run */ }
     try {
-      const usage = await codexProvider.parseUsage(dir, cutoffMs);
+      const usage = await codexProvider.parseUsage(dir, cutoffMs, { mtimeIndex });
       if (usage.tokenEntries.length || usage.latencyEntries.length) {
-        await appendToMonthly('codex', usage);
-        console.log(`  codex: ${usage.tokenEntries.length} token entries, ${usage.latencyEntries.length} latency`);
+        if (await appendToMonthly('codex', usage)) {
+          console.log(`  codex: ${usage.tokenEntries.length} new token entries, ${usage.latencyEntries.length} latency`);
+        }
       }
+      // Persist index only after a successful pass so a failed write re-parses.
+      try {
+        fs.mkdirSync(path.dirname(CODEX_MTIME_PATH), { recursive: true });
+        fs.writeFileSync(CODEX_MTIME_PATH, JSON.stringify(mtimeIndex));
+      } catch { /* best effort */ }
     } catch (e) {
       console.warn('oh-my-hi: codex ingest failed —', e.message);
     }
@@ -716,9 +726,10 @@ async function main() {
     }
     cache._parsed = 0;
 
-    // Parse only changed transcript files
-    const scopes = detectScopes(CLAUDE_CONFIG_DIR, extraPaths);
-    const projectScopes = scopes.filter(s => s.type !== 'global');
+    // Parse only changed transcript files (Claude scopes only — codex is
+    // ingested separately via ingestCodex).
+    const scopes = detectAllScopes(CLAUDE_CONFIG_DIR, extraPaths);
+    const projectScopes = scopes.filter(s => s.type !== 'global' && !s.provider);
     await Promise.all([
       parseUsage(CLAUDE_CONFIG_DIR, 0, null, { cache }),
       ...projectScopes.map(s =>
@@ -766,6 +777,16 @@ async function main() {
       try {
         const existingData = JSON.parse(fs.readFileSync(dataPath, 'utf-8'));
         existingData.generatedAt = new Date().toISOString();
+        // Register newly-detected provider scopes (e.g. codex) so they appear in
+        // the scope selector even in lightweight mode (structure fills on full build).
+        const existingIds = new Set((existingData.scopes || []).map(s => s.id));
+        for (const s of scopes) {
+          if (existingIds.has(s.id) || !s.provider || s.provider === 'claude') continue;
+          (existingData.scopes ||= []).push(s);
+          // eslint-disable-next-line no-unused-vars
+          const { usage, ...structure } = emptyScopeData();
+          (existingData.scopeData ||= {})[s.id] = structure;
+        }
         // Refresh the weekly digest (cheap: 14-day SQLite query per scope)
         if (dbModule) {
           const digestScopes = Object.keys(existingData.scopeData || { global: true });
@@ -816,7 +837,7 @@ async function main() {
 
   // ── Full mode (user-initiated /omh) ──
   notifyUpdateIfAvailable(); // instant: reads cache only, no network
-  const scopes = detectScopes(CLAUDE_CONFIG_DIR, extraPaths);
+  const scopes = detectAllScopes(CLAUDE_CONFIG_DIR, extraPaths);
   const systemLocale = detectSystemLocale();
   const _pricingResult = await fetchModelPricing();
   const modelPricing = _pricingResult?.pricing ?? null;
@@ -906,7 +927,7 @@ async function main() {
       stubCache._parsed = 0;
       stubCache._processed = 0;
       stubCache._total = 0;
-      const projectScopes = scopes.filter(s => s.type !== 'global');
+      const projectScopes = scopes.filter(s => s.type !== 'global' && !s.provider);
       await Promise.all([
         parseUsage(CLAUDE_CONFIG_DIR, 0, null, { cache: stubCache }),
         ...projectScopes.map(s =>
@@ -1028,9 +1049,13 @@ async function collectAllScopes(scopes, { days = 0, cache, cachePath, skipUsage 
   const [globalData, ...projectResults] = await Promise.all([
     collectScopeData(CLAUDE_CONFIG_DIR, usageOpts),
     ...projectScopes.map(scope =>
-      !fs.existsSync(scope.configPath)
+      // Non-Claude provider scopes (e.g. codex) carry no Claude structure —
+      // their usage is ingested to SQLite separately (ingestCodex).
+      (scope.provider && scope.provider !== 'claude')
         ? Promise.resolve({ id: scope.id, data: emptyScopeData() })
-        : collectProjectData(scope.configPath, scope.projectPath, usageOpts).then(data => ({ id: scope.id, data }))
+        : !fs.existsSync(scope.configPath)
+          ? Promise.resolve({ id: scope.id, data: emptyScopeData() })
+          : collectProjectData(scope.configPath, scope.projectPath, usageOpts).then(data => ({ id: scope.id, data }))
     ),
   ]);
 
@@ -1451,6 +1476,21 @@ function buildTaskCategories(scopeData, dbContextNames = []) {
 }
 
 /** Empty scope data */
+/**
+ * Claude scopes (global + projects) plus a synthetic 'codex' provider scope
+ * when a Codex config dir exists. The codex scope carries no Claude structure
+ * (structure catalog is P5); its usage is served from SQLite (ingestCodex).
+ * scope.type is ignored by the frontend, so 'provider' is safe.
+ */
+function detectAllScopes(configDir, extraPaths) {
+  const scopes = detectScopes(configDir, extraPaths);
+  const codexDir = codexProvider.configDir();
+  if (fs.existsSync(codexDir)) {
+    scopes.push({ id: 'codex', label: 'Codex', type: 'provider', configPath: codexDir, projectPath: null, provider: 'codex' });
+  }
+  return scopes;
+}
+
 function emptyScopeData() {
   return {
     configFiles: [], skills: [], agents: [], plugins: [], hooks: [],

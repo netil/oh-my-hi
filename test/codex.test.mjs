@@ -105,6 +105,27 @@ test('parseUsage: cutoffMs filters out older entries', async () => {
   }
 });
 
+test('parseUsage mtimeIndex skips unchanged files on re-parse', async () => {
+  const home = tmpCodexHome();
+  try {
+    writeRollout(home, 'sessions', 'rollout-inc.jsonl', [
+      { timestamp: '2026-06-02T09:00:00.000Z', type: 'turn_context', payload: { model: 'gpt-5.5' } },
+      { timestamp: '2026-06-02T09:01:00.000Z', type: 'event_msg', payload: { type: 'token_count', info: {
+        last_token_usage: { input_tokens: 100, output_tokens: 10 } } } },
+    ]);
+    const idx = {};
+    const first = await codexProvider.parseUsage(home, 0, { mtimeIndex: idx });
+    assert.strictEqual(first.tokenEntries.length, 1, 'first pass parses the file');
+    assert.strictEqual(Object.keys(idx).length, 1, 'index records the file mtime');
+
+    // Second pass with the same index: unchanged file is skipped.
+    const second = await codexProvider.parseUsage(home, 0, { mtimeIndex: idx });
+    assert.strictEqual(second.tokenEntries.length, 0, 'unchanged file skipped');
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+});
+
 test('collectRolloutFiles finds sessions and archived_sessions', () => {
   const home = tmpCodexHome();
   try {

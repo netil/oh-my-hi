@@ -61,15 +61,29 @@ export const codexProvider = {
    * (skills/agents/mcpCalls) are left empty here — the structure catalog is
    * parsed separately (see P5).
    *
+   * Incremental: pass an `mtimeIndex` map ({ absPath: mtimeMs }) to skip files
+   * whose size/mtime are unchanged since the last parse (their entries are
+   * already in SQLite). The index is mutated in place with each parsed file's
+   * mtime. This is essential on iCloud-backed configs where reading every
+   * rollout re-downloads placeholder files.
+   *
    * @param {string} configDir
    * @param {number} [cutoffMs] only entries at/after this epoch-ms are kept (0 = all)
+   * @param {{ mtimeIndex?: Record<string, number>|null }} [opts]
    * @returns {Promise<{ tokenEntries: any[], promptStats: any[], skills: any[],
    *   agents: any[], mcpCalls: any[], latencyEntries: any[] }>}
    */
-  async parseUsage(configDir, cutoffMs = 0) {
+  async parseUsage(configDir, cutoffMs = 0, { mtimeIndex = null } = {}) {
     const empty = { tokenEntries: [], promptStats: [], skills: [], agents: [], mcpCalls: [], latencyEntries: [] };
     const files = collectRolloutFiles(configDir);
     for (const file of files) {
+      // Skip unchanged files (stat is cheap metadata; readFile would download).
+      if (mtimeIndex) {
+        let mt;
+        try { mt = fs.statSync(file).mtimeMs; } catch { continue; }
+        if (mtimeIndex[file] === mt) continue;
+        mtimeIndex[file] = mt;
+      }
       let raw;
       try { raw = await fsp.readFile(file, 'utf8'); } catch { continue; }
       const sessionId = path.basename(file).replace(/\.jsonl$/, '');
