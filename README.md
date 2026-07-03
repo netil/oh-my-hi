@@ -86,6 +86,43 @@ This will parse your harness data, build the dashboard, and open it in your brow
 | `/omh --status` | Check auto-rebuild status |
 | `/omh <path>` | Build with specific project paths only |
 
+### Standalone (without Claude Code)
+
+oh-my-hi is also a plain CLI — it does not require Claude Code to run:
+
+```bash
+npx --yes oh-my-hi          # one-off
+npm install -g oh-my-hi     # then: oh-my-hi  (or: omh)
+```
+
+All flags above work the same (`oh-my-hi --data-only`, `oh-my-hi --help`, …).
+
+### Multi-tool: Codex
+
+oh-my-hi discovers data by config directory, so it shows **Claude Code and
+[Codex](https://developers.openai.com/codex) side by side** — pick a tool from
+the scope selector to see its tokens, cost, sessions, skills, memory, and MCP.
+
+- Claude Code data comes from `CLAUDE_CONFIG_DIR` (default `~/.claude`).
+- Codex data comes from `CODEX_HOME` (default `~/.codex`). Set it if your Codex
+  config lives elsewhere:
+
+  ```bash
+  CODEX_HOME=/path/to/codex-config npx oh-my-hi
+  ```
+
+A provider whose config dir is absent is skipped, so a Claude-only (or
+Codex-only) machine just works. Codex token accounting (cached-input subset,
+reasoning tokens, no cache-creation) and GPT-5.x / Codex pricing are handled
+automatically.
+
+**Launching from Codex** — Codex has no plugin system, so run the CLI directly,
+or install the ready-made prompt at [`codex/omh-prompt.md`](codex/omh-prompt.md):
+
+```bash
+cp codex/omh-prompt.md "${CODEX_HOME:-$HOME/.codex}/prompts/omh.md"   # then use /omh in Codex
+```
+
 ### Auto-refresh
 
 Enable automatic data refresh so the dashboard stays up to date:
