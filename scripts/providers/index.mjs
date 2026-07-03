@@ -8,9 +8,10 @@
 // skipped, so a Claude-only machine behaves exactly as before.
 import fs from 'fs';
 import { claudeProvider } from './claude.mjs';
+import { codexProvider } from './codex.mjs';
 
 /** All known providers, in display order. */
-export const PROVIDERS = [claudeProvider];
+export const PROVIDERS = [claudeProvider, codexProvider];
 
 /** @param {string} id */
 export function getProvider(id) {

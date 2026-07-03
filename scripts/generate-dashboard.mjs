@@ -51,6 +51,7 @@ import { detectScopes } from './parsers/scopes.mjs';
 import { computeWeeklyDigestsFromDb } from './digest.mjs';
 import { toMonthKey } from './util.mjs';
 import { claudeProvider } from './providers/claude.mjs';
+import { codexProvider } from './providers/codex.mjs';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -661,6 +662,25 @@ async function main() {
     return ok;
   };
 
+  // Ingest Codex usage (if a Codex config dir exists) into SQLite under the
+  // 'codex' scope, tagged provider='codex'. Additive & idempotent: rollout
+  // logs are append-only and appendUsage uses INSERT OR IGNORE. No-op when
+  // Codex isn't installed, so the Claude path is unaffected.
+  const ingestCodex = async (cutoffMs = 0) => {
+    if (!dbModule) return;
+    const dir = codexProvider.configDir();
+    if (!fs.existsSync(dir)) return;
+    try {
+      const usage = await codexProvider.parseUsage(dir, cutoffMs);
+      if (usage.tokenEntries.length || usage.latencyEntries.length) {
+        await appendToMonthly('codex', usage);
+        console.log(`  codex: ${usage.tokenEntries.length} token entries, ${usage.latencyEntries.length} latency`);
+      }
+    } catch (e) {
+      console.warn('oh-my-hi: codex ingest failed —', e.message);
+    }
+  };
+
   const getDbCtxNames = () => {
     if (!dbModule) return [];
     try { return dbModule.queryContextNamesAllMonths(OUTPUT); } catch { return []; }
@@ -766,6 +786,9 @@ async function main() {
 
     // Update mtime index only if DB write succeeded — failed writes retry next run
     if (dataOnlyDbOk) saveMtimeIndex(CACHE_PATH, cache);
+
+    // Ingest Codex usage alongside the Claude incremental update
+    await ingestCodex();
 
     // Ensure _devBuild flag is set when running from the real dev repo
     if (IS_ACTUAL_DEV_REPO && fs.existsSync(dataPath)) {
@@ -937,6 +960,9 @@ async function main() {
       dashboardUrl = await spawnServeOrRefresh();
     }
   }
+
+  // Ingest Codex usage once for both full-mode paths (first-run + normal).
+  await ingestCodex();
 
   await flushRescue();
   console.log(`oh-my-hi: ✅ done → ${dashboardUrl}`);

@@ -110,6 +110,7 @@ function migrate(db) {
       })();
     }
     if (v < 2) migrateToV2(db);
+    if (v < 3) migrateToV3(db);
   }
   // Full-text search over user prompt texts (FTS5 virtual table).
   // Created lazily for both fresh and pre-existing DBs. Wrapped in try/catch:
@@ -138,7 +139,22 @@ function migrate(db) {
     } catch { /* FTS5 not compiled in — search disabled */ }
   }
   // Future incremental migrations go here:
-  // if (v < 3) migrateToV3(db);
+  // if (v < 4) migrateToV4(db);
+}
+
+/**
+ * v2 → v3: add a `provider` column to token_entries so usage from multiple
+ * harnesses (Claude, Codex, …) can coexist and be filtered/grouped. Existing
+ * rows are all Claude data by definition, so they default to 'claude'.
+ * Not part of the unique key: each provider writes under its own scope, so
+ * provider is functionally determined by scope and cannot cause key collisions.
+ */
+function migrateToV3(db) {
+  db.transaction(() => {
+    // ADD COLUMN with a NOT NULL DEFAULT backfills existing rows in one step.
+    db.exec(`ALTER TABLE token_entries ADD COLUMN provider TEXT NOT NULL DEFAULT 'claude';`);
+    db.pragma('user_version = 3');
+  })();
 }
 
 /**
@@ -288,7 +304,8 @@ function initSchema(db) {
         raw_input     INTEGER DEFAULT 0,
         context       TEXT,
         context_name  TEXT,
-        machine       TEXT    NOT NULL DEFAULT ''
+        machine       TEXT    NOT NULL DEFAULT '',
+        provider      TEXT    NOT NULL DEFAULT 'claude'
       );
       CREATE INDEX idx_te_scope_ts ON token_entries(scope, timestamp);
       CREATE UNIQUE INDEX idx_te_unique
@@ -359,7 +376,7 @@ function initSchema(db) {
       );
       CREATE INDEX idx_le_scope_ts ON latency_entries(scope, timestamp);
     `);
-    db.pragma('user_version = 2');
+    db.pragma('user_version = 3');
   })();
 }
 
@@ -555,6 +572,7 @@ export function splitLegacyDb(legacyDb, outputDir) {
         latencyMs: r.latency_ms,
         charLen: r.char_len,
         machine: r.machine,
+        provider: r.provider ?? 'claude',
       })),
       // Legacy prompt_stats are daily aggregates ({date, message_count, …}); individual
       // timestamps are not recoverable, so they cannot be stored in the new prompt_entries
@@ -762,9 +780,9 @@ export function upsertUsage(db, scope, usage, machine = getMachineId()) {
   const insTokens = db.prepare(`
     INSERT INTO token_entries
       (scope, session_id, timestamp, model, input_tokens, output_tokens,
-       cache_read, cache_creation, raw_input, context, context_name, machine)
+       cache_read, cache_creation, raw_input, context, context_name, machine, provider)
     VALUES (@scope, @session_id, @timestamp, @model, @input_tokens, @output_tokens,
-            @cache_read, @cache_creation, @raw_input, @context, @context_name, @machine)
+            @cache_read, @cache_creation, @raw_input, @context, @context_name, @machine, @provider)
   `);
   const insPrompts = db.prepare(`
     INSERT OR REPLACE INTO prompt_entries (scope, session_id, timestamp, char_len, preview, machine)
@@ -804,6 +822,7 @@ export function upsertUsage(db, scope, usage, machine = getMachineId()) {
         context: e.context != null ? String(e.context) : null,
         context_name: e.contextName ?? null,
         machine: e.machine ?? machine,
+        provider: e.provider ?? 'claude',
       });
     }
     for (const p of (usage.promptStats || [])) {
@@ -848,9 +867,9 @@ export function appendUsage(db, scope, usage, machine = getMachineId()) {
   const insTokens = db.prepare(`
     INSERT OR IGNORE INTO token_entries
       (scope, session_id, timestamp, model, input_tokens, output_tokens,
-       cache_read, cache_creation, raw_input, context, context_name, machine)
+       cache_read, cache_creation, raw_input, context, context_name, machine, provider)
     VALUES (@scope, @session_id, @timestamp, @model, @input_tokens, @output_tokens,
-            @cache_read, @cache_creation, @raw_input, @context, @context_name, @machine)
+            @cache_read, @cache_creation, @raw_input, @context, @context_name, @machine, @provider)
   `);
   const insPrompts = db.prepare(`
     INSERT OR REPLACE INTO prompt_entries (scope, session_id, timestamp, char_len, preview, machine)
@@ -893,6 +912,7 @@ export function appendUsage(db, scope, usage, machine = getMachineId()) {
         context: e.context != null ? String(e.context) : null,
         context_name: e.contextName ?? null,
         machine: e.machine ?? machine,
+        provider: e.provider ?? 'claude',
       });
     }
     for (const p of (usage.promptStats || [])) {
@@ -937,7 +957,7 @@ export function queryTokenEntries(db, scope, from, to) {
   const toMs = Number.isFinite(to) ? to : Number.MAX_SAFE_INTEGER;
   return db.prepare(`
     SELECT session_id, timestamp, model, input_tokens, output_tokens,
-           cache_read, cache_creation, raw_input, context, context_name, machine
+           cache_read, cache_creation, raw_input, context, context_name, machine, provider
     FROM token_entries
     WHERE scope = ? AND timestamp BETWEEN ? AND ?
     ORDER BY timestamp
@@ -953,6 +973,7 @@ export function queryTokenEntries(db, scope, from, to) {
     context: r.context,
     contextName: r.context_name,
     machine: r.machine,
+    provider: r.provider,
   }));
 }
 
