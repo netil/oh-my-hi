@@ -52,6 +52,7 @@ import { computeWeeklyDigestsFromDb } from './digest.mjs';
 import { toMonthKey } from './util.mjs';
 import { claudeProvider } from './providers/claude.mjs';
 import { codexProvider } from './providers/codex.mjs';
+import { parseCodexStructure } from './providers/codex.mjs';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -784,7 +785,7 @@ async function main() {
           if (existingIds.has(s.id) || !s.provider || s.provider === 'claude') continue;
           (existingData.scopes ||= []).push(s);
           // eslint-disable-next-line no-unused-vars
-          const { usage, ...structure } = emptyScopeData();
+          const { usage, ...structure } = s.provider === 'codex' ? buildCodexScopeData(s.configPath) : emptyScopeData();
           (existingData.scopeData ||= {})[s.id] = structure;
         }
         // Refresh the weekly digest (cheap: 14-day SQLite query per scope)
@@ -1049,10 +1050,10 @@ async function collectAllScopes(scopes, { days = 0, cache, cachePath, skipUsage 
   const [globalData, ...projectResults] = await Promise.all([
     collectScopeData(CLAUDE_CONFIG_DIR, usageOpts),
     ...projectScopes.map(scope =>
-      // Non-Claude provider scopes (e.g. codex) carry no Claude structure —
-      // their usage is ingested to SQLite separately (ingestCodex).
+      // Non-Claude provider scopes (e.g. codex) carry their own structure
+      // catalog; usage is ingested to SQLite separately (ingestCodex).
       (scope.provider && scope.provider !== 'claude')
-        ? Promise.resolve({ id: scope.id, data: emptyScopeData() })
+        ? Promise.resolve({ id: scope.id, data: scope.provider === 'codex' ? buildCodexScopeData(scope.configPath) : emptyScopeData() })
         : !fs.existsSync(scope.configPath)
           ? Promise.resolve({ id: scope.id, data: emptyScopeData() })
           : collectProjectData(scope.configPath, scope.projectPath, usageOpts).then(data => ({ id: scope.id, data }))
@@ -1489,6 +1490,18 @@ function detectAllScopes(configDir, extraPaths) {
     scopes.push({ id: 'codex', label: 'Codex', type: 'provider', configPath: codexDir, projectPath: null, provider: 'codex' });
   }
   return scopes;
+}
+
+/** Scope data for the codex provider: empty Claude structure + parsed Codex catalog. */
+function buildCodexScopeData(configDir) {
+  const data = emptyScopeData();
+  try {
+    const struct = parseCodexStructure(configDir);
+    data.skills = struct.skills;
+    data.memory = struct.memory;
+    data.mcpServers = struct.mcpServers;
+  } catch { /* leave empty on parse failure */ }
+  return data;
 }
 
 function emptyScopeData() {

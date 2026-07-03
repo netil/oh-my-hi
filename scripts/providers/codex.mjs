@@ -12,6 +12,8 @@
 import fs from 'fs';
 import fsp from 'fs/promises';
 import path from 'path';
+import { parseSkills } from '../parsers/skills.mjs';
+import { parseFrontmatter } from '../parsers/frontmatter.mjs';
 
 /**
  * @typedef {{ inputTokens: number, outputTokens: number,
@@ -139,6 +141,83 @@ export const codexProvider = {
     return empty;
   },
 };
+
+/**
+ * Parse the Codex harness structure catalog for the dashboard's #structure /
+ * sidebar. Codex reuses the Claude SKILL.md format, so parseSkills applies
+ * directly; memory (memories/*.md) and MCP (config.toml [mcp_servers.*]) get
+ * lightweight dedicated parsers. Returns partial scopeData structure fields.
+ *
+ * @param {string} configDir
+ * @returns {{ skills: any[], memory: any[], mcpServers: any[] }}
+ */
+export function parseCodexStructure(configDir) {
+  return {
+    skills: parseSkills(configDir),   // Codex skills/*/SKILL.md — same layout as Claude
+    memory: parseCodexMemory(configDir),
+    mcpServers: parseCodexMcp(configDir),
+  };
+}
+
+/** Read memories/*.md frontmatter into the shared memory shape. */
+function parseCodexMemory(configDir) {
+  const dir = path.join(configDir, 'memories');
+  const out = [];
+  let files;
+  try { files = fs.readdirSync(dir); } catch { return out; }
+  for (const file of files) {
+    if (!file.endsWith('.md') || file === 'MEMORY.md') continue;
+    const filePath = path.join(dir, file);
+    try {
+      const { meta, body } = parseFrontmatter(filePath);
+      out.push({
+        name: meta.name || path.basename(file, '.md'),
+        description: meta.description || '',
+        type: meta.type || 'unknown',
+        filePath,
+        body,
+        scope: 'codex',
+      });
+    } catch { /* skip unreadable */ }
+  }
+  return out;
+}
+
+/**
+ * Parse `[mcp_servers.NAME]` tables from config.toml. Minimal TOML: captures
+ * server name, command, and args. Never exposes env values (secrets).
+ */
+function parseCodexMcp(configDir) {
+  const tomlPath = path.join(configDir, 'config.toml');
+  let raw;
+  try { raw = fs.readFileSync(tomlPath, 'utf8'); } catch { return []; }
+  const out = [];
+  // Split into lines; track the current [mcp_servers.NAME] table.
+  let cur = null;
+  for (const line of raw.split('\n')) {
+    const s = line.trim();
+    const header = s.match(/^\[mcp_servers\.([^\]]+)\]$/);
+    if (header) {
+      cur = { name: header[1].replace(/^"|"$/g, ''), command: '', args: [], type: null, envKeys: [], sourcePath: tomlPath };
+      out.push(cur);
+      continue;
+    }
+    if (/^\[/.test(s)) { cur = null; continue; } // left the table
+    if (!cur) continue;
+    const cmd = s.match(/^command\s*=\s*"([^"]*)"/);
+    if (cmd) { cur.command = cmd[1]; continue; }
+    const args = s.match(/^args\s*=\s*\[(.*)\]/);
+    if (args) {
+      cur.args = args[1].split(',').map(a => a.trim().replace(/^"|"$/g, '')).filter(Boolean);
+      continue;
+    }
+    const env = s.match(/^env\s*=\s*\{(.*)\}/);
+    if (env) {
+      cur.envKeys = [...env[1].matchAll(/"?([A-Za-z_][A-Za-z0-9_]*)"?\s*=/g)].map(m => m[1]);
+    }
+  }
+  return out;
+}
 
 /**
  * Recursively collect rollout JSONL files under sessions/ and archived_sessions/.

@@ -5,7 +5,7 @@ import assert from 'node:assert';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-import { codexProvider, collectRolloutFiles } from '../scripts/providers/codex.mjs';
+import { codexProvider, collectRolloutFiles, parseCodexStructure } from '../scripts/providers/codex.mjs';
 import { calcEntryCost, resolvePricingKey, PRICING_FALLBACK } from '../scripts/export.mjs';
 
 function tmpCodexHome() {
@@ -140,6 +140,46 @@ test('pricing: gpt models resolve and cost is computed from Codex normalization'
 test('pricing: unknown gpt model yields 0 cost (no guessing)', () => {
   assert.strictEqual(resolvePricingKey('gpt-9-imaginary', PRICING_FALLBACK), null);
   assert.strictEqual(calcEntryCost({ model: 'gpt-9-imaginary', rawInput: 100 }, PRICING_FALLBACK), 0);
+});
+
+test('parseCodexStructure: skills, memory, and MCP from config dir', () => {
+  const home = tmpCodexHome();
+  try {
+    // skill (Claude SKILL.md layout)
+    fs.mkdirSync(path.join(home, 'skills', 'backup'), { recursive: true });
+    fs.writeFileSync(path.join(home, 'skills', 'backup', 'SKILL.md'),
+      '---\nname: "backup"\ndescription: "Backup skill"\n---\n# Backup\n');
+    // memory
+    fs.mkdirSync(path.join(home, 'memories'), { recursive: true });
+    fs.writeFileSync(path.join(home, 'memories', 'ctx.md'),
+      '---\nname: ctx\ndescription: work context\ntype: project\n---\nbody\n');
+    // MCP in config.toml
+    fs.writeFileSync(path.join(home, 'config.toml'),
+      '[mcp_servers.fs]\ncommand = "npx"\nargs = ["-y", "fs-mcp"]\n\n[projects."/x"]\n');
+
+    const s = parseCodexStructure(home);
+    assert.strictEqual(s.skills.length, 1);
+    assert.strictEqual(s.skills[0].name, 'backup');
+    assert.strictEqual(s.memory.length, 1);
+    assert.strictEqual(s.memory[0].scope, 'codex');
+    assert.strictEqual(s.memory[0].type, 'project');
+    assert.strictEqual(s.mcpServers.length, 1);
+    assert.strictEqual(s.mcpServers[0].name, 'fs');
+    assert.strictEqual(s.mcpServers[0].command, 'npx');
+    assert.deepStrictEqual(s.mcpServers[0].args, ['-y', 'fs-mcp']);
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test('parseCodexStructure: empty/missing dirs return empty arrays', () => {
+  const home = tmpCodexHome();
+  try {
+    const s = parseCodexStructure(home);
+    assert.deepStrictEqual(s, { skills: [], memory: [], mcpServers: [] });
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true });
+  }
 });
 
 test('collectRolloutFiles finds sessions and archived_sessions', () => {
