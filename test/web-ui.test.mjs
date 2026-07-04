@@ -99,6 +99,10 @@ describe('Web UI — Templates', () => {
       // Accumulator persists across period fetches (survives narrow custom ranges).
       assert.ok(js.includes('function recordActiveDays'), 'has recordActiveDays accumulator');
       assert.ok(js.includes('recordActiveDays(scope, usage)'), 'records days on each usage fetch');
+      // bounds/markers must not depend on the current period's fetched usage
+      assert.ok(snippet.includes('DATA._dateRange') || snippet.includes('sorted[sorted.length - 1]'), 'bounds derived independently of current period');
+      // only days with data are selectable as a boundary
+      assert.ok(snippet.includes('const isDisabled = !hasData'), 'empty days are not selectable');
       const css = fs.readFileSync(path.join(TEMPLATES, 'styles.css'), 'utf-8');
       assert.ok(css.includes('.calendar-cell.has-data'), 'has-data styled');
     });

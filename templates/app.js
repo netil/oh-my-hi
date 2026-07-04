@@ -1786,17 +1786,28 @@ window.name = 'oh-my-hi';
     const existing = document.getElementById('calendar-overlay');
     if (existing) existing.remove();
 
-    let dataRange = getDataDateRange();
-    const minDate = dataRange ? dataRange.start : new Date(2020, 0, 1);
-    const maxDate = dataRange ? dataRange.end : new Date();
-
-    // Days that actually have activity — marked in the grid so the user can see
-    // where data exists across every month (not just the selected range). Uses
-    // the per-scope accumulator (seeded with the currently loaded usage) so it
-    // stays complete even after a narrow custom-range fetch. Local Y-M-D keys
-    // match the calendar cells' own keys.
+    // Seed the accumulator with the currently loaded usage, then derive BOTH the
+    // selectable bounds and the has-data markers from it — so nothing here
+    // depends on the current period's (possibly narrow) fetched usage. Without
+    // this, applying a narrow custom range then reopening would collapse the
+    // calendar's min/max to that range and disable every other day.
     recordActiveDays(currentScope, getUsage());
     const dataDays = _activeDaysByScope[currentScope] || new Set();
+
+    let minDate, maxDate;
+    if (dataDays.size) {
+      const sorted = [...dataDays].sort();
+      const toLocal = (k) => { const p = k.split('-'); return new Date(+p[0], +p[1] - 1, +p[2]); };
+      minDate = toLocal(sorted[0]);
+      maxDate = toLocal(sorted[sorted.length - 1]);
+    } else if (DATA._dateRange && DATA._dateRange.from && DATA._dateRange.to) {
+      minDate = new Date(DATA._dateRange.from);
+      maxDate = new Date(DATA._dateRange.to);
+    } else {
+      const dr = getDataDateRange();
+      minDate = dr ? dr.start : new Date(2020, 0, 1);
+      maxDate = dr ? dr.end : new Date();
+    }
 
     let selStart = customDateRange ? customDateRange.start : new Date(maxDate);
     selStart = new Date(selStart);
@@ -1839,14 +1850,17 @@ window.name = 'oh-my-hi';
 
       for (let d = 1; d <= daysInMonth; d++) {
         const cellDate = new Date(year, month, d);
-        const isDisabled = cellDate < new Date(minDate.getFullYear(), minDate.getMonth(), minDate.getDate()) || cellDate > new Date(maxDate.getFullYear(), maxDate.getMonth(), maxDate.getDate());
+        const cellKey = year + '-' + String(month + 1).padStart(2, '0') + '-' + String(d).padStart(2, '0');
+        const hasData = dataDays.has(cellKey);
+        // Only days with activity are selectable as a range boundary (empty days
+        // in between still fall inside a selected range visually).
+        const isDisabled = !hasData;
         const isInRange = cellDate >= tempStart && cellDate <= tempEnd;
         const isStart = sameDay(cellDate, tempStart);
         const isEnd = sameDay(cellDate, tempEnd);
-        const cellKey = year + '-' + String(month + 1).padStart(2, '0') + '-' + String(d).padStart(2, '0');
         let cls = 'calendar-cell';
         if (isDisabled) cls += ' disabled';
-        if (dataDays.has(cellKey)) cls += ' has-data';
+        if (hasData) cls += ' has-data';
         if (isInRange) cls += ' in-range';
         if (isStart) cls += ' range-start';
         if (isEnd) cls += ' range-end';
