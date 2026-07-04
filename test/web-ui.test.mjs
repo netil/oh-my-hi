@@ -86,6 +86,23 @@ describe('Web UI — Templates', () => {
       assert.ok(css.includes('.provider-filter-btn.active {\n  background: var(--accent);'), 'active tab emphasized with accent');
     });
 
+    it('provider-aware text helper tp() covers Codex variants across pages', () => {
+      assert.ok(js.includes('function tp(key)'), 'has tp() helper');
+      assert.ok(js.includes("const ck = key + 'Codex'"), 'tp resolves {key}Codex variant');
+      // render sites route through tp()
+      for (const call of ["tp('tokensDesc')", "tp('activityDesc')", "tp('visGlobalClaude')", "tp('cwe_ev6_label')", 'tp(catDesc.key)']) {
+        assert.ok(js.includes(call), 'routes through tp: ' + call);
+      }
+      // Codex doc links hidden on the category page
+      assert.ok(js.includes("!== 'codex') ? docsLinkHtml"), 'hides Claude doc links for codex');
+      const en = JSON.parse(fs.readFileSync(path.join(TEMPLATES, 'locales', 'en.json'), 'utf-8'));
+      const ko = JSON.parse(fs.readFileSync(path.join(TEMPLATES, 'locales', 'ko.json'), 'utf-8'));
+      for (const k of ['tokensDescCodex', 'activityDescCodex', 'visGlobalClaudeCodex', 'cwe_ev6_labelCodex', 'catDescMcpServersCodex', 'cachePageDescCodex', 'insightCostDetailCodex']) {
+        assert.ok(en[k] && ko[k], k + ' in both locales');
+        assert.ok(!/Anthropic|Claude Code|CLAUDE\.md/.test(en[k]), k + ' has no Claude-specific wording');
+      }
+    });
+
     it('context explorer legend labels are provider-aware (Codex → AGENTS.md/Codex)', () => {
       assert.ok(js.includes('const cweLabel'), 'has provider-aware legend label helper');
       assert.ok(js.includes("if (key === 'cwe_legClaudeMd') return t('cwe_legAgentsMd')"), 'CLAUDE.md → AGENTS.md for codex');

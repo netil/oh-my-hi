@@ -127,6 +127,20 @@ window.name = 'oh-my-hi';
     return str;
   }
 
+  // Provider-aware translate: under a Codex scope, prefer a `{key}Codex` variant
+  // when one exists, else fall back to the base key. Lets tool-specific wording
+  // (AGENTS.md vs CLAUDE.md, OpenAI vs Anthropic, …) reuse the same call sites.
+  function tp(key) {
+    const args = Array.from(arguments).slice(1);
+    if (scopeProvider(currentScope) === 'codex') {
+      const ck = key + 'Codex';
+      if ((I18N[currentLang] && I18N[currentLang][ck]) || I18N.en[ck]) {
+        return t.apply(null, [ck].concat(args));
+      }
+    }
+    return t.apply(null, [key].concat(args));
+  }
+
   // ── Constants ──
   const CATEGORIES = [
     { key: 'configFiles', i18nKey: 'catConfigFiles', icon: '📄', color: '#059669' },
@@ -2017,7 +2031,7 @@ window.name = 'oh-my-hi';
 
     let html = '<div class="page-header">'
       + '<div class="page-header-row"><h1>🪙 ' + t('tokensTitle') + '</h1>' + renderExportButtons() + '</div>'
-      + '<div class="page-desc">' + t('tokensDesc') + '</div>'
+      + '<div class="page-desc">' + tp('tokensDesc') + '</div>'
       + '</div>'
       + renderPeriodFilter()
       + '<div class="overview-hero solo">'
@@ -4475,7 +4489,7 @@ window.name = 'oh-my-hi';
     // Context Budget — visibility heatmap (filtered by selected period)
     let visBarSegments = [];
     const visLabels = {
-      globalClaude: t('visGlobalClaude'), projectClaude: t('visProjectClaude'),
+      globalClaude: tp('visGlobalClaude'), projectClaude: tp('visProjectClaude'),
       autoMemory: t('visAutoMemory'), skillsDesc: t('visSkillsDesc'),
       mcpTools: t('visMcpTools'), principles: t('visPrinciples')
     };
@@ -4530,7 +4544,7 @@ window.name = 'oh-my-hi';
 
     // Activity Heatmap — based on transcript usage data
     html += '<div class="section">'
-      + '<div class="section-title">' + t('activity') + ' <span class="section-title-sub">' + t('activityDesc') + '</span></div>'
+      + '<div class="section-title">' + t('activity') + ' <span class="section-title-sub">' + tp('activityDesc') + '</span></div>'
       + renderHeatmapFromMap(buildActivityMap([].concat(usage.skills || [], usage.agents || [], usage.commands || [], usage.mcpCalls || [])), days)
       + '</div>';
 
@@ -5899,8 +5913,8 @@ window.name = 'oh-my-hi';
         ev3: t('cwe_ev3_label'),
         ev4: t('cwe_ev4_label'),
         ev5: t('cwe_ev5_label'),
-        ev6: t('cwe_ev6_label'),
-        ev7: t('cwe_ev7_label'),
+        ev6: tp('cwe_ev6_label'),
+        ev7: tp('cwe_ev7_label'),
         principles: t('catPrinciples'),
       };
       return _buildSessionEventsPure(sessionId, getUsage(), contextStats, labels);
@@ -7454,13 +7468,15 @@ window.name = 'oh-my-hi';
       configFiles: { key: 'catDescConfigFiles', docs: 'https://docs.anthropic.com/en/docs/claude-code/settings' }
     };
     const catDesc = CATEGORY_DESC[currentView];
-    const catDescText = catDesc ? escapeHtml(t(catDesc.key)) : '';
+    const catDescText = catDesc ? escapeHtml(tp(catDesc.key)) : '';
+    // The doc links point to Claude Code docs — hide them under a Codex scope.
+    const catDocsHtml = (catDesc && catDesc.docs && scopeProvider(currentScope) !== 'codex') ? docsLinkHtml(catDesc.docs) : '';
 
     let html = '<div class="page-header">'
       + '<h1>' + cat.icon + ' ' + t('categoryOverview', getCatLabel(cat)) + '</h1>'
       + '<div class="subtext">' + t('itemsIn', items.length, scope ? scope.label : currentScope) + '</div>'
       + (catDescText ? '<div class="page-desc">' + catDescText
-        + docsLinkHtml(catDesc.docs)
+        + catDocsHtml
         + '</div>' : '')
       + '</div>';
 
