@@ -5917,7 +5917,13 @@ window.name = 'oh-my-hi';
         ev7: tp('cwe_ev7_label'),
         principles: t('catPrinciples'),
       };
-      return _buildSessionEventsPure(sessionId, getUsage(), contextStats, labels);
+      const events = _buildSessionEventsPure(sessionId, getUsage(), contextStats, labels);
+      // Assistant turns default to the 'claude' kind — relabel them 'codex'
+      // under a Codex scope so the badge/color reflect the actual tool.
+      if (scopeProvider(currentScope) === 'codex') {
+        events.forEach((e) => { if (e.kind === 'claude') e.kind = 'codex'; });
+      }
+      return events;
     }
 
     // Build a timeline of events from a real session's tokenEntries.

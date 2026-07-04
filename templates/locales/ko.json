@@ -641,6 +641,8 @@
   "cwe_legHooks": "훅",
   "cwe_legAgentsMd": "AGENTS.md",
   "cwe_legCodex": "Codex",
+  "cwe_kindCodex": "codex",
+  "cwe_kindCodexDetail": "Codex 작업",
 
   "cwe_ev0_label": "대화 요약",
   "cwe_ev0_desc": "전체 대화를 하나의 구조화된 요약으로 응축한 것. 유지되는 내용: 요청/의도, 주요 기술 개념, 다룬 파일, 에러와 해결 과정, 남은 작업, 현재 진행 중인 작업. 사라지는 내용: 툴 출력 전문과 중간 추론 과정. Claude는 작업을 참고할 수 있지만 이전에 읽은 정확한 코드는 갖고 있지 않습니다.",

@@ -113,6 +113,15 @@ describe('Web UI — Templates', () => {
       }
     });
 
+    it('session-timeline assistant turns relabel claude→codex under a Codex scope', () => {
+      assert.ok(js.includes("if (e.kind === 'claude') e.kind = 'codex'"), 'remaps claude kind to codex for codex scope');
+      const example = fs.readFileSync(path.join(TEMPLATES, 'context-example.mjs'), 'utf-8');
+      assert.ok(example.includes('codex:') && example.includes("badgeKey: 'cwe_kindCodex'"), 'KIND_META has codex badge');
+      const en = JSON.parse(fs.readFileSync(path.join(TEMPLATES, 'locales', 'en.json'), 'utf-8'));
+      const ko = JSON.parse(fs.readFileSync(path.join(TEMPLATES, 'locales', 'ko.json'), 'utf-8'));
+      for (const k of ['cwe_kindCodex', 'cwe_kindCodexDetail']) assert.ok(en[k] && ko[k], k + ' in both locales');
+    });
+
     it('context explorer legend labels are provider-aware (Codex → AGENTS.md/Codex)', () => {
       assert.ok(js.includes('const cweLabel'), 'has provider-aware legend label helper');
       assert.ok(js.includes("if (key === 'cwe_legClaudeMd') return t('cwe_legAgentsMd')"), 'CLAUDE.md → AGENTS.md for codex');
