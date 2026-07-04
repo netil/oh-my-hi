@@ -41,6 +41,23 @@ export function codexPromptPreview(text) {
   return text.slice(0, 200);
 }
 
+/**
+ * Classify a Codex function/tool call into omh's context model so session
+ * timelines show tool usage instead of a flat "conversation". MCP tools are
+ * namespaced (server__tool / mcp.*); everything else is a built-in tool
+ * (exec_command, apply_patch, update_plan, …).
+ * @param {string} name
+ * @returns {{ type: string, name: string }}
+ */
+export function classifyCodexTool(name) {
+  const nm = name || 'tool';
+  if (/^mcp[._]/i.test(nm) || nm.includes('__')) {
+    const server = nm.includes('__') ? nm.split('__')[1] : nm.replace(/^mcp[._]/i, '').split(/[._]/)[0];
+    return { type: 'mcp', name: server || nm };
+  }
+  return { type: 'tool', name: nm };
+}
+
 export const codexProvider = {
   id: 'codex',
   label: 'Codex',
@@ -111,6 +128,7 @@ export const codexProvider = {
       try { raw = await fsp.readFile(file, 'utf8'); } catch { continue; }
       const sessionId = path.basename(file).replace(/\.jsonl$/, '');
       let currentModel = null;
+      let currentContext = null; // last tool/function call before the next token_count
       for (const line of raw.split('\n')) {
         const s = line.trim();
         if (!s) continue;
@@ -123,6 +141,12 @@ export const codexProvider = {
           continue;
         }
         const p = o.payload;
+        // Tool/function calls classify the turn (exec_command, apply_patch, …)
+        // so the session timeline shows tool usage, not a flat "conversation".
+        if (o.type === 'response_item' && (p?.type === 'function_call' || p?.type === 'custom_tool_call')) {
+          currentContext = classifyCodexTool(p.name);
+          continue;
+        }
         // User prompts — event_msg/user_message carries the raw prompt text.
         // Needed for the session list / Context Explorer (a session is only
         // replayable if it has a first-prompt preview).
@@ -154,15 +178,17 @@ export const codexProvider = {
         if (cutoffMs && tsMs && tsMs < cutoffMs) continue;
 
         const model = info.model || currentModel || 'unknown';
+        const ctx = currentContext || { type: 'general', name: 'conversation' };
         empty.tokenEntries.push({
           timestamp: tsMs || o.timestamp,
           model,
           provider: 'codex',
           ...codexProvider.normalizeUsage(usage),
-          context: 'general',
-          contextName: 'conversation',
+          context: ctx.type,
+          contextName: ctx.name,
           sessionId,
         });
+        currentContext = null; // consume — the next turn classifies afresh
 
         // time_to_first_token_ms → latency
         const ttft = info.time_to_first_token_ms ?? p.time_to_first_token_ms ?? null;

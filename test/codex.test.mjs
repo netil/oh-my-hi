@@ -5,7 +5,7 @@ import assert from 'node:assert';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-import { codexProvider, collectRolloutFiles, parseCodexStructure, codexPromptPreview } from '../scripts/providers/codex.mjs';
+import { codexProvider, collectRolloutFiles, parseCodexStructure, codexPromptPreview, classifyCodexTool } from '../scripts/providers/codex.mjs';
 import { calcEntryCost, resolvePricingKey, PRICING_FALLBACK } from '../scripts/export.mjs';
 
 function tmpCodexHome() {
@@ -122,6 +122,36 @@ test('codexPromptPreview: extracts the real task from parallel-run system preamb
   assert.strictEqual(codexPromptPreview('read the handoff doc'), 'read the handoff doc');
   // iCloud path with spaces
   assert.strictEqual(codexPromptPreview('You are working in /Users/x/Mobile Documents/work. do the thing'), 'do the thing');
+});
+
+test('classifyCodexTool: built-in tools vs MCP', () => {
+  assert.deepStrictEqual(classifyCodexTool('exec_command'), { type: 'tool', name: 'exec_command' });
+  assert.deepStrictEqual(classifyCodexTool('apply_patch'), { type: 'tool', name: 'apply_patch' });
+  assert.deepStrictEqual(classifyCodexTool('mcp__playwright__click'), { type: 'mcp', name: 'playwright' });
+});
+
+test('parseUsage: token turns are classified by the preceding tool call', async () => {
+  const home = tmpCodexHome();
+  try {
+    writeRollout(home, 'sessions', 'rollout-tool.jsonl', [
+      { timestamp: '2026-06-02T09:00:00.000Z', type: 'turn_context', payload: { model: 'gpt-5.5' } },
+      // a shell tool call, then its turn's token_count
+      { timestamp: '2026-06-02T09:00:30.000Z', type: 'response_item', payload: { type: 'function_call', name: 'exec_command', arguments: '{}' } },
+      { timestamp: '2026-06-02T09:01:00.000Z', type: 'event_msg', payload: { type: 'token_count', info: {
+        last_token_usage: { input_tokens: 100, output_tokens: 10 } } } },
+      // a pure turn with no tool → conversation
+      { timestamp: '2026-06-02T09:02:00.000Z', type: 'event_msg', payload: { type: 'token_count', info: {
+        last_token_usage: { input_tokens: 50, output_tokens: 5 } } } },
+    ]);
+    const usage = await codexProvider.parseUsage(home, 0);
+    assert.strictEqual(usage.tokenEntries.length, 2);
+    assert.strictEqual(usage.tokenEntries[0].context, 'tool');
+    assert.strictEqual(usage.tokenEntries[0].contextName, 'exec_command');
+    assert.strictEqual(usage.tokenEntries[1].context, 'general', 'no tool → conversation');
+    assert.strictEqual(usage.tokenEntries[1].contextName, 'conversation');
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true });
+  }
 });
 
 test('parseUsage: cutoffMs filters out older entries', async () => {
