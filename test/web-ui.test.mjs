@@ -94,8 +94,11 @@ describe('Web UI — Templates', () => {
     it('calendar marks days that have data across all months (has-data)', () => {
       const idx = js.indexOf('function showCalendarPicker');
       const snippet = js.slice(idx, idx + 7000);
-      assert.ok(snippet.includes('const dataDays = new Set()'), 'builds a day set from usage');
+      assert.ok(snippet.includes('_activeDaysByScope[currentScope]'), 'uses the accumulated day set');
       assert.ok(snippet.includes("dataDays.has(cellKey)") && snippet.includes("' has-data'"), 'marks has-data cells');
+      // Accumulator persists across period fetches (survives narrow custom ranges).
+      assert.ok(js.includes('function recordActiveDays'), 'has recordActiveDays accumulator');
+      assert.ok(js.includes('recordActiveDays(scope, usage)'), 'records days on each usage fetch');
       const css = fs.readFileSync(path.join(TEMPLATES, 'styles.css'), 'utf-8');
       assert.ok(css.includes('.calendar-cell.has-data'), 'has-data styled');
     });

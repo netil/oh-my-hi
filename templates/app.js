@@ -774,6 +774,30 @@ window.name = 'oh-my-hi';
     return DATA.scopeData[currentScope] || {};
   }
 
+  // Accumulated set of days (local Y-M-D) that have activity, per scope. Grows
+  // as usage is fetched for any period and never shrinks — so the calendar's
+  // has-data markers stay complete even after a narrow custom-range fetch
+  // replaces DATA.scopeData[scope].usage. Keyed by scope.
+  const _activeDaysByScope = {};
+  function recordActiveDays(scope, usage) {
+    if (!usage) return;
+    let set = _activeDaysByScope[scope] || (_activeDaysByScope[scope] = new Set());
+    const arrs = [usage.tokenEntries, usage.promptStats, usage.latencyEntries, usage.skills, usage.agents, usage.commands];
+    for (const arr of arrs) {
+      if (!arr) continue;
+      for (let i = 0; i < arr.length; i++) {
+        const ts = arr[i].timestamp;
+        let dt = null;
+        if (typeof ts === 'number') dt = new Date(ts);
+        else if (typeof ts === 'string') dt = new Date(ts);
+        else if (arr[i].date) dt = new Date(arr[i].date);
+        if (dt && !isNaN(dt.getTime())) {
+          set.add(dt.getFullYear() + '-' + String(dt.getMonth() + 1).padStart(2, '0') + '-' + String(dt.getDate()).padStart(2, '0'));
+        }
+      }
+    }
+  }
+
   // Compute the timestamp range (ms) matching the current period / custom
   // range controls. Used by the API loader to request only the needed slice.
   function computeCurrentPeriodRange() {
@@ -816,6 +840,7 @@ window.name = 'oh-my-hi';
       const usage = await res.json();
       if (usage && usage.error) return false; // e.g. db_not_ready
       DATA.scopeData[scope].usage = usage;
+      recordActiveDays(scope, usage); // accumulate for the calendar's has-data markers
       DATA._usageReady = true;
       return true;
     } catch (e) {
@@ -1766,25 +1791,12 @@ window.name = 'oh-my-hi';
     const maxDate = dataRange ? dataRange.end : new Date();
 
     // Days that actually have activity — marked in the grid so the user can see
-    // where data exists across every month (not just the selected range).
-    // Keyed by LOCAL Y-M-D to match the calendar cells' own date keys.
-    const dataDays = new Set();
-    (function () {
-      const u = getUsage();
-      const arrs = [u.tokenEntries, u.promptStats, u.latencyEntries, u.skills, u.agents, u.commands];
-      const localKey = (dt) => dt.getFullYear() + '-' + String(dt.getMonth() + 1).padStart(2, '0') + '-' + String(dt.getDate()).padStart(2, '0');
-      for (const arr of arrs) {
-        if (!arr) continue;
-        for (let i = 0; i < arr.length; i++) {
-          const ts = arr[i].timestamp;
-          let dt = null;
-          if (typeof ts === 'number') dt = new Date(ts);
-          else if (typeof ts === 'string') dt = new Date(ts);
-          else if (arr[i].date) dt = new Date(arr[i].date);
-          if (dt && !isNaN(dt.getTime())) dataDays.add(localKey(dt));
-        }
-      }
-    })();
+    // where data exists across every month (not just the selected range). Uses
+    // the per-scope accumulator (seeded with the currently loaded usage) so it
+    // stays complete even after a narrow custom-range fetch. Local Y-M-D keys
+    // match the calendar cells' own keys.
+    recordActiveDays(currentScope, getUsage());
+    const dataDays = _activeDaysByScope[currentScope] || new Set();
 
     let selStart = customDateRange ? customDateRange.start : new Date(maxDate);
     selStart = new Date(selStart);
