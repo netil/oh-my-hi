@@ -1833,10 +1833,22 @@ window.name = 'oh-my-hi';
     }
     let minDate = computeBounds().min, maxDate = computeBounds().max;
 
-    let selStart = customDateRange ? customDateRange.start : new Date(maxDate);
-    selStart = new Date(selStart);
-    selStart.setDate(selStart.getDate() - 29);
-    const selEnd = customDateRange ? customDateRange.end : new Date(maxDate);
+    // Initial highlighted range mirrors the CURRENT period (7d / 30d / all /
+    // custom) so switching periods is reflected whenever the calendar reopens —
+    // no stale range lingers. Day-boundary normalized.
+    const _dayStart = (d) => new Date(d.getFullYear(), d.getMonth(), d.getDate());
+    let selStart, selEnd;
+    if (customDateRange) {
+      selStart = _dayStart(customDateRange.start);
+      selEnd = _dayStart(customDateRange.end);
+    } else if (currentPeriod === 0) {
+      selStart = new Date(minDate);
+      selEnd = new Date(maxDate);
+    } else {
+      selEnd = new Date(maxDate);
+      selStart = new Date(maxDate);
+      selStart.setDate(selStart.getDate() - (currentPeriod - 1));
+    }
 
     const viewMonth = new Date(selEnd.getFullYear(), selEnd.getMonth(), 1);
     let picking = 'start'; // 'start' or 'end'

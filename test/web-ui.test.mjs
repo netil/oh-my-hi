@@ -107,6 +107,8 @@ describe('Web UI — Templates', () => {
       assert.ok(js.includes('async function ensureAllActiveDays'), 'has all-time loader');
       assert.ok(js.includes('ensureAllActiveDays(currentScope).then'), 'calendar loads full range on open');
       assert.ok(snippet.includes('function computeBounds'), 're-reads bounds so they widen after load');
+      // initial highlighted range reflects the CURRENT period, not a stale/custom one
+      assert.ok(snippet.includes('} else if (currentPeriod === 0) {') && snippet.includes('getDate() - (currentPeriod - 1)'), 'initial range mirrors current period');
       const css = fs.readFileSync(path.join(TEMPLATES, 'styles.css'), 'utf-8');
       assert.ok(css.includes('.calendar-cell.has-data'), 'has-data styled');
     });
