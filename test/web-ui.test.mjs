@@ -85,6 +85,26 @@ describe('Web UI — Templates', () => {
       assert.ok(css.includes('.provider-filter-btn.active {\n  background: var(--card-bg);\n  color: var(--text);'), 'filter uses defined color vars');
     });
 
+    it('should provide the merged cross-provider view (D)', () => {
+      assert.ok(js.includes("MERGED_SCOPE = '__merged__'"), 'defines merged scope id');
+      assert.ok(js.includes('function fetchMergedUsage'), 'has merged fetch');
+      assert.ok(js.includes('function isMergedView'), 'has isMergedView');
+      assert.ok(js.includes('function renderProviderBreakdown'), 'has per-tool breakdown');
+      assert.ok(js.includes('function providerColor'), 'has provider colors');
+      // merged fetch tags entries by scope provider (robust vs older server)
+      assert.ok(js.includes("Object.assign({}, e, { provider: r.prov })"), 'tags entries by scope provider');
+      // breakdown injected only in merged view
+      assert.ok(js.includes('isMergedView() ? renderProviderBreakdown'), 'breakdown shown in merged view');
+    });
+
+    it('badge shows only concrete tools with data, not the merged view', () => {
+      const idx = js.indexOf('function updateProviderBadge');
+      const snippet = js.slice(idx, idx + 500);
+      assert.ok(snippet.includes('!isMergedView()'), 'hidden in merged view');
+      assert.ok(snippet.includes("p === 'claude' || p === 'codex'"), 'only claude/codex');
+      assert.ok(snippet.includes('provs.indexOf(p) !== -1'), 'only when provider data exists');
+    });
+
     it('should define all page render functions', () => {
       const fns = [
         'renderOverview', 'renderTokensPage', 'renderTokensCost', 'renderTokensCache',

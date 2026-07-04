@@ -200,6 +200,20 @@ window.name = 'oh-my-hi';
   // ── Init ──
   function init() {
     renderProviderFilter();
+    // D: register a placeholder for the synthetic merged scope so getScopeData
+    // and render paths never hit undefined (usage is filled by fetchMergedUsage).
+    if (availableProviders().length > 1) {
+      DATA.scopeData[MERGED_SCOPE] = DATA.scopeData[MERGED_SCOPE] || {
+        configFiles: [], skills: [], agents: [], plugins: [], hooks: [], memory: [],
+        mcpServers: [], rules: [], principles: [], commands: [], teams: [], plans: [],
+        todos: [], lint: [], contextStats: null,
+        usage: { tokenEntries: [], promptStats: [], latencyEntries: [] },
+      };
+    } else if (currentScope === MERGED_SCOPE) {
+      // Persisted merged selection but only one tool now → fall back to global.
+      currentScope = 'global';
+      try { localStorage.setItem('harness-scope', currentScope); } catch (_) {}
+    }
     populateScopeSelect();
     updateProviderBadge();
     scopeSelect.addEventListener('change', onScopeChange);
@@ -663,6 +677,9 @@ window.name = 'oh-my-hi';
     return seen;
   }
 
+  // D: is the cross-provider merged view active?
+  function isMergedView() { return currentScope === MERGED_SCOPE; }
+
   function populateScopeSelect() {
     scopeSelect.innerHTML = '';
     const scopes = DATA.scopes || [];
@@ -674,6 +691,11 @@ window.name = 'oh-my-hi';
       if (s.id === currentScope) opt.selected = true;
       parent.appendChild(opt);
     };
+    // D: "All tools (merged)" option at the top — only in the unfiltered
+    // ('all') view of a multi-provider machine.
+    if (currentProvider === 'all' && availableProviders().length > 1) {
+      addOption(scopeSelect, { id: MERGED_SCOPE, label: providerIcon('all') + ' ' + t('unifiedScopeLabel') });
+    }
     // Scopes visible under the active provider filter (C). 'all' shows everything.
     const visible = scopes.filter((s) => currentProvider === 'all' || (s.provider || 'claude') === currentProvider);
     const providers = [];
@@ -693,11 +715,15 @@ window.name = 'oh-my-hi';
     scopeSelect.title = sel ? (sel.projectPath || sel.configPath || '') : '';
   }
 
-  // B: badge showing the active scope's tool (hidden on single-provider machines).
+  // B: badge showing the active scope's tool. Shows only for a concrete tool
+  // (Claude / Codex) that actually has data — never in the merged 'all' view,
+  // and never on a single-tool machine.
   function updateProviderBadge() {
     if (!providerBadge) return;
-    if (availableProviders().length <= 1) { providerBadge.hidden = true; return; }
-    const p = currentScope === MERGED_SCOPE ? 'all' : scopeProvider(currentScope);
+    const provs = availableProviders();
+    const p = scopeProvider(currentScope);
+    const show = !isMergedView() && provs.length > 1 && (p === 'claude' || p === 'codex') && provs.indexOf(p) !== -1;
+    if (!show) { providerBadge.hidden = true; return; }
     providerBadge.hidden = false;
     providerBadge.textContent = providerIcon(p) + ' ' + providerLabel(p);
     providerBadge.setAttribute('data-provider', p);
@@ -758,9 +784,11 @@ window.name = 'oh-my-hi';
     skipScrollReset = false;
     requestAnimationFrame(() => { content.scrollTop = scrollPos; });
     // API mode: fetch usage for the new scope if not already hydrated.
+    // The merged view always refetches (it aggregates every scope for the
+    // current period, which can't be cached per-scope).
     if (DATA._apiMode) {
       const sd = DATA.scopeData[currentScope];
-      if (sd && (!sd.usage || !sd.usage.tokenEntries)) {
+      if (isMergedView() || (sd && (!sd.usage || !sd.usage.tokenEntries))) {
         const range = computeCurrentPeriodRange();
         if (range) refetchUsage(range);
       }
@@ -777,6 +805,42 @@ window.name = 'oh-my-hi';
     return DATA.scopeData[currentScope] || {};
   }
 
+  // D: fetch every real scope and merge their usage into the synthetic merged
+  // scope, tagging each entry with its scope's provider (robust even if the
+  // server predates the provider column). Uses one shared abort for the batch.
+  async function fetchMergedUsage(fromMs, toMs) {
+    if (!DATA._apiMode) return false;
+    const realScopes = (DATA.scopes || []).filter((s) => s.id !== MERGED_SCOPE);
+    if (_usageFetchAbort) _usageFetchAbort.abort();
+    _usageFetchAbort = new AbortController();
+    const signal = _usageFetchAbort.signal;
+    const merged = { tokenEntries: [], promptStats: [], latencyEntries: [] };
+    try {
+      const results = await Promise.all(realScopes.map(async (s) => {
+        const params = new URLSearchParams({ scope: s.id, from: String(Math.floor(fromMs)), to: String(Math.floor(toMs)) });
+        const res = await fetch('/api/usage?' + params, { signal });
+        if (!res.ok) return null;
+        const u = await res.json();
+        if (u && u.error) return null;
+        return { prov: s.provider || 'claude', usage: u };
+      }));
+      results.forEach((r) => {
+        if (!r || !r.usage) return;
+        (r.usage.tokenEntries || []).forEach((e) => merged.tokenEntries.push(e.provider ? e : Object.assign({}, e, { provider: r.prov })));
+        (r.usage.promptStats || []).forEach((e) => merged.promptStats.push(e));
+        (r.usage.latencyEntries || []).forEach((e) => merged.latencyEntries.push(e));
+      });
+      merged.tokenEntries.sort((a, b) => a.timestamp - b.timestamp);
+      if (!DATA.scopeData[MERGED_SCOPE]) DATA.scopeData[MERGED_SCOPE] = {};
+      DATA.scopeData[MERGED_SCOPE].usage = merged;
+      DATA._usageReady = true;
+      return true;
+    } catch (e) {
+      if (e.name === 'AbortError') return null;
+      return false;
+    }
+  }
+
   // Compute the timestamp range (ms) matching the current period / custom
   // range controls. Used by the API loader to request only the needed slice.
   function computeCurrentPeriodRange() {
@@ -786,10 +850,15 @@ window.name = 'oh-my-hi';
     }
     if (currentPeriod === 0 || currentPeriod < 0) {
       // All-time — use the scope's dateRange if available, otherwise a wide window.
-      const sd = DATA.scopeData && DATA.scopeData[currentScope];
-      const dr = sd && sd.dateRange;
+      // The merged view spans all scopes, so use the global date range.
+      const dr = isMergedView()
+        ? DATA._dateRange
+        : (DATA.scopeData && DATA.scopeData[currentScope] && DATA.scopeData[currentScope].dateRange);
       if (dr && dr.start && dr.end) {
         return { from: new Date(dr.start).getTime(), to: new Date(dr.end).getTime() };
+      }
+      if (dr && dr.from && dr.to) { // DATA._dateRange uses from/to
+        return { from: dr.from, to: dr.to };
       }
       return { from: 0, to: now };
     }
@@ -839,7 +908,10 @@ window.name = 'oh-my-hi';
   function refetchUsage(range) {
     removeUsageFetchError();
     setUsageLoading(true);
-    fetchUsageForPeriod(currentScope, range.from, range.to).then((ok) => {
+    const fetchP = isMergedView()
+      ? fetchMergedUsage(range.from, range.to)
+      : fetchUsageForPeriod(currentScope, range.from, range.to);
+    fetchP.then((ok) => {
       if (ok === null) return; // aborted — a newer request owns the UI state
       setUsageLoading(false);
       if (ok) {
@@ -1901,6 +1973,43 @@ window.name = 'oh-my-hi';
     return Math.round(((cur - prev) / prev) * 100);
   }
 
+  // D: provider (tool) color for merged-view breakdowns.
+  function providerColor(p) {
+    if (p === 'codex') return '#10a37f';
+    if (p === 'all') return '#868e96';
+    return '#4263eb'; // claude
+  }
+
+  // D: per-tool tokens/cost comparison, shown in the merged view. Returns '' if
+  // fewer than two providers are present.
+  function renderProviderBreakdown(tokenEntries) {
+    const by = {};
+    (tokenEntries || []).forEach((e) => {
+      const p = e.provider || 'claude';
+      const b = by[p] || (by[p] = { tokens: 0, cost: 0, count: 0 });
+      b.tokens += (e.rawInput || 0) + (e.outputTokens || 0) + (e.cacheRead || 0) + (e.cacheCreation || 0);
+      b.cost += calcEntryCost(e);
+      b.count += 1;
+    });
+    const provs = Object.keys(by);
+    if (provs.length < 2) return '';
+    const totalTokens = provs.reduce((s, p) => s + by[p].tokens, 0) || 1;
+    const rows = provs.sort((a, b) => by[b].tokens - by[a].tokens).map((p) => {
+      const b = by[p];
+      const pct = 100 * b.tokens / totalTokens;
+      return '<div class="prov-bd-row">'
+        + '<span class="prov-bd-name" style="color:' + providerColor(p) + '">' + providerIcon(p) + ' ' + escapeHtml(providerLabel(p)) + '</span>'
+        + '<div class="prov-bd-bar-track"><div class="prov-bd-bar" style="width:' + pct.toFixed(1) + '%;background:' + providerColor(p) + '"></div></div>'
+        + '<span class="prov-bd-val">' + fmtCompact(b.tokens) + ' <span class="prov-bd-pct">' + fmtPct(pct) + '</span></span>'
+        + '<span class="prov-bd-cost">' + fmtCost(b.cost) + '</span>'
+        + '</div>';
+    }).join('');
+    return '<div class="section prov-bd">'
+      + '<div class="section-title">' + providerIcon('all') + ' ' + t('providerBreakdownTitle') + '</div>'
+      + '<div class="prov-bd-list">' + rows + '</div>'
+      + '</div>';
+  }
+
   function renderTokensPage() {
     const usage = getUsage();
     const days = customDateRange ? 0 : currentPeriod;
@@ -1951,7 +2060,8 @@ window.name = 'oh-my-hi';
             { label: t('labelCache'),  value: totalCache,  change: changeCache,  color: '#e8590c' },
           ],
         })
-      + '</div>';
+      + '</div>'
+      + (isMergedView() ? renderProviderBreakdown(tokenEntries) : '');
 
     // Model map
     const modelMapForInsights = {};
