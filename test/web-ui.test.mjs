@@ -91,6 +91,18 @@ describe('Web UI — Templates', () => {
       assert.ok(snippet.includes('usage.tokenEntries'), 'considers tokenEntries for the range');
     });
 
+    it('cache trend/efficiency charts show data points on hover (focus:only)', () => {
+      // Regression: these used point:{show:false}, which hides points even on
+      // hover in canvas mode. They must use the focus:only pattern like others.
+      for (const fn of ['drawCacheTrendChart', 'drawCacheEfficiencyChart']) {
+        const idx = js.indexOf('function ' + fn);
+        assert.ok(idx !== -1, fn + ' exists');
+        const snippet = js.slice(idx, idx + 6000);
+        assert.ok(snippet.includes('focus: { only: true }'), fn + ' shows points on hover');
+        assert.ok(!snippet.includes('point: { show: false }'), fn + ' no longer hides points');
+      }
+    });
+
     it('cost page basis/footer text follows the active tool', () => {
       assert.ok(js.includes("'costFormulaDescCodex' : 'costFormulaDesc'"), 'formula desc is provider-aware');
       assert.ok(js.includes("_costProvider === 'codex'") && js.includes("costPricingFallbackCodex"), 'codex uses built-in OpenAI pricing note');
