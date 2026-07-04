@@ -154,9 +154,9 @@ window.name = 'oh-my-hi';
 
   // ── State ──
   let currentScope = localStorage.getItem('harness-scope') || 'global';
-  // Active provider (tool) filter: 'all' | 'claude' | 'codex'. Controls which
-  // scopes appear in the selector (C) and the unified merged view (D).
-  let currentProvider = localStorage.getItem('harness-provider') || 'all';
+  // Active tool filter: a concrete provider ('claude' | 'codex'). Controls which
+  // scopes appear in the selector (C). Resolved to a valid value in init().
+  let currentProvider = localStorage.getItem('harness-provider') || 'claude';
   // Synthetic scope id for the cross-provider merged view (D).
   const MERGED_SCOPE = '__merged__';
   let currentView = 'overview';
@@ -199,6 +199,14 @@ window.name = 'oh-my-hi';
 
   // ── Init ──
   function init() {
+    // Resolve the tool filter to a concrete tool (no 'all'): keep a still-valid
+    // stored value, else the current scope's tool, else the first tool present.
+    const _provs = availableProviders();
+    if (_provs.indexOf(currentProvider) === -1) {
+      currentProvider = _provs.indexOf(scopeProvider(currentScope)) !== -1
+        ? scopeProvider(currentScope)
+        : (_provs[0] || 'claude');
+    }
     renderProviderFilter();
     // D: register a placeholder for the synthetic merged scope so getScopeData
     // and render paths never hit undefined (usage is filled by fetchMergedUsage).
@@ -691,26 +699,14 @@ window.name = 'oh-my-hi';
       if (s.id === currentScope) opt.selected = true;
       parent.appendChild(opt);
     };
-    // D: "All tools (merged)" option at the top — only in the unfiltered
-    // ('all') view of a multi-provider machine.
-    if (currentProvider === 'all' && availableProviders().length > 1) {
+    // D: "All tools (merged)" option at the top on any multi-provider machine
+    // (independent of the tool filter, which only picks a concrete tool).
+    if (availableProviders().length > 1) {
       addOption(scopeSelect, { id: MERGED_SCOPE, label: providerIcon('all') + ' ' + t('unifiedScopeLabel') });
     }
-    // Scopes visible under the active provider filter (C). 'all' shows everything.
-    const visible = scopes.filter((s) => currentProvider === 'all' || (s.provider || 'claude') === currentProvider);
-    const providers = [];
-    visible.forEach((s) => { const p = s.provider || 'claude'; if (providers.indexOf(p) === -1) providers.push(p); });
-    // Group by provider via <optgroup> when more than one tool is shown (A).
-    if (providers.length > 1) {
-      providers.forEach((prov) => {
-        const group = document.createElement('optgroup');
-        group.label = providerLabel(prov);
-        visible.filter((s) => (s.provider || 'claude') === prov).forEach((s) => addOption(group, s));
-        scopeSelect.appendChild(group);
-      });
-    } else {
-      visible.forEach((s) => addOption(scopeSelect, s));
-    }
+    // Scopes for the active tool filter (C) — always a single concrete tool,
+    // so no <optgroup> grouping is needed (the filter separates tools instead).
+    scopes.filter((s) => (s.provider || 'claude') === currentProvider).forEach((s) => addOption(scopeSelect, s));
     const sel = scopes.find((s) => s.id === currentScope);
     scopeSelect.title = sel ? (sel.projectPath || sel.configPath || '') : '';
   }
@@ -729,16 +725,15 @@ window.name = 'oh-my-hi';
     providerBadge.setAttribute('data-provider', p);
   }
 
-  // C: segmented tool filter (All · Claude · Codex) controlling which scopes
-  // appear in the selector. Hidden unless more than one tool is present.
+  // C: segmented tool filter — one pill per tool that actually has data
+  // (Claude / Codex), no "All". Hidden unless more than one tool is present.
   function renderProviderFilter() {
     if (!providerFilter) return;
     const provs = availableProviders();
     if (provs.length <= 1) { providerFilter.hidden = true; return; }
     providerFilter.hidden = false;
-    const opts = ['all'].concat(provs);
-    providerFilter.innerHTML = opts.map((p) =>
-      '<button type="button" class="provider-filter-btn' + (p === currentProvider ? ' active' : '') +
+    providerFilter.innerHTML = provs.map((p) =>
+      '<button type="button" class="provider-filter-btn' + (p === currentProvider && !isMergedView() ? ' active' : '') +
       '" data-provider="' + p + '" title="' + escapeHtml(providerLabel(p)) + '">' +
       providerIcon(p) + ' ' + escapeHtml(providerLabel(p)) + '</button>'
     ).join('');
@@ -748,15 +743,12 @@ window.name = 'oh-my-hi';
   }
 
   function onProviderChange(p) {
-    if (p === currentProvider) return;
+    // Switching tool always jumps to that tool's first scope (exits merged view).
+    if (p === currentProvider && !isMergedView()) return;
     currentProvider = p;
     try { localStorage.setItem('harness-provider', p); } catch (_) {}
-    // Keep the selected scope consistent with the filter: when narrowing to a
-    // specific tool, jump to its first scope if the current one is elsewhere.
-    if (p !== 'all' && currentScope !== MERGED_SCOPE && scopeProvider(currentScope) !== p) {
-      const first = (DATA.scopes || []).find((s) => (s.provider || 'claude') === p);
-      if (first) { currentScope = first.id; try { localStorage.setItem('harness-scope', currentScope); } catch (_) {} }
-    }
+    const first = (DATA.scopes || []).find((s) => (s.provider || 'claude') === p);
+    if (first) { currentScope = first.id; try { localStorage.setItem('harness-scope', currentScope); } catch (_) {} }
     renderProviderFilter();
     populateScopeSelect();
     updateProviderBadge();
@@ -772,6 +764,7 @@ window.name = 'oh-my-hi';
   function onScopeChange() {
     currentScope = scopeSelect.value;
     try { localStorage.setItem('harness-scope', currentScope); } catch (_) {}
+    renderProviderFilter(); // refresh active-pill state (deactivate in merged view)
     updateProviderBadge();
     const sel = DATA.scopes.find((s) => { return s.id === currentScope; });
     scopeSelect.title = sel ? (sel.projectPath || sel.configPath || '') : '';

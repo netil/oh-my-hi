@@ -46,9 +46,9 @@ describe('Web UI — Templates', () => {
     let js;
     before(() => { js = fs.readFileSync(path.join(TEMPLATES, 'app.js'), 'utf-8'); });
 
-    it('should group the scope selector by provider (optgroup) and expose provider helpers', () => {
+    it('should filter the scope selector by the active tool and expose provider helpers', () => {
       assert.ok(js.includes('function populateScopeSelect'), 'has populateScopeSelect');
-      assert.ok(js.includes("createElement('optgroup')"), 'groups scopes with optgroup');
+      assert.ok(js.includes("(s.provider || 'claude') === currentProvider"), 'lists only the active tool\'s scopes');
       assert.ok(js.includes('function scopeProvider'), 'has scopeProvider helper');
       assert.ok(js.includes('function providerLabel'), 'has providerLabel helper');
       assert.ok(js.includes('function availableProviders'), 'has availableProviders helper');
