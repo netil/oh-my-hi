@@ -347,6 +347,64 @@ body.dark .nav-tooltip {
   font-weight: 600;
 }
 
+/* B: active-tool badge next to the Scope label */
+.scope-provider-badge {
+  font-size: 10px;
+  font-weight: 700;
+  padding: 2px 7px;
+  border-radius: 999px;
+  letter-spacing: 0.2px;
+  white-space: nowrap;
+  border: 1px solid transparent;
+}
+.scope-provider-badge[data-provider="claude"] {
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 30%, transparent);
+}
+.scope-provider-badge[data-provider="codex"] {
+  background: color-mix(in srgb, #10a37f 16%, transparent);
+  color: #10a37f;
+  border-color: color-mix(in srgb, #10a37f 34%, transparent);
+}
+.scope-provider-badge[data-provider="all"] {
+  background: color-mix(in srgb, var(--text-secondary) 16%, transparent);
+  color: var(--text-secondary);
+  border-color: color-mix(in srgb, var(--text-secondary) 30%, transparent);
+}
+
+/* C: segmented tool filter (All · Claude · Codex) */
+.provider-filter {
+  display: flex;
+  gap: 3px;
+  margin-bottom: 8px;
+  padding: 3px;
+  background: var(--bg-secondary, rgba(127,127,127,0.08));
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+.provider-filter-btn {
+  flex: 1;
+  background: none;
+  border: none;
+  border-radius: calc(var(--radius-sm) - 2px);
+  padding: 4px 6px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  transition: background 0.15s, color 0.15s;
+}
+.provider-filter-btn:hover { color: var(--text); }
+.provider-filter-btn.active {
+  background: var(--card-bg);
+  color: var(--text);
+  box-shadow: 0 1px 2px rgba(0,0,0,0.08);
+}
+
 .lang-toggle-group {
   display: flex;
   border: 1px solid var(--border);

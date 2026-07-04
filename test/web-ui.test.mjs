@@ -65,6 +65,26 @@ describe('Web UI — Templates', () => {
       }
     });
 
+    it('should provide a provider badge (B) and segmented filter (C)', () => {
+      assert.ok(js.includes('function updateProviderBadge'), 'has updateProviderBadge (B)');
+      assert.ok(js.includes('function renderProviderFilter'), 'has renderProviderFilter (C)');
+      assert.ok(js.includes('function onProviderChange'), 'has onProviderChange (C)');
+      assert.ok(js.includes('scope-provider-badge'), 'references badge element');
+      assert.ok(js.includes('provider-filter-btn'), 'renders filter buttons');
+      assert.ok(js.includes("localStorage.setItem('harness-provider'"), 'persists provider filter');
+    });
+
+    it('dashboard.html has badge + filter containers, CSS styles them', () => {
+      const html = fs.readFileSync(path.join(TEMPLATES, 'dashboard.html'), 'utf-8');
+      assert.ok(html.includes('id="scope-provider-badge"'), 'badge container');
+      assert.ok(html.includes('id="provider-filter"'), 'filter container');
+      const css = fs.readFileSync(path.join(TEMPLATES, 'styles.css'), 'utf-8');
+      assert.ok(css.includes('.scope-provider-badge'), 'badge styled');
+      assert.ok(css.includes('.provider-filter-btn'), 'filter styled');
+      // The active-filter button uses the defined --text token, not an undefined var.
+      assert.ok(css.includes('.provider-filter-btn.active {\n  background: var(--card-bg);\n  color: var(--text);'), 'filter uses defined color vars');
+    });
+
     it('should define all page render functions', () => {
       const fns = [
         'renderOverview', 'renderTokensPage', 'renderTokensCost', 'renderTokensCache',

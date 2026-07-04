@@ -157,6 +157,8 @@ window.name = 'oh-my-hi';
   // Active provider (tool) filter: 'all' | 'claude' | 'codex'. Controls which
   // scopes appear in the selector (C) and the unified merged view (D).
   let currentProvider = localStorage.getItem('harness-provider') || 'all';
+  // Synthetic scope id for the cross-provider merged view (D).
+  const MERGED_SCOPE = '__merged__';
   let currentView = 'overview';
   let currentDetail = null;
   let currentPeriod = parseInt(localStorage.getItem('harness-period') || '30');
@@ -189,13 +191,17 @@ window.name = 'oh-my-hi';
 
   // ── DOM refs ──
   const scopeSelect = document.getElementById('scope-select');
+  const providerBadge = document.getElementById('scope-provider-badge');
+  const providerFilter = document.getElementById('provider-filter');
   const searchInput = document.getElementById('search');
   const sidebarNav = document.getElementById('sidebar-nav');
   const content = document.getElementById('content');
 
   // ── Init ──
   function init() {
+    renderProviderFilter();
     populateScopeSelect();
+    updateProviderBadge();
     scopeSelect.addEventListener('change', onScopeChange);
     searchInput.addEventListener('input', onSearchInput);
     updateSearchPlaceholder();
@@ -687,9 +693,60 @@ window.name = 'oh-my-hi';
     scopeSelect.title = sel ? (sel.projectPath || sel.configPath || '') : '';
   }
 
+  // B: badge showing the active scope's tool (hidden on single-provider machines).
+  function updateProviderBadge() {
+    if (!providerBadge) return;
+    if (availableProviders().length <= 1) { providerBadge.hidden = true; return; }
+    const p = currentScope === MERGED_SCOPE ? 'all' : scopeProvider(currentScope);
+    providerBadge.hidden = false;
+    providerBadge.textContent = providerIcon(p) + ' ' + providerLabel(p);
+    providerBadge.setAttribute('data-provider', p);
+  }
+
+  // C: segmented tool filter (All · Claude · Codex) controlling which scopes
+  // appear in the selector. Hidden unless more than one tool is present.
+  function renderProviderFilter() {
+    if (!providerFilter) return;
+    const provs = availableProviders();
+    if (provs.length <= 1) { providerFilter.hidden = true; return; }
+    providerFilter.hidden = false;
+    const opts = ['all'].concat(provs);
+    providerFilter.innerHTML = opts.map((p) =>
+      '<button type="button" class="provider-filter-btn' + (p === currentProvider ? ' active' : '') +
+      '" data-provider="' + p + '" title="' + escapeHtml(providerLabel(p)) + '">' +
+      providerIcon(p) + ' ' + escapeHtml(providerLabel(p)) + '</button>'
+    ).join('');
+    providerFilter.querySelectorAll('.provider-filter-btn').forEach((btn) => {
+      btn.addEventListener('click', () => onProviderChange(btn.dataset.provider));
+    });
+  }
+
+  function onProviderChange(p) {
+    if (p === currentProvider) return;
+    currentProvider = p;
+    try { localStorage.setItem('harness-provider', p); } catch (_) {}
+    // Keep the selected scope consistent with the filter: when narrowing to a
+    // specific tool, jump to its first scope if the current one is elsewhere.
+    if (p !== 'all' && currentScope !== MERGED_SCOPE && scopeProvider(currentScope) !== p) {
+      const first = (DATA.scopes || []).find((s) => (s.provider || 'claude') === p);
+      if (first) { currentScope = first.id; try { localStorage.setItem('harness-scope', currentScope); } catch (_) {} }
+    }
+    renderProviderFilter();
+    populateScopeSelect();
+    updateProviderBadge();
+    currentDetail = null;
+    pushState(true);
+    render();
+    if (DATA._apiMode) {
+      const range = computeCurrentPeriodRange();
+      if (range) refetchUsage(range);
+    }
+  }
+
   function onScopeChange() {
     currentScope = scopeSelect.value;
     try { localStorage.setItem('harness-scope', currentScope); } catch (_) {}
+    updateProviderBadge();
     const sel = DATA.scopes.find((s) => { return s.id === currentScope; });
     scopeSelect.title = sel ? (sel.projectPath || sel.configPath || '') : '';
     // Clear detail view but keep current category/page
