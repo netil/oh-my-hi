@@ -65,24 +65,25 @@ describe('Web UI — Templates', () => {
       }
     });
 
-    it('should provide a provider badge (B) and segmented filter (C)', () => {
-      assert.ok(js.includes('function updateProviderBadge'), 'has updateProviderBadge (B)');
+    it('should provide the segmented tool filter (C), no provider badge', () => {
       assert.ok(js.includes('function renderProviderFilter'), 'has renderProviderFilter (C)');
       assert.ok(js.includes('function onProviderChange'), 'has onProviderChange (C)');
-      assert.ok(js.includes('scope-provider-badge'), 'references badge element');
       assert.ok(js.includes('provider-filter-btn'), 'renders filter buttons');
       assert.ok(js.includes("localStorage.setItem('harness-provider'"), 'persists provider filter');
+      // Badge removed — the filter is the single source of the active tool.
+      assert.ok(!js.includes('updateProviderBadge'), 'provider badge removed');
+      assert.ok(!js.includes('scope-provider-badge'), 'no badge element');
     });
 
-    it('dashboard.html has badge + filter containers, CSS styles them', () => {
+    it('dashboard.html has the filter container; active tab is emphasized', () => {
       const html = fs.readFileSync(path.join(TEMPLATES, 'dashboard.html'), 'utf-8');
-      assert.ok(html.includes('id="scope-provider-badge"'), 'badge container');
+      assert.ok(!html.includes('scope-provider-badge'), 'no badge container');
       assert.ok(html.includes('id="provider-filter"'), 'filter container');
       const css = fs.readFileSync(path.join(TEMPLATES, 'styles.css'), 'utf-8');
-      assert.ok(css.includes('.scope-provider-badge'), 'badge styled');
+      assert.ok(!css.includes('.scope-provider-badge'), 'badge CSS removed');
       assert.ok(css.includes('.provider-filter-btn'), 'filter styled');
-      // The active-filter button uses the defined --text token, not an undefined var.
-      assert.ok(css.includes('.provider-filter-btn.active {\n  background: var(--card-bg);\n  color: var(--text);'), 'filter uses defined color vars');
+      // Active tab uses the accent color for a stronger highlight.
+      assert.ok(css.includes('.provider-filter-btn.active {\n  background: var(--accent);'), 'active tab emphasized with accent');
     });
 
     it('all-time date range includes tokenEntries (Codex has no skill/agent usage)', () => {
@@ -146,11 +147,11 @@ describe('Web UI — Templates', () => {
       assert.ok(js.includes('www.anthropic.com/pricing'), 'Anthropic pricing link for Claude');
     });
 
-    it('badge shows only concrete tools that have data', () => {
-      const idx = js.indexOf('function updateProviderBadge');
-      const snippet = js.slice(idx, idx + 500);
-      assert.ok(snippet.includes("p === 'claude' || p === 'codex'"), 'only claude/codex');
-      assert.ok(snippet.includes('provs.indexOf(p) !== -1'), 'only when provider data exists');
+    it('tool filter lists only tools that have data', () => {
+      const idx = js.indexOf('function renderProviderFilter');
+      const snippet = js.slice(idx, idx + 700);
+      assert.ok(snippet.includes('availableProviders()'), 'derives pills from providers present in data');
+      assert.ok(snippet.includes("provs.length <= 1") && snippet.includes('hidden = true'), 'hidden on single-tool machines');
     });
 
     it('has no merged-view machinery (removed)', () => {

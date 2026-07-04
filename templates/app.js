@@ -189,7 +189,6 @@ window.name = 'oh-my-hi';
 
   // ── DOM refs ──
   const scopeSelect = document.getElementById('scope-select');
-  const providerBadge = document.getElementById('scope-provider-badge');
   const providerFilter = document.getElementById('provider-filter');
   const searchInput = document.getElementById('search');
   const sidebarNav = document.getElementById('sidebar-nav');
@@ -207,7 +206,6 @@ window.name = 'oh-my-hi';
     }
     renderProviderFilter();
     populateScopeSelect();
-    updateProviderBadge();
     scopeSelect.addEventListener('change', onScopeChange);
     searchInput.addEventListener('input', onSearchInput);
     updateSearchPlaceholder();
@@ -687,19 +685,6 @@ window.name = 'oh-my-hi';
     scopeSelect.title = sel ? (sel.projectPath || sel.configPath || '') : '';
   }
 
-  // B: badge showing the active scope's tool. Shows only for a concrete tool
-  // (Claude / Codex) that actually has data, and never on a single-tool machine.
-  function updateProviderBadge() {
-    if (!providerBadge) return;
-    const provs = availableProviders();
-    const p = scopeProvider(currentScope);
-    const show = provs.length > 1 && (p === 'claude' || p === 'codex') && provs.indexOf(p) !== -1;
-    if (!show) { providerBadge.hidden = true; return; }
-    providerBadge.hidden = false;
-    providerBadge.textContent = providerLabel(p);
-    providerBadge.setAttribute('data-provider', p);
-  }
-
   // C: segmented tool filter — one pill per tool that actually has data
   // (Claude / Codex), no "All". Hidden unless more than one tool is present.
   function renderProviderFilter() {
@@ -726,7 +711,6 @@ window.name = 'oh-my-hi';
     if (first) { currentScope = first.id; try { localStorage.setItem('harness-scope', currentScope); } catch (_) {} }
     renderProviderFilter();
     populateScopeSelect();
-    updateProviderBadge();
     currentDetail = null;
     pushState(true);
     render();
@@ -739,7 +723,6 @@ window.name = 'oh-my-hi';
   function onScopeChange() {
     currentScope = scopeSelect.value;
     try { localStorage.setItem('harness-scope', currentScope); } catch (_) {}
-    updateProviderBadge();
     const sel = DATA.scopes.find((s) => { return s.id === currentScope; });
     scopeSelect.title = sel ? (sel.projectPath || sel.configPath || '') : '';
     // Clear detail view but keep current category/page
