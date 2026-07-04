@@ -1765,6 +1765,27 @@ window.name = 'oh-my-hi';
     const minDate = dataRange ? dataRange.start : new Date(2020, 0, 1);
     const maxDate = dataRange ? dataRange.end : new Date();
 
+    // Days that actually have activity — marked in the grid so the user can see
+    // where data exists across every month (not just the selected range).
+    // Keyed by LOCAL Y-M-D to match the calendar cells' own date keys.
+    const dataDays = new Set();
+    (function () {
+      const u = getUsage();
+      const arrs = [u.tokenEntries, u.promptStats, u.latencyEntries, u.skills, u.agents, u.commands];
+      const localKey = (dt) => dt.getFullYear() + '-' + String(dt.getMonth() + 1).padStart(2, '0') + '-' + String(dt.getDate()).padStart(2, '0');
+      for (const arr of arrs) {
+        if (!arr) continue;
+        for (let i = 0; i < arr.length; i++) {
+          const ts = arr[i].timestamp;
+          let dt = null;
+          if (typeof ts === 'number') dt = new Date(ts);
+          else if (typeof ts === 'string') dt = new Date(ts);
+          else if (arr[i].date) dt = new Date(arr[i].date);
+          if (dt && !isNaN(dt.getTime())) dataDays.add(localKey(dt));
+        }
+      }
+    })();
+
     let selStart = customDateRange ? customDateRange.start : new Date(maxDate);
     selStart = new Date(selStart);
     selStart.setDate(selStart.getDate() - 29);
@@ -1810,12 +1831,14 @@ window.name = 'oh-my-hi';
         const isInRange = cellDate >= tempStart && cellDate <= tempEnd;
         const isStart = sameDay(cellDate, tempStart);
         const isEnd = sameDay(cellDate, tempEnd);
+        const cellKey = year + '-' + String(month + 1).padStart(2, '0') + '-' + String(d).padStart(2, '0');
         let cls = 'calendar-cell';
         if (isDisabled) cls += ' disabled';
+        if (dataDays.has(cellKey)) cls += ' has-data';
         if (isInRange) cls += ' in-range';
         if (isStart) cls += ' range-start';
         if (isEnd) cls += ' range-end';
-        html += '<div class="' + cls + '" data-date="' + year + '-' + String(month + 1).padStart(2, '0') + '-' + String(d).padStart(2, '0') + '">' + d + '</div>';
+        html += '<div class="' + cls + '" data-date="' + cellKey + '">' + d + '</div>';
       }
 
       html += '</div>'

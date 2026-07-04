@@ -91,6 +91,15 @@ describe('Web UI — Templates', () => {
       assert.ok(snippet.includes('usage.tokenEntries'), 'considers tokenEntries for the range');
     });
 
+    it('calendar marks days that have data across all months (has-data)', () => {
+      const idx = js.indexOf('function showCalendarPicker');
+      const snippet = js.slice(idx, idx + 7000);
+      assert.ok(snippet.includes('const dataDays = new Set()'), 'builds a day set from usage');
+      assert.ok(snippet.includes("dataDays.has(cellKey)") && snippet.includes("' has-data'"), 'marks has-data cells');
+      const css = fs.readFileSync(path.join(TEMPLATES, 'styles.css'), 'utf-8');
+      assert.ok(css.includes('.calendar-cell.has-data'), 'has-data styled');
+    });
+
     it('cache trend/efficiency charts show data points on hover (focus:only)', () => {
       // Regression: these used point:{show:false}, which hides points even on
       // hover in canvas mode. They must use the focus:only pattern like others.

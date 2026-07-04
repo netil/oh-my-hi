@@ -2407,6 +2407,30 @@ body.dark .json-null { color: #8b949e; }
   cursor: not-allowed;
 }
 
+/* Days with activity — a dot marker (survives range/selection backgrounds) plus
+   a faint tint when the day is not part of the current selection. */
+.calendar-cell.has-data {
+  position: relative;
+  font-weight: 600;
+}
+.calendar-cell.has-data:not(.in-range):not(.range-start):not(.range-end):not(.disabled) {
+  background: color-mix(in srgb, var(--accent) 9%, transparent);
+}
+.calendar-cell.has-data::after {
+  content: '';
+  position: absolute;
+  left: 50%;
+  bottom: 3px;
+  width: 3px;
+  height: 3px;
+  border-radius: 50%;
+  background: var(--accent);
+  transform: translateX(-50%);
+}
+.calendar-cell.has-data.disabled::after { background: #adb5bd; }
+.calendar-cell.range-start.has-data::after,
+.calendar-cell.range-end.has-data::after { background: #fff; }
+
 .calendar-cell.in-range {
   background: #edf2ff;
 }
