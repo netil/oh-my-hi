@@ -2169,7 +2169,7 @@ window.name = 'oh-my-hi';
     // Cost formula
     html += '<div class="section"><div class="section-title">' + t('costFormula') + '</div>'
       + '<div class="card" style="padding:16px;overflow-x:auto">'
-      + '<div style="margin-bottom:12px;color:var(--text-secondary);font-size:13px">' + t('costFormulaDesc') + '</div>'
+      + '<div style="margin-bottom:12px;color:var(--text-secondary);font-size:13px">' + t(scopeProvider(currentScope) === 'codex' ? 'costFormulaDescCodex' : 'costFormulaDesc') + '</div>'
       + '<div style="margin-bottom:12px;font-size:12px;color:var(--text-secondary);font-family:monospace;line-height:1.8">' + t('costFormulaDetail') + '</div>'
       + '<details><summary style="cursor:pointer;font-size:13px;font-weight:600;margin-bottom:8px">' + t('costPricingTable') + '</summary>'
       + '<table class="config-table" style="width:100%;margin-top:8px">'
@@ -2189,7 +2189,13 @@ window.name = 'oh-my-hi';
       + '<div style="margin-top:8px;font-size:12px;color:var(--text-secondary)">'
       + t('costPricingUnit') + ' · <a href="' + _priceSrc.url + '" target="_blank" style="color:var(--accent)">' + _priceSrc.label + '</a>'
       + '</div></details>';
-    if (DATA.pricingFetchedAt) {
+    // Codex prices are always omh's built-in table (omh only fetches Claude
+    // pricing), so the "fetched at {date}" note never applies to Codex.
+    if (_costProvider === 'codex') {
+      html += '<div style="margin-top:8px;font-size:11px;color:var(--accent)">'
+        + t('costPricingFallbackCodex')
+        + '</div>';
+    } else if (DATA.pricingFetchedAt) {
       html += '<div style="margin-top:8px;font-size:11px;color:var(--accent)">'
         + t('costPricingFetchedAt').replace('{date}', formatDate(DATA.pricingFetchedAt))
         + '</div>';

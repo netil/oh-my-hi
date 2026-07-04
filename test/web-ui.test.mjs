@@ -91,6 +91,17 @@ describe('Web UI — Templates', () => {
       assert.ok(snippet.includes('usage.tokenEntries'), 'considers tokenEntries for the range');
     });
 
+    it('cost page basis/footer text follows the active tool', () => {
+      assert.ok(js.includes("'costFormulaDescCodex' : 'costFormulaDesc'"), 'formula desc is provider-aware');
+      assert.ok(js.includes("_costProvider === 'codex'") && js.includes("costPricingFallbackCodex"), 'codex uses built-in OpenAI pricing note');
+      const en = JSON.parse(fs.readFileSync(path.join(TEMPLATES, 'locales', 'en.json'), 'utf-8'));
+      const ko = JSON.parse(fs.readFileSync(path.join(TEMPLATES, 'locales', 'ko.json'), 'utf-8'));
+      for (const k of ['costFormulaDescCodex', 'costPricingFallbackCodex']) {
+        assert.ok(en[k] && ko[k], `${k} in both locales`);
+        assert.ok(!/Anthropic/i.test(en[k]), `${k} not Anthropic`);
+      }
+    });
+
     it('cost page rate table + source link follow the active tool', () => {
       assert.ok(js.includes('function pricingKeyProvider'), 'classifies pricing keys by tool');
       assert.ok(js.includes("key.indexOf('gpt-') === 0 ? 'codex' : 'claude'"), 'gpt-* → codex');

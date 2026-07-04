@@ -528,6 +528,8 @@
   "providerClaude": "Claude Code",
   "providerCodex": "Codex",
   "providerFilterLabel": "Tool",
+  "costFormulaDescCodex": "Reference cost converted at OpenAI API token pricing (per 1M tokens, USD). Actual Codex charges depend on how you use it (ChatGPT subscription vs API), so this estimate may differ from your real billing.",
+  "costPricingFallbackCodex": "Codex token costs use omh's built-in OpenAI pricing.",
   "partialBannerMsg": "Showing last 7 days. Full data is loading in the background\u2026",
   "firstRunBannerMsg": "✅ Full data loaded",
   "close": "Close",
