@@ -91,6 +91,16 @@ describe('Web UI — Templates', () => {
       assert.ok(snippet.includes('usage.tokenEntries'), 'considers tokenEntries for the range');
     });
 
+    it('cost page rate table + source link follow the active tool', () => {
+      assert.ok(js.includes('function pricingKeyProvider'), 'classifies pricing keys by tool');
+      assert.ok(js.includes("key.indexOf('gpt-') === 0 ? 'codex' : 'claude'"), 'gpt-* → codex');
+      // table filtered by the current scope's provider
+      assert.ok(js.includes('pricingKeyProvider(entry[0]) === _costProvider'), 'rate table filtered by tool');
+      // source link switches to OpenAI for Codex
+      assert.ok(js.includes('developers.openai.com/api/docs/pricing'), 'OpenAI pricing link for Codex');
+      assert.ok(js.includes('www.anthropic.com/pricing'), 'Anthropic pricing link for Claude');
+    });
+
     it('badge shows only concrete tools that have data', () => {
       const idx = js.indexOf('function updateProviderBadge');
       const snippet = js.slice(idx, idx + 500);

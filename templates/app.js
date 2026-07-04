@@ -657,6 +657,12 @@ window.name = 'oh-my-hi';
     if (p === 'codex') return '⌬';
     return '✳️';
   }
+  // Classify a pricing-table key by tool: OpenAI/Codex keys are gpt-*, the rest
+  // are Anthropic/Claude. Used to show only the active tool's rate table.
+  function pricingKeyProvider(key) {
+    return key.indexOf('gpt-') === 0 ? 'codex' : 'claude';
+  }
+
   // Distinct providers present in the data, in scope order.
   function availableProviders() {
     const seen = [];
@@ -2168,15 +2174,20 @@ window.name = 'oh-my-hi';
       + '<details><summary style="cursor:pointer;font-size:13px;font-weight:600;margin-bottom:8px">' + t('costPricingTable') + '</summary>'
       + '<table class="config-table" style="width:100%;margin-top:8px">'
       + '<thead><tr><th>Model</th><th style="text-align:right">Input</th><th style="text-align:right">Output</th><th style="text-align:right">Cache Read</th><th style="text-align:right">Cache Write</th></tr></thead><tbody>';
-    Object.entries(MODEL_PRICING).forEach((entry) => {
+    // Show only the active tool's rate table (Codex → GPT rates, Claude → Claude rates).
+    const _costProvider = scopeProvider(currentScope);
+    Object.entries(MODEL_PRICING).filter((entry) => pricingKeyProvider(entry[0]) === _costProvider).forEach((entry) => {
       const p = entry[1];
       html += '<tr><td><strong>' + entry[0] + '</strong></td>'
         + '<td style="text-align:right">$' + p.input + '</td><td style="text-align:right">$' + p.output + '</td>'
         + '<td style="text-align:right">$' + p.cacheRead + '</td><td style="text-align:right">$' + p.cacheCreation + '</td></tr>';
     });
+    const _priceSrc = _costProvider === 'codex'
+      ? { url: 'https://developers.openai.com/api/docs/pricing', label: 'openai.com/pricing' }
+      : { url: 'https://www.anthropic.com/pricing', label: 'anthropic.com/pricing' };
     html += '</tbody></table>'
       + '<div style="margin-top:8px;font-size:12px;color:var(--text-secondary)">'
-      + t('costPricingUnit') + ' · <a href="https://www.anthropic.com/pricing" target="_blank" style="color:var(--accent)">anthropic.com/pricing</a>'
+      + t('costPricingUnit') + ' · <a href="' + _priceSrc.url + '" target="_blank" style="color:var(--accent)">' + _priceSrc.label + '</a>'
       + '</div></details>';
     if (DATA.pricingFetchedAt) {
       html += '<div style="margin-top:8px;font-size:11px;color:var(--accent)">'
