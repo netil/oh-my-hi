@@ -86,6 +86,16 @@ describe('Web UI — Templates', () => {
       assert.ok(css.includes('.provider-filter-btn.active {\n  background: var(--accent);'), 'active tab emphasized with accent');
     });
 
+    it('context explorer legend labels are provider-aware (Codex → AGENTS.md/Codex)', () => {
+      assert.ok(js.includes('const cweLabel'), 'has provider-aware legend label helper');
+      assert.ok(js.includes("if (key === 'cwe_legClaudeMd') return t('cwe_legAgentsMd')"), 'CLAUDE.md → AGENTS.md for codex');
+      assert.ok(js.includes("if (key === 'cwe_legClaude') return t('cwe_legCodex')"), 'Claude → Codex for codex');
+      assert.ok(js.includes('cweLabel(x.labelKey)'), 'legend renders via cweLabel');
+      const en = JSON.parse(fs.readFileSync(path.join(TEMPLATES, 'locales', 'en.json'), 'utf-8'));
+      const ko = JSON.parse(fs.readFileSync(path.join(TEMPLATES, 'locales', 'ko.json'), 'utf-8'));
+      for (const k of ['cwe_legAgentsMd', 'cwe_legCodex']) assert.ok(en[k] && ko[k], k + ' in both locales');
+    });
+
     it('all-time date range includes tokenEntries (Codex has no skill/agent usage)', () => {
       const idx = js.indexOf('function getDataDateRange');
       const snippet = js.slice(idx, idx + 700);

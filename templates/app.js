@@ -5809,6 +5809,16 @@ window.name = 'oh-my-hi';
       full:   { labelKey: 'cwe_visFull',   subKey: 'cwe_visFullSub' }
     };
 
+    // Provider-aware legend label: Codex's config file is AGENTS.md and its
+    // assistant is Codex, not CLAUDE.md / Claude.
+    const cweLabel = (key) => {
+      if (scopeProvider(currentScope) === 'codex') {
+        if (key === 'cwe_legClaudeMd') return t('cwe_legAgentsMd');
+        if (key === 'cwe_legClaude') return t('cwe_legCodex');
+      }
+      return t(key);
+    };
+
     const LEGEND = [
       { c: '#6B6964', labelKey: 'cwe_legSystem' },   { c: '#6A9BCC', labelKey: 'cwe_legClaudeMd' },
       { c: '#E8A45C', labelKey: 'cwe_legMemory' },   { c: '#D4A843', labelKey: 'cwe_legSkills' },
@@ -6102,9 +6112,10 @@ window.name = 'oh-my-hi';
 
     // Render legend once
     legendEl.innerHTML = LEGEND.map((x) => {
-      return '<div class="cw-legend-item" data-cw-legend="' + x.c + '" data-cw-pct="' + x.c + '" data-cw-label="' + escapeHtml(t(x.labelKey)) + '" data-tip="">'
+      const label = cweLabel(x.labelKey);
+      return '<div class="cw-legend-item" data-cw-legend="' + x.c + '" data-cw-pct="' + x.c + '" data-cw-label="' + escapeHtml(label) + '" data-tip="">'
         + '<div class="cw-legend-dot" style="background:' + x.c + '"></div>'
-        + '<span class="cw-legend-label">' + escapeHtml(t(x.labelKey)) + '</span>'
+        + '<span class="cw-legend-label">' + escapeHtml(label) + '</span>'
         + '</div>';
     }).join('');
 

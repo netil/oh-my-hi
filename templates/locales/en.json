@@ -628,6 +628,8 @@
   "cwe_legOutput": "Output",
   "cwe_legClaude": "Claude",
   "cwe_legHooks": "Hooks",
+  "cwe_legAgentsMd": "AGENTS.md",
+  "cwe_legCodex": "Codex",
 
   "cwe_ev0_label": "Conversation summary",
   "cwe_ev0_desc": "The full conversation condensed into one structured summary. Keeps: your requests and intent, key technical concepts, files touched, errors and fixes, pending tasks, current work. Drops: verbatim tool outputs, intermediate reasoning. Claude can still reference the work but won't have the exact code it read earlier.",
