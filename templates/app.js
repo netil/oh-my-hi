@@ -6987,6 +6987,11 @@ window.name = 'oh-my-hi';
 
     function cleanSessionSnippet(raw) {
       if (!raw) return null;
+      // Codex composes a "You are working in {cwd}. {task}" system prefix for
+      // parallel/batch runs, making those sessions look identical in the list —
+      // strip it so the real task shows. Harmless for Claude (won't match).
+      raw = raw.replace(/^You are working in .+?\.\s+/, '');
+      if (!raw) return null;
       // <command-name> can appear anywhere (e.g. after <command-message>)
       const cmd = raw.match(/<command-name>([\s\S]*?)(?:<\/command-name>|$)/i);
       if (cmd) {

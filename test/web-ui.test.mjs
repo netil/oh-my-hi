@@ -86,6 +86,16 @@ describe('Web UI — Templates', () => {
       assert.ok(css.includes('.provider-filter-btn.active {\n  background: var(--accent);'), 'active tab emphasized with accent');
     });
 
+    it('session snippet strips the Codex "You are working in ..." system prefix', () => {
+      const idx = js.indexOf('function cleanSessionSnippet');
+      const snippet = js.slice(idx, idx + 400);
+      assert.ok(snippet.includes('You are working in .+?'), 'strips Codex working-dir prefix');
+      // the regex itself yields the actual task (verified inline)
+      const re = /^You are working in .+?\.\s+/;
+      assert.strictEqual('You are working in /a/b.js. Implement X'.replace(re, ''), 'Implement X');
+      assert.strictEqual('normal prompt'.replace(re, ''), 'normal prompt');
+    });
+
     it('provider-aware text helper tp() covers Codex variants across pages', () => {
       assert.ok(js.includes('function tp(key)'), 'has tp() helper');
       assert.ok(js.includes("const ck = key + 'Codex'"), 'tp resolves {key}Codex variant');
