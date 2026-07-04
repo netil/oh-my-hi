@@ -405,26 +405,6 @@ body.dark .nav-tooltip {
   box-shadow: 0 1px 2px rgba(0,0,0,0.08);
 }
 
-/* D: per-tool breakdown in the merged view */
-.prov-bd-list { display: flex; flex-direction: column; gap: 10px; padding: 4px 2px; }
-.prov-bd-row {
-  display: grid;
-  grid-template-columns: minmax(90px, auto) 1fr minmax(90px, auto) minmax(64px, auto);
-  align-items: center;
-  gap: 12px;
-}
-.prov-bd-name { font-size: 12px; font-weight: 700; white-space: nowrap; }
-.prov-bd-bar-track {
-  height: 10px;
-  background: color-mix(in srgb, var(--text-secondary) 14%, transparent);
-  border-radius: 999px;
-  overflow: hidden;
-}
-.prov-bd-bar { height: 100%; border-radius: 999px; transition: width 0.4s ease; }
-.prov-bd-val { font-size: 12px; font-variant-numeric: tabular-nums; text-align: right; white-space: nowrap; }
-.prov-bd-pct { color: var(--text-secondary); font-size: 11px; }
-.prov-bd-cost { font-size: 12px; font-weight: 600; text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
-
 .lang-toggle-group {
   display: flex;
   border: 1px solid var(--border);
