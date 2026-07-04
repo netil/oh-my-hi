@@ -2,6 +2,12 @@
 
 A guide to each section of the oh-my-hi dashboard.
 
+oh-my-hi shows **Claude Code and Codex** side by side. Use the tool filter and
+scope selector at the top of the sidebar to switch between them — each tool's
+tokens, cost, sessions, and structure are shown with tool-correct pricing (Claude
+via Anthropic, Codex via OpenAI/GPT) and wording (CLAUDE.md vs AGENTS.md, etc.).
+A tool you don't use is simply absent, so a Claude-only setup looks unchanged.
+
 
 ## Sidebar
 

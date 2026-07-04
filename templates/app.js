@@ -127,6 +127,20 @@ window.name = 'oh-my-hi';
     return str;
   }
 
+  // Provider-aware translate: under a Codex scope, prefer a `{key}Codex` variant
+  // when one exists, else fall back to the base key. Lets tool-specific wording
+  // (AGENTS.md vs CLAUDE.md, OpenAI vs Anthropic, …) reuse the same call sites.
+  function tp(key) {
+    const args = Array.from(arguments).slice(1);
+    if (scopeProvider(currentScope) === 'codex') {
+      const ck = key + 'Codex';
+      if ((I18N[currentLang] && I18N[currentLang][ck]) || I18N.en[ck]) {
+        return t.apply(null, [ck].concat(args));
+      }
+    }
+    return t.apply(null, [key].concat(args));
+  }
+
   // ── Constants ──
   const CATEGORIES = [
     { key: 'configFiles', i18nKey: 'catConfigFiles', icon: '📄', color: '#059669' },
@@ -154,6 +168,9 @@ window.name = 'oh-my-hi';
 
   // ── State ──
   let currentScope = localStorage.getItem('harness-scope') || 'global';
+  // Active tool filter: a concrete provider ('claude' | 'codex'). Controls which
+  // scopes appear in the selector (C). Resolved to a valid value in init().
+  let currentProvider = localStorage.getItem('harness-provider') || 'claude';
   let currentView = 'overview';
   let currentDetail = null;
   let currentPeriod = parseInt(localStorage.getItem('harness-period') || '30');
@@ -186,12 +203,22 @@ window.name = 'oh-my-hi';
 
   // ── DOM refs ──
   const scopeSelect = document.getElementById('scope-select');
+  const providerFilter = document.getElementById('provider-filter');
   const searchInput = document.getElementById('search');
   const sidebarNav = document.getElementById('sidebar-nav');
   const content = document.getElementById('content');
 
   // ── Init ──
   function init() {
+    // Resolve the tool filter to a concrete tool (no 'all'): keep a still-valid
+    // stored value, else the current scope's tool, else the first tool present.
+    const _provs = availableProviders();
+    if (_provs.indexOf(currentProvider) === -1) {
+      currentProvider = _provs.indexOf(scopeProvider(currentScope)) !== -1
+        ? scopeProvider(currentScope)
+        : (_provs[0] || 'claude');
+    }
+    renderProviderFilter();
     populateScopeSelect();
     scopeSelect.addEventListener('change', onScopeChange);
     searchInput.addEventListener('input', onSearchInput);
@@ -627,18 +654,84 @@ window.name = 'oh-my-hi';
     }
   }
 
+  // ── Provider (tool) helpers ──
+  // A scope belongs to a provider (harness/tool). Claude scopes omit the field,
+  // so it defaults to 'claude'. Codex (and future tools) set scope.provider.
+  function scopeProvider(id) {
+    const s = (DATA.scopes || []).find((x) => x.id === id);
+    return (s && s.provider) || 'claude';
+  }
+  function providerLabel(p) {
+    if (p === 'codex') return t('providerCodex');
+    return t('providerClaude');
+  }
+  // Classify a pricing-table key by tool: OpenAI/Codex keys are gpt-*, the rest
+  // are Anthropic/Claude. Used to show only the active tool's rate table.
+  function pricingKeyProvider(key) {
+    return key.indexOf('gpt-') === 0 ? 'codex' : 'claude';
+  }
+
+  // Distinct providers present in the data, in scope order.
+  function availableProviders() {
+    const seen = [];
+    (DATA.scopes || []).forEach((s) => {
+      const p = s.provider || 'claude';
+      if (seen.indexOf(p) === -1) seen.push(p);
+    });
+    return seen;
+  }
+
   function populateScopeSelect() {
     scopeSelect.innerHTML = '';
-    (DATA.scopes || []).forEach((s) => {
+    const scopes = DATA.scopes || [];
+    const addOption = (parent, s) => {
       const opt = document.createElement('option');
       opt.value = s.id;
       opt.textContent = s.label;
       opt.title = s.projectPath || s.configPath || '';
       if (s.id === currentScope) opt.selected = true;
-      scopeSelect.appendChild(opt);
-    });
-    let sel = DATA.scopes.find((s) => { return s.id === currentScope; });
+      parent.appendChild(opt);
+    };
+    // Scopes for the active tool filter (C) — always a single concrete tool,
+    // so no <optgroup> grouping is needed (the filter separates tools instead).
+    scopes.filter((s) => (s.provider || 'claude') === currentProvider).forEach((s) => addOption(scopeSelect, s));
+    const sel = scopes.find((s) => s.id === currentScope);
     scopeSelect.title = sel ? (sel.projectPath || sel.configPath || '') : '';
+  }
+
+  // C: segmented tool filter — one pill per tool that actually has data
+  // (Claude / Codex), no "All". Hidden unless more than one tool is present.
+  function renderProviderFilter() {
+    if (!providerFilter) return;
+    const provs = availableProviders();
+    if (provs.length <= 1) { providerFilter.hidden = true; return; }
+    providerFilter.hidden = false;
+    providerFilter.innerHTML = provs.map((p) =>
+      '<button type="button" class="provider-filter-btn' + (p === currentProvider ? ' active' : '') +
+      '" data-provider="' + p + '" title="' + escapeHtml(providerLabel(p)) + '">' +
+      escapeHtml(providerLabel(p)) + '</button>'
+    ).join('');
+    providerFilter.querySelectorAll('.provider-filter-btn').forEach((btn) => {
+      btn.addEventListener('click', () => onProviderChange(btn.dataset.provider));
+    });
+  }
+
+  function onProviderChange(p) {
+    // Switching tool always jumps to that tool's first scope.
+    if (p === currentProvider) return;
+    currentProvider = p;
+    try { localStorage.setItem('harness-provider', p); } catch (_) {}
+    const first = (DATA.scopes || []).find((s) => (s.provider || 'claude') === p);
+    if (first) { currentScope = first.id; try { localStorage.setItem('harness-scope', currentScope); } catch (_) {} }
+    renderProviderFilter();
+    populateScopeSelect();
+    currentDetail = null;
+    pushState(true);
+    render();
+    if (DATA._apiMode) {
+      const range = computeCurrentPeriodRange();
+      if (range) refetchUsage(range);
+    }
   }
 
   function onScopeChange() {
@@ -672,6 +765,55 @@ window.name = 'oh-my-hi';
   // ── Data helpers ──
   function getScopeData() {
     return DATA.scopeData[currentScope] || {};
+  }
+
+  // Accumulated set of days (local Y-M-D) that have activity, per scope. Grows
+  // as usage is fetched for any period and never shrinks — so the calendar's
+  // has-data markers stay complete even after a narrow custom-range fetch
+  // replaces DATA.scopeData[scope].usage. Keyed by scope.
+  const _activeDaysByScope = {};
+  function recordActiveDays(scope, usage) {
+    if (!usage) return;
+    let set = _activeDaysByScope[scope] || (_activeDaysByScope[scope] = new Set());
+    const arrs = [usage.tokenEntries, usage.promptStats, usage.latencyEntries, usage.skills, usage.agents, usage.commands];
+    for (const arr of arrs) {
+      if (!arr) continue;
+      for (let i = 0; i < arr.length; i++) {
+        const ts = arr[i].timestamp;
+        let dt = null;
+        if (typeof ts === 'number') dt = new Date(ts);
+        else if (typeof ts === 'string') dt = new Date(ts);
+        else if (arr[i].date) dt = new Date(arr[i].date);
+        if (dt && !isNaN(dt.getTime())) {
+          set.add(dt.getFullYear() + '-' + String(dt.getMonth() + 1).padStart(2, '0') + '-' + String(dt.getDate()).padStart(2, '0'));
+        }
+      }
+    }
+  }
+
+  // The calendar must offer the FULL data range regardless of the current
+  // period, so once per scope fetch all-time usage (into the accumulator only —
+  // never replacing the current view's usage) to complete the active-days set.
+  const _activeDaysFull = {};
+  async function ensureAllActiveDays(scope) {
+    if (_activeDaysFull[scope]) return false;
+    if (!DATA._apiMode) {
+      recordActiveDays(scope, (DATA.scopeData[scope] || {}).usage);
+      _activeDaysFull[scope] = true;
+      return true;
+    }
+    const dr = DATA._dateRange;
+    const from = dr && dr.from ? Math.floor(dr.from) : 0;
+    const to = dr && dr.to ? Math.floor(dr.to) : Date.now();
+    try {
+      const res = await fetch('/api/usage?scope=' + encodeURIComponent(scope) + '&from=' + from + '&to=' + to);
+      if (!res.ok) return false;
+      const u = await res.json();
+      if (u && u.error) return false;
+      recordActiveDays(scope, u);
+      _activeDaysFull[scope] = true;
+      return true;
+    } catch (e) { return false; }
   }
 
   // Compute the timestamp range (ms) matching the current period / custom
@@ -716,6 +858,7 @@ window.name = 'oh-my-hi';
       const usage = await res.json();
       if (usage && usage.error) return false; // e.g. db_not_ready
       DATA.scopeData[scope].usage = usage;
+      recordActiveDays(scope, usage); // accumulate for the calendar's has-data markers
       DATA._usageReady = true;
       return true;
     } catch (e) {
@@ -1091,8 +1234,19 @@ window.name = 'oh-my-hi';
     'opus-3': { input: 15, output: 75, cacheRead: 1.5, cacheCreation: 18.75 },
     'sonnet-3': { input: 3, output: 15, cacheRead: 0.3, cacheCreation: 3.75 },
     'haiku-3': { input: 0.25, output: 1.25, cacheRead: 0.03, cacheCreation: 0.3 },
+    // OpenAI / Codex (USD per 1M tokens). Cached input = 10% of input; Codex has
+    // no cache-creation, so cacheCreation is 0. Keep in sync with export.mjs.
+    'gpt-5.5': { input: 5, output: 30, cacheRead: 0.5, cacheCreation: 0 },
+    'gpt-5.4': { input: 2.5, output: 15, cacheRead: 0.25, cacheCreation: 0 },
+    'gpt-5.1': { input: 0.63, output: 5, cacheRead: 0.063, cacheCreation: 0 },
+    'gpt-5.3-codex': { input: 1.75, output: 14, cacheRead: 0.175, cacheCreation: 0 },
+    'gpt-5.2-codex': { input: 1.75, output: 14, cacheRead: 0.175, cacheCreation: 0 },
+    'gpt-5.1-codex': { input: 1.25, output: 10, cacheRead: 0.125, cacheCreation: 0 },
+    'gpt-5.1-codex-mini': { input: 0.25, output: 2, cacheRead: 0.025, cacheCreation: 0 },
   };
-  const MODEL_PRICING = DATA.modelPricing || _PRICING_FALLBACK;
+  // Merge (not replace): fetched Claude pricing overlays the fallback, but the
+  // fallback's OpenAI/Codex entries persist since the Claude feed omits them.
+  const MODEL_PRICING = Object.assign({}, _PRICING_FALLBACK, DATA.modelPricing || {});
 
   function resolvePricingKey(model) {
     if (!model || model === 'unknown') return null;
@@ -1259,11 +1413,24 @@ window.name = 'oh-my-hi';
 
   // ── Data range helpers ──
   function getDataDateRange() {
-    let usage = getUsage();
-    let allItems = [].concat(usage.commands || [], usage.skills || [], usage.agents || []);
-    if (allItems.length === 0) return null;
-    const dates = allItems.map((i) => { return new Date(i.timestamp); }).sort((a, b) => { return a - b; });
-    return { start: dates[0], end: dates[dates.length - 1] };
+    const usage = getUsage();
+    // tokenEntries is the canonical activity source and the only one Codex
+    // populates (its skills/agents live in the structure catalog, not usage) —
+    // include it so the all-time range shows for every provider. Single-pass
+    // min/max avoids sorting large token arrays on each render.
+    const sources = [usage.tokenEntries, usage.commands, usage.skills, usage.agents, usage.promptStats, usage.latencyEntries];
+    let min = Infinity, max = -Infinity;
+    for (const arr of sources) {
+      if (!arr) continue;
+      for (let i = 0; i < arr.length; i++) {
+        const ts = new Date(arr[i].timestamp).getTime();
+        if (!Number.isFinite(ts)) continue;
+        if (ts < min) min = ts;
+        if (ts > max) max = ts;
+      }
+    }
+    if (min === Infinity) return null;
+    return { start: new Date(min), end: new Date(max) };
   }
 
   function getPeriodLabel() {
@@ -1637,14 +1804,44 @@ window.name = 'oh-my-hi';
     const existing = document.getElementById('calendar-overlay');
     if (existing) existing.remove();
 
-    let dataRange = getDataDateRange();
-    const minDate = dataRange ? dataRange.start : new Date(2020, 0, 1);
-    const maxDate = dataRange ? dataRange.end : new Date();
+    // The calendar reflects the FULL data range independent of the current
+    // period. Seed with the current usage, and (below) fetch the all-time set so
+    // days beyond the current period are shown and selectable too.
+    recordActiveDays(currentScope, getUsage());
+    const dataDays = _activeDaysByScope[currentScope] || (_activeDaysByScope[currentScope] = new Set());
 
-    let selStart = customDateRange ? customDateRange.start : new Date(maxDate);
-    selStart = new Date(selStart);
-    selStart.setDate(selStart.getDate() - 29);
-    const selEnd = customDateRange ? customDateRange.end : new Date(maxDate);
+    // Bounds re-read the accumulator on each render, so they widen once the
+    // all-time set finishes loading.
+    function computeBounds() {
+      if (dataDays.size) {
+        const sorted = [...dataDays].sort();
+        const toLocal = (k) => { const p = k.split('-'); return new Date(+p[0], +p[1] - 1, +p[2]); };
+        return { min: toLocal(sorted[0]), max: toLocal(sorted[sorted.length - 1]) };
+      }
+      if (DATA._dateRange && DATA._dateRange.from && DATA._dateRange.to) {
+        return { min: new Date(DATA._dateRange.from), max: new Date(DATA._dateRange.to) };
+      }
+      const dr = getDataDateRange();
+      return { min: dr ? dr.start : new Date(2020, 0, 1), max: dr ? dr.end : new Date() };
+    }
+    let minDate = computeBounds().min, maxDate = computeBounds().max;
+
+    // Initial highlighted range mirrors the CURRENT period (7d / 30d / all /
+    // custom) so switching periods is reflected whenever the calendar reopens —
+    // no stale range lingers. Day-boundary normalized.
+    const _dayStart = (d) => new Date(d.getFullYear(), d.getMonth(), d.getDate());
+    let selStart, selEnd;
+    if (customDateRange) {
+      selStart = _dayStart(customDateRange.start);
+      selEnd = _dayStart(customDateRange.end);
+    } else if (currentPeriod === 0) {
+      selStart = new Date(minDate);
+      selEnd = new Date(maxDate);
+    } else {
+      selEnd = new Date(maxDate);
+      selStart = new Date(maxDate);
+      selStart.setDate(selStart.getDate() - (currentPeriod - 1));
+    }
 
     const viewMonth = new Date(selEnd.getFullYear(), selEnd.getMonth(), 1);
     let picking = 'start'; // 'start' or 'end'
@@ -1656,6 +1853,7 @@ window.name = 'oh-my-hi';
     overlay.className = 'calendar-overlay';
 
     function renderCalendar() {
+      const b = computeBounds(); minDate = b.min; maxDate = b.max; // widen once all-time loads
       const year = viewMonth.getFullYear();
       const month = viewMonth.getMonth();
       const daysInMonth = new Date(year, month + 1, 0).getDate();
@@ -1682,16 +1880,21 @@ window.name = 'oh-my-hi';
 
       for (let d = 1; d <= daysInMonth; d++) {
         const cellDate = new Date(year, month, d);
-        const isDisabled = cellDate < new Date(minDate.getFullYear(), minDate.getMonth(), minDate.getDate()) || cellDate > new Date(maxDate.getFullYear(), maxDate.getMonth(), maxDate.getDate());
+        const cellKey = year + '-' + String(month + 1).padStart(2, '0') + '-' + String(d).padStart(2, '0');
+        const hasData = dataDays.has(cellKey);
+        // Only days with activity are selectable as a range boundary (empty days
+        // in between still fall inside a selected range visually).
+        const isDisabled = !hasData;
         const isInRange = cellDate >= tempStart && cellDate <= tempEnd;
         const isStart = sameDay(cellDate, tempStart);
         const isEnd = sameDay(cellDate, tempEnd);
         let cls = 'calendar-cell';
         if (isDisabled) cls += ' disabled';
+        if (hasData) cls += ' has-data';
         if (isInRange) cls += ' in-range';
         if (isStart) cls += ' range-start';
         if (isEnd) cls += ' range-end';
-        html += '<div class="' + cls + '" data-date="' + year + '-' + String(month + 1).padStart(2, '0') + '-' + String(d).padStart(2, '0') + '">' + d + '</div>';
+        html += '<div class="' + cls + '" data-date="' + cellKey + '">' + d + '</div>';
       }
 
       html += '</div>'
@@ -1710,6 +1913,12 @@ window.name = 'oh-my-hi';
 
     renderCalendar();
     document.body.appendChild(overlay);
+
+    // Load the full-history active-days set (independent of the current period)
+    // and re-render so bounds/markers cover every month, not just the loaded one.
+    ensureAllActiveDays(currentScope).then((added) => {
+      if (added && document.body.contains(overlay)) renderCalendar();
+    });
 
     overlay.addEventListener('click', (e) => {
       if (e.target === overlay) { overlay.remove(); return; }
@@ -1822,7 +2031,7 @@ window.name = 'oh-my-hi';
 
     let html = '<div class="page-header">'
       + '<div class="page-header-row"><h1>🪙 ' + t('tokensTitle') + '</h1>' + renderExportButtons() + '</div>'
-      + '<div class="page-desc">' + t('tokensDesc') + '</div>'
+      + '<div class="page-desc">' + tp('tokensDesc') + '</div>'
       + '</div>'
       + renderPeriodFilter()
       + '<div class="overview-hero solo">'
@@ -2045,22 +2254,33 @@ window.name = 'oh-my-hi';
     // Cost formula
     html += '<div class="section"><div class="section-title">' + t('costFormula') + '</div>'
       + '<div class="card" style="padding:16px;overflow-x:auto">'
-      + '<div style="margin-bottom:12px;color:var(--text-secondary);font-size:13px">' + t('costFormulaDesc') + '</div>'
+      + '<div style="margin-bottom:12px;color:var(--text-secondary);font-size:13px">' + t(scopeProvider(currentScope) === 'codex' ? 'costFormulaDescCodex' : 'costFormulaDesc') + '</div>'
       + '<div style="margin-bottom:12px;font-size:12px;color:var(--text-secondary);font-family:monospace;line-height:1.8">' + t('costFormulaDetail') + '</div>'
       + '<details><summary style="cursor:pointer;font-size:13px;font-weight:600;margin-bottom:8px">' + t('costPricingTable') + '</summary>'
       + '<table class="config-table" style="width:100%;margin-top:8px">'
       + '<thead><tr><th>Model</th><th style="text-align:right">Input</th><th style="text-align:right">Output</th><th style="text-align:right">Cache Read</th><th style="text-align:right">Cache Write</th></tr></thead><tbody>';
-    Object.entries(MODEL_PRICING).forEach((entry) => {
+    // Show only the active tool's rate table (Codex → GPT rates, Claude → Claude rates).
+    const _costProvider = scopeProvider(currentScope);
+    Object.entries(MODEL_PRICING).filter((entry) => pricingKeyProvider(entry[0]) === _costProvider).forEach((entry) => {
       const p = entry[1];
       html += '<tr><td><strong>' + entry[0] + '</strong></td>'
         + '<td style="text-align:right">$' + p.input + '</td><td style="text-align:right">$' + p.output + '</td>'
         + '<td style="text-align:right">$' + p.cacheRead + '</td><td style="text-align:right">$' + p.cacheCreation + '</td></tr>';
     });
+    const _priceSrc = _costProvider === 'codex'
+      ? { url: 'https://developers.openai.com/api/docs/pricing', label: 'openai.com/pricing' }
+      : { url: 'https://www.anthropic.com/pricing', label: 'anthropic.com/pricing' };
     html += '</tbody></table>'
       + '<div style="margin-top:8px;font-size:12px;color:var(--text-secondary)">'
-      + t('costPricingUnit') + ' · <a href="https://www.anthropic.com/pricing" target="_blank" style="color:var(--accent)">anthropic.com/pricing</a>'
+      + t('costPricingUnit') + ' · <a href="' + _priceSrc.url + '" target="_blank" style="color:var(--accent)">' + _priceSrc.label + '</a>'
       + '</div></details>';
-    if (DATA.pricingFetchedAt) {
+    // Codex prices are always omh's built-in table (omh only fetches Claude
+    // pricing), so the "fetched at {date}" note never applies to Codex.
+    if (_costProvider === 'codex') {
+      html += '<div style="margin-top:8px;font-size:11px;color:var(--accent)">'
+        + t('costPricingFallbackCodex')
+        + '</div>';
+    } else if (DATA.pricingFetchedAt) {
       html += '<div style="margin-top:8px;font-size:11px;color:var(--accent)">'
         + t('costPricingFetchedAt').replace('{date}', formatDate(DATA.pricingFetchedAt))
         + '</div>';
@@ -2118,7 +2338,7 @@ window.name = 'oh-my-hi';
     const savingsStr = (totalSavings < 0 ? '-' : '') + fmtCost(Math.abs(totalSavings));
 
     let html = '<div class="page-header"><h1>♻️ ' + t('tokensCache') + '</h1>'
-      + '<div class="page-desc">' + t('cachePageDesc') + '</div></div>'
+      + '<div class="page-desc">' + t(scopeProvider(currentScope) === 'codex' ? 'cachePageDescCodex' : 'cachePageDesc') + '</div></div>'
       + renderPeriodFilter();
 
     // Headline metrics
@@ -2268,7 +2488,7 @@ window.name = 'oh-my-hi';
           tick: { count: 5, format: (v) => +v.toFixed(0) + '%' },
         },
       },
-      point: { show: false },
+      point: { r: 3, focus: { only: true } },
       legend: { show: true },
       area: { linearGradient: true },
       size: { height: 260 },
@@ -2931,7 +3151,7 @@ window.name = 'oh-my-hi';
           { value: minEff,  text: t('cacheWorstEfficiency') + ' ' + minEff + '%',  class: 'cache-worst-line', position: 'start' },
         ] },
       },
-      point: { show: false },
+      point: { r: 3, focus: { only: true } },
       legend: { show: true },
       area: { linearGradient: true },
       size: { height: 180 },
@@ -3112,7 +3332,7 @@ window.name = 'oh-my-hi';
     tokenEntries.forEach((e) => { totalCostInsight += calcEntryCost(e); });
     if (totalCostInsight > 0) {
       const costByModel = modelEntries.map((e) => e[0] + ' ' + fmtCost(e[1].cost || 0)).join(', ');
-      let detail = t('insightCostDetail', fmtCost(totalCostInsight));
+      let detail = t(scopeProvider(currentScope) === 'codex' ? 'insightCostDetailCodex' : 'insightCostDetail', fmtCost(totalCostInsight));
       detail += '\n' + t('insightCostByModel', costByModel);
       insights.push({ icon: '💵', title: t('insightCostTitle'), detail: detail });
     }
@@ -3956,7 +4176,7 @@ window.name = 'oh-my-hi';
     });
     const allItemsSorted = Object.entries(allItemsMap).sort((a, b) => b[1].tokens - a[1].tokens);
     html += renderTop5Card(
-      '🏆 ' + t('bdTop5All') + '<span style="margin-left:auto;font-size:11px;font-weight:400;color:var(--text-secondary)">전체</span>',
+      '🏆 ' + t('bdTop5All') + '<span style="margin-left:auto;font-size:11px;font-weight:400;color:var(--text-secondary)">' + t('bdAllTag') + '</span>',
       allItemsSorted,
       totalTokens
     );
@@ -4269,7 +4489,7 @@ window.name = 'oh-my-hi';
     // Context Budget — visibility heatmap (filtered by selected period)
     let visBarSegments = [];
     const visLabels = {
-      globalClaude: t('visGlobalClaude'), projectClaude: t('visProjectClaude'),
+      globalClaude: tp('visGlobalClaude'), projectClaude: tp('visProjectClaude'),
       autoMemory: t('visAutoMemory'), skillsDesc: t('visSkillsDesc'),
       mcpTools: t('visMcpTools'), principles: t('visPrinciples')
     };
@@ -4324,7 +4544,7 @@ window.name = 'oh-my-hi';
 
     // Activity Heatmap — based on transcript usage data
     html += '<div class="section">'
-      + '<div class="section-title">' + t('activity') + ' <span class="section-title-sub">' + t('activityDesc') + '</span></div>'
+      + '<div class="section-title">' + t('activity') + ' <span class="section-title-sub">' + tp('activityDesc') + '</span></div>'
       + renderHeatmapFromMap(buildActivityMap([].concat(usage.skills || [], usage.agents || [], usage.commands || [], usage.mcpCalls || [])), days)
       + '</div>';
 
@@ -5097,6 +5317,14 @@ window.name = 'oh-my-hi';
       return '<span class="help-breadcrumb">' + parent + ' ›</span> ' + icon + ' ' + label;
     }
 
+    // 🧰 Multi-tool (Claude Code + Codex)
+    html += '<div class="section">'
+      + '<div class="section-title">🧰 ' + t('helpMultiTool') + '</div>'
+      + '<div class="card help-list">'
+      + helpRow('helpMultiToolTitle', 'helpMultiToolDesc', '🧰')
+      + helpRow('helpCodexTitle', 'helpCodexDesc', '⚙️')
+      + '</div></div>';
+
     // 🪙 토큰
     html += '<div class="section">'
       + '<div class="section-title">🪙 ' + t('tokens') + '</div>'
@@ -5603,6 +5831,16 @@ window.name = 'oh-my-hi';
       full:   { labelKey: 'cwe_visFull',   subKey: 'cwe_visFullSub' }
     };
 
+    // Provider-aware legend label: Codex's config file is AGENTS.md and its
+    // assistant is Codex, not CLAUDE.md / Claude.
+    const cweLabel = (key) => {
+      if (scopeProvider(currentScope) === 'codex') {
+        if (key === 'cwe_legClaudeMd') return t('cwe_legAgentsMd');
+        if (key === 'cwe_legClaude') return t('cwe_legCodex');
+      }
+      return t(key);
+    };
+
     const LEGEND = [
       { c: '#6B6964', labelKey: 'cwe_legSystem' },   { c: '#6A9BCC', labelKey: 'cwe_legClaudeMd' },
       { c: '#E8A45C', labelKey: 'cwe_legMemory' },   { c: '#D4A843', labelKey: 'cwe_legSkills' },
@@ -5683,11 +5921,17 @@ window.name = 'oh-my-hi';
         ev3: t('cwe_ev3_label'),
         ev4: t('cwe_ev4_label'),
         ev5: t('cwe_ev5_label'),
-        ev6: t('cwe_ev6_label'),
-        ev7: t('cwe_ev7_label'),
+        ev6: tp('cwe_ev6_label'),
+        ev7: tp('cwe_ev7_label'),
         principles: t('catPrinciples'),
       };
-      return _buildSessionEventsPure(sessionId, getUsage(), contextStats, labels);
+      const events = _buildSessionEventsPure(sessionId, getUsage(), contextStats, labels);
+      // Assistant turns default to the 'claude' kind — relabel them 'codex'
+      // under a Codex scope so the badge/color reflect the actual tool.
+      if (scopeProvider(currentScope) === 'codex') {
+        events.forEach((e) => { if (e.kind === 'claude') e.kind = 'codex'; });
+      }
+      return events;
     }
 
     // Build a timeline of events from a real session's tokenEntries.
@@ -5808,8 +6052,8 @@ window.name = 'oh-my-hi';
       +         '<div id="cw-session-list" class="cw-session-dropdown cw-scroll">'
       +           '<div id="cw-session-items"></div>'
       +           '<div id="cw-session-nav" class="cw-list-nav">'
-      +             '<button id="cw-list-top" class="cw-icon-btn cw-icon-btn--fade" title="맨 위로"><svg width="9" height="6" viewBox="0 0 9 6" fill="currentColor"><path d="M4.5 0L9 6H0z"/></svg></button>'
-      +             '<button id="cw-list-bottom" class="cw-icon-btn cw-icon-btn--fade" title="맨 아래로"><svg width="9" height="6" viewBox="0 0 9 6" fill="currentColor"><path d="M4.5 6L0 0H9z"/></svg></button>'
+      +             '<button id="cw-list-top" class="cw-icon-btn cw-icon-btn--fade" title="' + escapeHtml(t('navScrollTop')) + '"><svg width="9" height="6" viewBox="0 0 9 6" fill="currentColor"><path d="M4.5 0L9 6H0z"/></svg></button>'
+      +             '<button id="cw-list-bottom" class="cw-icon-btn cw-icon-btn--fade" title="' + escapeHtml(t('navScrollBottom')) + '"><svg width="9" height="6" viewBox="0 0 9 6" fill="currentColor"><path d="M4.5 6L0 0H9z"/></svg></button>'
       +           '</div>'
       +         '</div>'
       +       '</div>'
@@ -5848,8 +6092,8 @@ window.name = 'oh-my-hi';
       +     '<div class="cw-tl-wrap">'
       +       '<div id="cw-timeline" class="cw-timeline cw-scroll"></div>'
       +       '<div id="cw-tl-nav" class="cw-nav-overlay">'
-      +         '<button id="cw-tl-top" class="cw-icon-btn" title="맨 위로"><svg width="9" height="6" viewBox="0 0 9 6" fill="currentColor"><path d="M4.5 0L9 6H0z"/></svg></button>'
-      +         '<button id="cw-tl-bottom" class="cw-icon-btn" title="맨 아래로"><svg width="9" height="6" viewBox="0 0 9 6" fill="currentColor"><path d="M4.5 6L0 0H9z"/></svg></button>'
+      +         '<button id="cw-tl-top" class="cw-icon-btn" title="' + escapeHtml(t('navScrollTop')) + '"><svg width="9" height="6" viewBox="0 0 9 6" fill="currentColor"><path d="M4.5 0L9 6H0z"/></svg></button>'
+      +         '<button id="cw-tl-bottom" class="cw-icon-btn" title="' + escapeHtml(t('navScrollBottom')) + '"><svg width="9" height="6" viewBox="0 0 9 6" fill="currentColor"><path d="M4.5 6L0 0H9z"/></svg></button>'
       +       '</div>'
       +     '</div>'
       +     '<div class="cw-detail-wrap">'
@@ -5896,9 +6140,10 @@ window.name = 'oh-my-hi';
 
     // Render legend once
     legendEl.innerHTML = LEGEND.map((x) => {
-      return '<div class="cw-legend-item" data-cw-legend="' + x.c + '" data-cw-pct="' + x.c + '" data-cw-label="' + escapeHtml(t(x.labelKey)) + '" data-tip="">'
+      const label = cweLabel(x.labelKey);
+      return '<div class="cw-legend-item" data-cw-legend="' + x.c + '" data-cw-pct="' + x.c + '" data-cw-label="' + escapeHtml(label) + '" data-tip="">'
         + '<div class="cw-legend-dot" style="background:' + x.c + '"></div>'
-        + '<span class="cw-legend-label">' + escapeHtml(t(x.labelKey)) + '</span>'
+        + '<span class="cw-legend-label">' + escapeHtml(label) + '</span>'
         + '</div>';
     }).join('');
 
@@ -6756,6 +7001,11 @@ window.name = 'oh-my-hi';
 
     function cleanSessionSnippet(raw) {
       if (!raw) return null;
+      // Codex composes a "You are working in {cwd}. {task}" system prefix for
+      // parallel/batch runs, making those sessions look identical in the list —
+      // strip it so the real task shows. Harmless for Claude (won't match).
+      raw = raw.replace(/^You are working in .+?\.\s+/, '');
+      if (!raw) return null;
       // <command-name> can appear anywhere (e.g. after <command-message>)
       const cmd = raw.match(/<command-name>([\s\S]*?)(?:<\/command-name>|$)/i);
       if (cmd) {
@@ -7237,13 +7487,15 @@ window.name = 'oh-my-hi';
       configFiles: { key: 'catDescConfigFiles', docs: 'https://docs.anthropic.com/en/docs/claude-code/settings' }
     };
     const catDesc = CATEGORY_DESC[currentView];
-    const catDescText = catDesc ? escapeHtml(t(catDesc.key)) : '';
+    const catDescText = catDesc ? escapeHtml(tp(catDesc.key)) : '';
+    // The doc links point to Claude Code docs — hide them under a Codex scope.
+    const catDocsHtml = (catDesc && catDesc.docs && scopeProvider(currentScope) !== 'codex') ? docsLinkHtml(catDesc.docs) : '';
 
     let html = '<div class="page-header">'
       + '<h1>' + cat.icon + ' ' + t('categoryOverview', getCatLabel(cat)) + '</h1>'
       + '<div class="subtext">' + t('itemsIn', items.length, scope ? scope.label : currentScope) + '</div>'
       + (catDescText ? '<div class="page-desc">' + catDescText
-        + docsLinkHtml(catDesc.docs)
+        + catDocsHtml
         + '</div>' : '')
       + '</div>';
 

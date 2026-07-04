@@ -1,13 +1,17 @@
 {
   "name": "oh-my-hi",
-  "version": "0.13.1",
-  "description": "Oh, so that's what Claude's been doing! — Claude Code harness insights dashboard",
+  "version": "0.14.0",
+  "description": "Oh, so that's what your coding agents have been doing! — Claude Code & Codex harness insights dashboard",
   "repository": {
     "type": "git",
     "url": "https://github.com/netil/oh-my-hi.git"
   },
   "author": "Jae Sung Park <alberto.park@gmail.com>",
   "license": "MIT",
+  "bin": {
+    "oh-my-hi": "bin/oh-my-hi.mjs",
+    "omh": "bin/oh-my-hi.mjs"
+  },
   "keywords": [
     "claude-code",
     "plugin",

@@ -52,6 +52,7 @@ import path from 'path';
 import os from 'os';
 import { gzipSync, gunzipSync } from 'zlib';
 import { toMonthKey } from '../util.mjs';
+import { claudeProvider } from '../providers/claude.mjs';
 
 const PARALLEL_CONCURRENCY = Math.max(os.cpus().length, 4);
 
@@ -647,11 +648,9 @@ async function parseTranscriptFile(jsonlPath, cutoffMs) {
         tokenEntries.push({
           timestamp: tsMs || entry.timestamp,
           model: entry.message?.model || 'unknown',
-          inputTokens: (usage.input_tokens || 0) + (usage.cache_creation_input_tokens || 0) + (usage.cache_read_input_tokens || 0),
-          outputTokens: usage.output_tokens || 0,
-          cacheRead: usage.cache_read_input_tokens || 0,
-          cacheCreation: usage.cache_creation_input_tokens || 0,
-          rawInput: usage.input_tokens || 0,
+          // Provider-normalized token fields (inputTokens, outputTokens,
+          // cacheRead, cacheCreation, rawInput) — Anthropic accounting.
+          ...claudeProvider.normalizeUsage(usage),
           context: ctx.type,
           contextName: ctx.name,
           sessionId: entry.sessionId ?? null,

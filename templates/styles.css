@@ -347,6 +347,42 @@ body.dark .nav-tooltip {
   font-weight: 600;
 }
 
+/* C: segmented tool filter (Claude · Codex) */
+.provider-filter {
+  display: flex;
+  gap: 3px;
+  margin-bottom: 8px;
+  padding: 3px;
+  background: var(--bg-secondary, rgba(127,127,127,0.08));
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+.provider-filter-btn {
+  flex: 1;
+  background: none;
+  border: none;
+  border-radius: calc(var(--radius-sm) - 2px);
+  padding: 4px 6px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  transition: background 0.15s, color 0.15s;
+}
+.provider-filter-btn:hover:not(.active) {
+  color: var(--text);
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+}
+.provider-filter-btn.active {
+  background: var(--accent);
+  color: #fff;
+  font-weight: 700;
+  box-shadow: 0 1px 3px color-mix(in srgb, var(--accent) 45%, transparent);
+}
+
 .lang-toggle-group {
   display: flex;
   border: 1px solid var(--border);
@@ -2348,6 +2384,30 @@ body.dark .json-null { color: #8b949e; }
   color: #adb5bd;
   cursor: not-allowed;
 }
+
+/* Days with activity — a dot marker (survives range/selection backgrounds) plus
+   a faint tint when the day is not part of the current selection. */
+.calendar-cell.has-data {
+  position: relative;
+  font-weight: 600;
+}
+.calendar-cell.has-data:not(.in-range):not(.range-start):not(.range-end):not(.disabled) {
+  background: color-mix(in srgb, var(--accent) 9%, transparent);
+}
+.calendar-cell.has-data::after {
+  content: '';
+  position: absolute;
+  left: 50%;
+  bottom: 3px;
+  width: 3px;
+  height: 3px;
+  border-radius: 50%;
+  background: var(--accent);
+  transform: translateX(-50%);
+}
+.calendar-cell.has-data.disabled::after { background: #adb5bd; }
+.calendar-cell.range-start.has-data::after,
+.calendar-cell.range-end.has-data::after { background: #fff; }
 
 .calendar-cell.in-range {
   background: #edf2ff;

@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.14.0] - 2026-07-04
+
+### Added
+- **Multi-tool support (Claude Code + Codex)** — oh-my-hi now discovers each tool by its config directory (`CLAUDE_CONFIG_DIR` / `CODEX_HOME`) and shows them side by side. A tool whose directory is absent is skipped, so Claude-only setups are unchanged.
+  - **Codex usage** — parses `$CODEX_HOME/sessions/**/rollout-*.jsonl`, normalizing Codex token accounting (cached-input is a subset of input, reasoning tokens, no cache-creation) into the common shape. Token entries carry a `provider` column (SQLite migration v3); incremental via an mtime index.
+  - **OpenAI/Codex pricing** — GPT-5.x / Codex rates added; the cost page, rate table, and source link follow the active tool (OpenAI vs Anthropic).
+  - **Codex structure** — skills, memory, and MCP servers (`config.toml`) surfaced under the Codex scope.
+  - **Context Explorer for Codex** — sessions replayable from Codex rollouts, with user-prompt previews (system preamble stripped) and per-turn tool classification (`exec_command`, `apply_patch`, …).
+  - **Provider UI** — segmented tool filter with an accent-highlighted active tab; provider-aware wording throughout (AGENTS.md vs CLAUDE.md, OpenAI vs Anthropic, Codex vs Claude badges).
+- **Standalone CLI** — `bin/oh-my-hi.mjs` + `bin` field, so `npx oh-my-hi` / a global `oh-my-hi` (or `omh`) run the dashboard without Claude Code. Codex launcher prompt at `codex/omh-prompt.md`.
+
+### Changed
+- **Tagline** — "Oh, so that's what your coding agents have been doing!" / "아, 이래서 코딩 에이전트가 그랬구나!" (was Claude-specific), reflecting multi-tool support.
+
 ## [0.13.1] - 2026-07-02
 
 ### Fixed

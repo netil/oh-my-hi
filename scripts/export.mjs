@@ -22,6 +22,15 @@ export const PRICING_FALLBACK = {
   'opus-3': { input: 15, output: 75, cacheRead: 1.5, cacheCreation: 18.75 },
   'sonnet-3': { input: 3, output: 15, cacheRead: 0.3, cacheCreation: 3.75 },
   'haiku-3': { input: 0.25, output: 1.25, cacheRead: 0.03, cacheCreation: 0.3 },
+  // OpenAI / Codex (USD per 1M tokens). Cached input = 10% of input; Codex has
+  // no cache-creation concept, so cacheCreation is 0 (Codex entries never set it).
+  'gpt-5.5': { input: 5, output: 30, cacheRead: 0.5, cacheCreation: 0 },
+  'gpt-5.4': { input: 2.5, output: 15, cacheRead: 0.25, cacheCreation: 0 },
+  'gpt-5.1': { input: 0.63, output: 5, cacheRead: 0.063, cacheCreation: 0 },
+  'gpt-5.3-codex': { input: 1.75, output: 14, cacheRead: 0.175, cacheCreation: 0 },
+  'gpt-5.2-codex': { input: 1.75, output: 14, cacheRead: 0.175, cacheCreation: 0 },
+  'gpt-5.1-codex': { input: 1.25, output: 10, cacheRead: 0.125, cacheCreation: 0 },
+  'gpt-5.1-codex-mini': { input: 0.25, output: 2, cacheRead: 0.025, cacheCreation: 0 },
 };
 
 /**

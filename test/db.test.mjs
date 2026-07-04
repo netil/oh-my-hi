@@ -45,9 +45,9 @@ function cleanDir(dir) {
 // ── Schema ──────────────────────────────────────────────────────────────────
 
 describe('Schema', () => {
-  it('openDb creates a v2 schema (fresh install)', () => {
+  it('openDb creates a v3 schema (fresh install)', () => {
     const db = freshDb();
-    assert.equal(getSchemaVersion(db), 2);
+    assert.equal(getSchemaVersion(db), 3);
     db.close();
   });
 
@@ -57,6 +57,15 @@ describe('Schema', () => {
       const cols = db.prepare(`PRAGMA table_info(${table})`).all().map(r => r.name);
       assert.ok(cols.includes('machine'), `${table} has machine column`);
     }
+    db.close();
+  });
+
+  it('token_entries has a provider column defaulting to claude', () => {
+    const db = freshDb();
+    const cols = db.prepare('PRAGMA table_info(token_entries)').all();
+    const provider = cols.find(c => c.name === 'provider');
+    assert.ok(provider, 'token_entries has provider column');
+    assert.equal(provider.dflt_value, "'claude'");
     db.close();
   });
 
@@ -1132,8 +1141,8 @@ describe('v1 → v2 migration — machine column', () => {
       v1.prepare(`INSERT INTO latency_entries (scope, session_id, timestamp, latency_ms) VALUES ('global', 's1', 1000, 200)`).run();
       v1.close();
 
-      const db = openDb(dbPath); // triggers migration
-      assert.equal(getSchemaVersion(db), 2, 'user_version bumped to 2');
+      const db = openDb(dbPath); // triggers migration (v1 → v2 → v3)
+      assert.equal(getSchemaVersion(db), 3, 'user_version bumped to 3');
       const me = getMachineId();
       for (const table of ['token_entries', 'prompt_entries', 'skill_usage', 'agent_usage', 'mcp_calls', 'latency_entries']) {
         const rows = db.prepare(`SELECT * FROM ${table}`).all();
@@ -1144,6 +1153,8 @@ describe('v1 → v2 migration — machine column', () => {
       const te = db.prepare('SELECT * FROM token_entries').get();
       assert.equal(te.input_tokens, 100);
       assert.equal(db.prepare('SELECT count FROM skill_usage').get().count, 3);
+      // v3: provider column added, existing rows default to 'claude'
+      assert.equal(te.provider, 'claude', 'pre-existing token rows default to claude provider');
       db.close();
     } finally { cleanDir(out); }
   });
@@ -1174,14 +1185,14 @@ describe('v1 → v2 migration — machine column', () => {
     } finally { cleanDir(out); }
   });
 
-  it('migration is idempotent across reopen (already-v2 DB is untouched)', () => {
+  it('migration is idempotent across reopen (already-migrated DB is untouched)', () => {
     const out = tempDir();
     const dbPath = path.join(out, 'v1.sqlite');
     try {
       createV1Db(dbPath).close();
       openDb(dbPath).close();
       const db = openDb(dbPath); // second open must not re-migrate / throw
-      assert.equal(getSchemaVersion(db), 2);
+      assert.equal(getSchemaVersion(db), 3);
       db.close();
     } finally { cleanDir(out); }
   });

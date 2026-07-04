@@ -50,6 +50,9 @@ import { parseUsage, loadMtimeIndex, saveMtimeIndex, scanTranscriptMonths } from
 import { detectScopes } from './parsers/scopes.mjs';
 import { computeWeeklyDigestsFromDb } from './digest.mjs';
 import { toMonthKey } from './util.mjs';
+import { claudeProvider } from './providers/claude.mjs';
+import { codexProvider } from './providers/codex.mjs';
+import { parseCodexStructure } from './providers/codex.mjs';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -91,8 +94,8 @@ const IS_ACTUAL_DEV_REPO = (() => {
   } catch { return false; }
 })();
 
-const CLAUDE_CONFIG_DIR = process.env.CLAUDE_CONFIG_DIR
-  || path.join(process.env.HOME, '.claude');
+// Resolved via the Claude provider adapter (CLAUDE_CONFIG_DIR env → ~/.claude).
+const CLAUDE_CONFIG_DIR = claudeProvider.configDir();
 
 const args = process.argv.slice(2);
 if (args.includes('--help')) {
@@ -660,6 +663,35 @@ async function main() {
     return ok;
   };
 
+  // Ingest Codex usage (if a Codex config dir exists) into SQLite under the
+  // 'codex' scope, tagged provider='codex'. Additive & idempotent: rollout
+  // logs are append-only and appendUsage uses INSERT OR IGNORE. No-op when
+  // Codex isn't installed, so the Claude path is unaffected.
+  const CODEX_MTIME_PATH = path.join(OUTPUT, 'cache', 'codex-mtime-index.json');
+  const ingestCodex = async (cutoffMs = 0) => {
+    if (!dbModule) return;
+    const dir = codexProvider.configDir();
+    if (!fs.existsSync(dir)) return;
+    // Incremental: only parse rollout files new/changed since last build.
+    let mtimeIndex = {};
+    try { mtimeIndex = JSON.parse(fs.readFileSync(CODEX_MTIME_PATH, 'utf-8')); } catch { /* first run */ }
+    try {
+      const usage = await codexProvider.parseUsage(dir, cutoffMs, { mtimeIndex });
+      if (usage.tokenEntries.length || usage.latencyEntries.length) {
+        if (await appendToMonthly('codex', usage)) {
+          console.log(`  codex: ${usage.tokenEntries.length} new token entries, ${usage.latencyEntries.length} latency`);
+        }
+      }
+      // Persist index only after a successful pass so a failed write re-parses.
+      try {
+        fs.mkdirSync(path.dirname(CODEX_MTIME_PATH), { recursive: true });
+        fs.writeFileSync(CODEX_MTIME_PATH, JSON.stringify(mtimeIndex));
+      } catch { /* best effort */ }
+    } catch (e) {
+      console.warn('oh-my-hi: codex ingest failed —', e.message);
+    }
+  };
+
   const getDbCtxNames = () => {
     if (!dbModule) return [];
     try { return dbModule.queryContextNamesAllMonths(OUTPUT); } catch { return []; }
@@ -695,9 +727,10 @@ async function main() {
     }
     cache._parsed = 0;
 
-    // Parse only changed transcript files
-    const scopes = detectScopes(CLAUDE_CONFIG_DIR, extraPaths);
-    const projectScopes = scopes.filter(s => s.type !== 'global');
+    // Parse only changed transcript files (Claude scopes only — codex is
+    // ingested separately via ingestCodex).
+    const scopes = detectAllScopes(CLAUDE_CONFIG_DIR, extraPaths);
+    const projectScopes = scopes.filter(s => s.type !== 'global' && !s.provider);
     await Promise.all([
       parseUsage(CLAUDE_CONFIG_DIR, 0, null, { cache }),
       ...projectScopes.map(s =>
@@ -745,6 +778,16 @@ async function main() {
       try {
         const existingData = JSON.parse(fs.readFileSync(dataPath, 'utf-8'));
         existingData.generatedAt = new Date().toISOString();
+        // Register newly-detected provider scopes (e.g. codex) so they appear in
+        // the scope selector even in lightweight mode (structure fills on full build).
+        const existingIds = new Set((existingData.scopes || []).map(s => s.id));
+        for (const s of scopes) {
+          if (existingIds.has(s.id) || !s.provider || s.provider === 'claude') continue;
+          (existingData.scopes ||= []).push(s);
+          // eslint-disable-next-line no-unused-vars
+          const { usage, ...structure } = s.provider === 'codex' ? buildCodexScopeData(s.configPath) : emptyScopeData();
+          (existingData.scopeData ||= {})[s.id] = structure;
+        }
         // Refresh the weekly digest (cheap: 14-day SQLite query per scope)
         if (dbModule) {
           const digestScopes = Object.keys(existingData.scopeData || { global: true });
@@ -765,6 +808,9 @@ async function main() {
 
     // Update mtime index only if DB write succeeded — failed writes retry next run
     if (dataOnlyDbOk) saveMtimeIndex(CACHE_PATH, cache);
+
+    // Ingest Codex usage alongside the Claude incremental update
+    await ingestCodex();
 
     // Ensure _devBuild flag is set when running from the real dev repo
     if (IS_ACTUAL_DEV_REPO && fs.existsSync(dataPath)) {
@@ -792,7 +838,7 @@ async function main() {
 
   // ── Full mode (user-initiated /omh) ──
   notifyUpdateIfAvailable(); // instant: reads cache only, no network
-  const scopes = detectScopes(CLAUDE_CONFIG_DIR, extraPaths);
+  const scopes = detectAllScopes(CLAUDE_CONFIG_DIR, extraPaths);
   const systemLocale = detectSystemLocale();
   const _pricingResult = await fetchModelPricing();
   const modelPricing = _pricingResult?.pricing ?? null;
@@ -882,7 +928,7 @@ async function main() {
       stubCache._parsed = 0;
       stubCache._processed = 0;
       stubCache._total = 0;
-      const projectScopes = scopes.filter(s => s.type !== 'global');
+      const projectScopes = scopes.filter(s => s.type !== 'global' && !s.provider);
       await Promise.all([
         parseUsage(CLAUDE_CONFIG_DIR, 0, null, { cache: stubCache }),
         ...projectScopes.map(s =>
@@ -936,6 +982,9 @@ async function main() {
       dashboardUrl = await spawnServeOrRefresh();
     }
   }
+
+  // Ingest Codex usage once for both full-mode paths (first-run + normal).
+  await ingestCodex();
 
   await flushRescue();
   console.log(`oh-my-hi: ✅ done → ${dashboardUrl}`);
@@ -1001,9 +1050,13 @@ async function collectAllScopes(scopes, { days = 0, cache, cachePath, skipUsage 
   const [globalData, ...projectResults] = await Promise.all([
     collectScopeData(CLAUDE_CONFIG_DIR, usageOpts),
     ...projectScopes.map(scope =>
-      !fs.existsSync(scope.configPath)
-        ? Promise.resolve({ id: scope.id, data: emptyScopeData() })
-        : collectProjectData(scope.configPath, scope.projectPath, usageOpts).then(data => ({ id: scope.id, data }))
+      // Non-Claude provider scopes (e.g. codex) carry their own structure
+      // catalog; usage is ingested to SQLite separately (ingestCodex).
+      (scope.provider && scope.provider !== 'claude')
+        ? Promise.resolve({ id: scope.id, data: scope.provider === 'codex' ? buildCodexScopeData(scope.configPath) : emptyScopeData() })
+        : !fs.existsSync(scope.configPath)
+          ? Promise.resolve({ id: scope.id, data: emptyScopeData() })
+          : collectProjectData(scope.configPath, scope.projectPath, usageOpts).then(data => ({ id: scope.id, data }))
     ),
   ]);
 
@@ -1424,6 +1477,33 @@ function buildTaskCategories(scopeData, dbContextNames = []) {
 }
 
 /** Empty scope data */
+/**
+ * Claude scopes (global + projects) plus a synthetic 'codex' provider scope
+ * when a Codex config dir exists. The codex scope carries no Claude structure
+ * (structure catalog is P5); its usage is served from SQLite (ingestCodex).
+ * scope.type is ignored by the frontend, so 'provider' is safe.
+ */
+function detectAllScopes(configDir, extraPaths) {
+  const scopes = detectScopes(configDir, extraPaths);
+  const codexDir = codexProvider.configDir();
+  if (fs.existsSync(codexDir)) {
+    scopes.push({ id: 'codex', label: 'Codex', type: 'provider', configPath: codexDir, projectPath: null, provider: 'codex' });
+  }
+  return scopes;
+}
+
+/** Scope data for the codex provider: empty Claude structure + parsed Codex catalog. */
+function buildCodexScopeData(configDir) {
+  const data = emptyScopeData();
+  try {
+    const struct = parseCodexStructure(configDir);
+    data.skills = struct.skills;
+    data.memory = struct.memory;
+    data.mcpServers = struct.mcpServers;
+  } catch { /* leave empty on parse failure */ }
+  return data;
+}
+
 function emptyScopeData() {
   return {
     configFiles: [], skills: [], agents: [], plugins: [], hooks: [],

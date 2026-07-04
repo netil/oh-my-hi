@@ -76,6 +76,7 @@ export const KIND_META = {
   auto:    { badgeKey: 'cwe_kindAuto',    detailKey: 'cwe_kindAutoDetail',    badgeBg: 'rgba(94,93,89,0.15)',  badgeColor: '#8A8880' },
   user:    { badgeKey: 'cwe_kindUser',    detailKey: 'cwe_kindUserDetail',    badgeBg: 'rgba(85,138,66,0.15)', badgeColor: '#6BA656' },
   claude:  { badgeKey: 'cwe_kindClaude',  detailKey: 'cwe_kindClaudeDetail',  badgeBg: 'rgba(217,119,87,0.12)',badgeColor: '#D97757' },
+  codex:   { badgeKey: 'cwe_kindCodex',   detailKey: 'cwe_kindCodexDetail',   badgeBg: 'rgba(16,163,127,0.12)',badgeColor: '#10a37f' },
   hook:    { badgeKey: 'cwe_kindHook',    detailKey: 'cwe_kindHookDetail',    badgeBg: 'rgba(184,134,11,0.15)',badgeColor: '#CCA020' },
   compact: { badgeKey: 'cwe_kindCompact', detailKey: 'cwe_kindCompactDetail', badgeBg: 'rgba(217,119,87,0.12)',badgeColor: '#D97757' },
   sub:     { badgeKey: 'cwe_kindSub',     detailKey: 'cwe_kindSubDetail',     badgeBg: 'rgba(155,123,196,0.12)',badgeColor: '#9B7BC4' },

@@ -46,6 +46,168 @@ describe('Web UI — Templates', () => {
     let js;
     before(() => { js = fs.readFileSync(path.join(TEMPLATES, 'app.js'), 'utf-8'); });
 
+    it('should filter the scope selector by the active tool and expose provider helpers', () => {
+      assert.ok(js.includes('function populateScopeSelect'), 'has populateScopeSelect');
+      assert.ok(js.includes("(s.provider || 'claude') === currentProvider"), 'lists only the active tool\'s scopes');
+      assert.ok(js.includes('function scopeProvider'), 'has scopeProvider helper');
+      assert.ok(js.includes('function providerLabel'), 'has providerLabel helper');
+      assert.ok(js.includes('function availableProviders'), 'has availableProviders helper');
+      assert.ok(js.includes('currentProvider'), 'has currentProvider state');
+      assert.ok(js.includes("localStorage.getItem('harness-provider')"), 'persists provider filter');
+    });
+
+    it('should have provider i18n keys in both locales', () => {
+      const en = JSON.parse(fs.readFileSync(path.join(TEMPLATES, 'locales', 'en.json'), 'utf-8'));
+      const ko = JSON.parse(fs.readFileSync(path.join(TEMPLATES, 'locales', 'ko.json'), 'utf-8'));
+      for (const k of ['providerClaude', 'providerCodex', 'providerFilterLabel']) {
+        assert.ok(en[k], `en has ${k}`);
+        assert.ok(ko[k], `ko has ${k}`);
+      }
+    });
+
+    it('should provide the segmented tool filter (C), no provider badge', () => {
+      assert.ok(js.includes('function renderProviderFilter'), 'has renderProviderFilter (C)');
+      assert.ok(js.includes('function onProviderChange'), 'has onProviderChange (C)');
+      assert.ok(js.includes('provider-filter-btn'), 'renders filter buttons');
+      assert.ok(js.includes("localStorage.setItem('harness-provider'"), 'persists provider filter');
+      // Badge removed — the filter is the single source of the active tool.
+      assert.ok(!js.includes('updateProviderBadge'), 'provider badge removed');
+      assert.ok(!js.includes('scope-provider-badge'), 'no badge element');
+    });
+
+    it('dashboard.html has the filter container; active tab is emphasized', () => {
+      const html = fs.readFileSync(path.join(TEMPLATES, 'dashboard.html'), 'utf-8');
+      assert.ok(!html.includes('scope-provider-badge'), 'no badge container');
+      assert.ok(html.includes('id="provider-filter"'), 'filter container');
+      const css = fs.readFileSync(path.join(TEMPLATES, 'styles.css'), 'utf-8');
+      assert.ok(!css.includes('.scope-provider-badge'), 'badge CSS removed');
+      assert.ok(css.includes('.provider-filter-btn'), 'filter styled');
+      // Active tab uses the accent color for a stronger highlight.
+      assert.ok(css.includes('.provider-filter-btn.active {\n  background: var(--accent);'), 'active tab emphasized with accent');
+    });
+
+    it('session snippet strips the Codex "You are working in ..." system prefix', () => {
+      const idx = js.indexOf('function cleanSessionSnippet');
+      const snippet = js.slice(idx, idx + 400);
+      assert.ok(snippet.includes('You are working in .+?'), 'strips Codex working-dir prefix');
+      // the regex itself yields the actual task (verified inline)
+      const re = /^You are working in .+?\.\s+/;
+      assert.strictEqual('You are working in /a/b.js. Implement X'.replace(re, ''), 'Implement X');
+      assert.strictEqual('normal prompt'.replace(re, ''), 'normal prompt');
+    });
+
+    it('provider-aware text helper tp() covers Codex variants across pages', () => {
+      assert.ok(js.includes('function tp(key)'), 'has tp() helper');
+      assert.ok(js.includes("const ck = key + 'Codex'"), 'tp resolves {key}Codex variant');
+      // render sites route through tp()
+      for (const call of ["tp('tokensDesc')", "tp('activityDesc')", "tp('visGlobalClaude')", "tp('cwe_ev6_label')", 'tp(catDesc.key)']) {
+        assert.ok(js.includes(call), 'routes through tp: ' + call);
+      }
+      // Codex doc links hidden on the category page
+      assert.ok(js.includes("!== 'codex') ? docsLinkHtml"), 'hides Claude doc links for codex');
+      const en = JSON.parse(fs.readFileSync(path.join(TEMPLATES, 'locales', 'en.json'), 'utf-8'));
+      const ko = JSON.parse(fs.readFileSync(path.join(TEMPLATES, 'locales', 'ko.json'), 'utf-8'));
+      for (const k of ['tokensDescCodex', 'activityDescCodex', 'visGlobalClaudeCodex', 'cwe_ev6_labelCodex', 'catDescMcpServersCodex', 'cachePageDescCodex', 'insightCostDetailCodex']) {
+        assert.ok(en[k] && ko[k], k + ' in both locales');
+        assert.ok(!/Anthropic|Claude Code|CLAUDE\.md/.test(en[k]), k + ' has no Claude-specific wording');
+      }
+    });
+
+    it('session-timeline assistant turns relabel claude→codex under a Codex scope', () => {
+      assert.ok(js.includes("if (e.kind === 'claude') e.kind = 'codex'"), 'remaps claude kind to codex for codex scope');
+      const example = fs.readFileSync(path.join(TEMPLATES, 'context-example.mjs'), 'utf-8');
+      assert.ok(example.includes('codex:') && example.includes("badgeKey: 'cwe_kindCodex'"), 'KIND_META has codex badge');
+      const en = JSON.parse(fs.readFileSync(path.join(TEMPLATES, 'locales', 'en.json'), 'utf-8'));
+      const ko = JSON.parse(fs.readFileSync(path.join(TEMPLATES, 'locales', 'ko.json'), 'utf-8'));
+      for (const k of ['cwe_kindCodex', 'cwe_kindCodexDetail']) assert.ok(en[k] && ko[k], k + ' in both locales');
+    });
+
+    it('context explorer legend labels are provider-aware (Codex → AGENTS.md/Codex)', () => {
+      assert.ok(js.includes('const cweLabel'), 'has provider-aware legend label helper');
+      assert.ok(js.includes("if (key === 'cwe_legClaudeMd') return t('cwe_legAgentsMd')"), 'CLAUDE.md → AGENTS.md for codex');
+      assert.ok(js.includes("if (key === 'cwe_legClaude') return t('cwe_legCodex')"), 'Claude → Codex for codex');
+      assert.ok(js.includes('cweLabel(x.labelKey)'), 'legend renders via cweLabel');
+      const en = JSON.parse(fs.readFileSync(path.join(TEMPLATES, 'locales', 'en.json'), 'utf-8'));
+      const ko = JSON.parse(fs.readFileSync(path.join(TEMPLATES, 'locales', 'ko.json'), 'utf-8'));
+      for (const k of ['cwe_legAgentsMd', 'cwe_legCodex']) assert.ok(en[k] && ko[k], k + ' in both locales');
+    });
+
+    it('all-time date range includes tokenEntries (Codex has no skill/agent usage)', () => {
+      const idx = js.indexOf('function getDataDateRange');
+      const snippet = js.slice(idx, idx + 700);
+      assert.ok(snippet.includes('usage.tokenEntries'), 'considers tokenEntries for the range');
+    });
+
+    it('calendar marks days that have data across all months (has-data)', () => {
+      const idx = js.indexOf('function showCalendarPicker');
+      const snippet = js.slice(idx, idx + 7000);
+      assert.ok(snippet.includes('_activeDaysByScope[currentScope]'), 'uses the accumulated day set');
+      assert.ok(snippet.includes("dataDays.has(cellKey)") && snippet.includes("' has-data'"), 'marks has-data cells');
+      // Accumulator persists across period fetches (survives narrow custom ranges).
+      assert.ok(js.includes('function recordActiveDays'), 'has recordActiveDays accumulator');
+      assert.ok(js.includes('recordActiveDays(scope, usage)'), 'records days on each usage fetch');
+      // bounds/markers must not depend on the current period's fetched usage
+      assert.ok(snippet.includes('DATA._dateRange') || snippet.includes('sorted[sorted.length - 1]'), 'bounds derived independently of current period');
+      // only days with data are selectable as a boundary
+      assert.ok(snippet.includes('const isDisabled = !hasData'), 'empty days are not selectable');
+      // opening the calendar loads the FULL-history day set regardless of period
+      assert.ok(js.includes('async function ensureAllActiveDays'), 'has all-time loader');
+      assert.ok(js.includes('ensureAllActiveDays(currentScope).then'), 'calendar loads full range on open');
+      assert.ok(snippet.includes('function computeBounds'), 're-reads bounds so they widen after load');
+      // initial highlighted range reflects the CURRENT period, not a stale/custom one
+      assert.ok(snippet.includes('} else if (currentPeriod === 0) {') && snippet.includes('getDate() - (currentPeriod - 1)'), 'initial range mirrors current period');
+      const css = fs.readFileSync(path.join(TEMPLATES, 'styles.css'), 'utf-8');
+      assert.ok(css.includes('.calendar-cell.has-data'), 'has-data styled');
+    });
+
+    it('cache trend/efficiency charts show data points on hover (focus:only)', () => {
+      // Regression: these used point:{show:false}, which hides points even on
+      // hover in canvas mode. They must use the focus:only pattern like others.
+      for (const fn of ['drawCacheTrendChart', 'drawCacheEfficiencyChart']) {
+        const idx = js.indexOf('function ' + fn);
+        assert.ok(idx !== -1, fn + ' exists');
+        const snippet = js.slice(idx, idx + 6000);
+        assert.ok(snippet.includes('focus: { only: true }'), fn + ' shows points on hover');
+        assert.ok(!snippet.includes('point: { show: false }'), fn + ' no longer hides points');
+      }
+    });
+
+    it('cost page basis/footer text follows the active tool', () => {
+      assert.ok(js.includes("'costFormulaDescCodex' : 'costFormulaDesc'"), 'formula desc is provider-aware');
+      assert.ok(js.includes("_costProvider === 'codex'") && js.includes("costPricingFallbackCodex"), 'codex uses built-in OpenAI pricing note');
+      const en = JSON.parse(fs.readFileSync(path.join(TEMPLATES, 'locales', 'en.json'), 'utf-8'));
+      const ko = JSON.parse(fs.readFileSync(path.join(TEMPLATES, 'locales', 'ko.json'), 'utf-8'));
+      for (const k of ['costFormulaDescCodex', 'costPricingFallbackCodex']) {
+        assert.ok(en[k] && ko[k], `${k} in both locales`);
+        assert.ok(!/Anthropic/i.test(en[k]), `${k} not Anthropic`);
+      }
+    });
+
+    it('cost page rate table + source link follow the active tool', () => {
+      assert.ok(js.includes('function pricingKeyProvider'), 'classifies pricing keys by tool');
+      assert.ok(js.includes("key.indexOf('gpt-') === 0 ? 'codex' : 'claude'"), 'gpt-* → codex');
+      // table filtered by the current scope's provider
+      assert.ok(js.includes('pricingKeyProvider(entry[0]) === _costProvider'), 'rate table filtered by tool');
+      // source link switches to OpenAI for Codex
+      assert.ok(js.includes('developers.openai.com/api/docs/pricing'), 'OpenAI pricing link for Codex');
+      assert.ok(js.includes('www.anthropic.com/pricing'), 'Anthropic pricing link for Claude');
+    });
+
+    it('tool filter lists only tools that have data', () => {
+      const idx = js.indexOf('function renderProviderFilter');
+      const snippet = js.slice(idx, idx + 700);
+      assert.ok(snippet.includes('availableProviders()'), 'derives pills from providers present in data');
+      assert.ok(snippet.includes("provs.length <= 1") && snippet.includes('hidden = true'), 'hidden on single-tool machines');
+    });
+
+    it('has no merged-view machinery (removed)', () => {
+      assert.ok(!js.includes('MERGED_SCOPE'), 'no merged scope constant');
+      assert.ok(!js.includes('fetchMergedUsage'), 'no merged fetch');
+      assert.ok(!js.includes('renderProviderBreakdown'), 'no merged breakdown');
+      const en = JSON.parse(fs.readFileSync(path.join(TEMPLATES, 'locales', 'en.json'), 'utf-8'));
+      assert.ok(!('unifiedScopeLabel' in en), 'merged i18n key removed');
+    });
+
     it('should define all page render functions', () => {
       const fns = [
         'renderOverview', 'renderTokensPage', 'renderTokensCost', 'renderTokensCache',

@@ -2,7 +2,12 @@
 
 ## Overview
 
-Claude Code harness dashboard generator. Invoked as `/omh` skill.
+Claude Code & Codex harness dashboard generator. Invoked as the `/omh` skill in
+Claude Code, or as a standalone CLI (`npx oh-my-hi`). Each tool is discovered by
+its config directory (`CLAUDE_CONFIG_DIR` / `CODEX_HOME`); a tool whose directory
+is absent is skipped, and present tools appear side by side via the scope
+selector. Usage is tagged by provider so tokens, cost, sessions, and structure
+are shown per tool with tool-correct pricing and wording.
 Parses harness configuration and usage data, stores results in SQLite, and serves an interactive dashboard via a local HTTP server.
 
 ## Directory Structure
