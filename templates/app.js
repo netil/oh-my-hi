@@ -154,6 +154,9 @@ window.name = 'oh-my-hi';
 
   // ── State ──
   let currentScope = localStorage.getItem('harness-scope') || 'global';
+  // Active provider (tool) filter: 'all' | 'claude' | 'codex'. Controls which
+  // scopes appear in the selector (C) and the unified merged view (D).
+  let currentProvider = localStorage.getItem('harness-provider') || 'all';
   let currentView = 'overview';
   let currentDetail = null;
   let currentPeriod = parseInt(localStorage.getItem('harness-period') || '30');
@@ -627,17 +630,60 @@ window.name = 'oh-my-hi';
     }
   }
 
+  // ── Provider (tool) helpers ──
+  // A scope belongs to a provider (harness/tool). Claude scopes omit the field,
+  // so it defaults to 'claude'. Codex (and future tools) set scope.provider.
+  function scopeProvider(id) {
+    const s = (DATA.scopes || []).find((x) => x.id === id);
+    return (s && s.provider) || 'claude';
+  }
+  function providerLabel(p) {
+    if (p === 'codex') return t('providerCodex');
+    if (p === 'all') return t('providerAll');
+    return t('providerClaude');
+  }
+  function providerIcon(p) {
+    if (p === 'codex') return '⌬';
+    if (p === 'all') return '⧉';
+    return '✳️';
+  }
+  // Distinct providers present in the data, in scope order.
+  function availableProviders() {
+    const seen = [];
+    (DATA.scopes || []).forEach((s) => {
+      const p = s.provider || 'claude';
+      if (seen.indexOf(p) === -1) seen.push(p);
+    });
+    return seen;
+  }
+
   function populateScopeSelect() {
     scopeSelect.innerHTML = '';
-    (DATA.scopes || []).forEach((s) => {
+    const scopes = DATA.scopes || [];
+    const addOption = (parent, s) => {
       const opt = document.createElement('option');
       opt.value = s.id;
       opt.textContent = s.label;
       opt.title = s.projectPath || s.configPath || '';
       if (s.id === currentScope) opt.selected = true;
-      scopeSelect.appendChild(opt);
-    });
-    let sel = DATA.scopes.find((s) => { return s.id === currentScope; });
+      parent.appendChild(opt);
+    };
+    // Scopes visible under the active provider filter (C). 'all' shows everything.
+    const visible = scopes.filter((s) => currentProvider === 'all' || (s.provider || 'claude') === currentProvider);
+    const providers = [];
+    visible.forEach((s) => { const p = s.provider || 'claude'; if (providers.indexOf(p) === -1) providers.push(p); });
+    // Group by provider via <optgroup> when more than one tool is shown (A).
+    if (providers.length > 1) {
+      providers.forEach((prov) => {
+        const group = document.createElement('optgroup');
+        group.label = providerLabel(prov);
+        visible.filter((s) => (s.provider || 'claude') === prov).forEach((s) => addOption(group, s));
+        scopeSelect.appendChild(group);
+      });
+    } else {
+      visible.forEach((s) => addOption(scopeSelect, s));
+    }
+    const sel = scopes.find((s) => s.id === currentScope);
     scopeSelect.title = sel ? (sel.projectPath || sel.configPath || '') : '';
   }
 

@@ -46,6 +46,25 @@ describe('Web UI — Templates', () => {
     let js;
     before(() => { js = fs.readFileSync(path.join(TEMPLATES, 'app.js'), 'utf-8'); });
 
+    it('should group the scope selector by provider (optgroup) and expose provider helpers', () => {
+      assert.ok(js.includes('function populateScopeSelect'), 'has populateScopeSelect');
+      assert.ok(js.includes("createElement('optgroup')"), 'groups scopes with optgroup');
+      assert.ok(js.includes('function scopeProvider'), 'has scopeProvider helper');
+      assert.ok(js.includes('function providerLabel'), 'has providerLabel helper');
+      assert.ok(js.includes('function availableProviders'), 'has availableProviders helper');
+      assert.ok(js.includes('currentProvider'), 'has currentProvider state');
+      assert.ok(js.includes("localStorage.getItem('harness-provider')"), 'persists provider filter');
+    });
+
+    it('should have provider i18n keys in both locales', () => {
+      const en = JSON.parse(fs.readFileSync(path.join(TEMPLATES, 'locales', 'en.json'), 'utf-8'));
+      const ko = JSON.parse(fs.readFileSync(path.join(TEMPLATES, 'locales', 'ko.json'), 'utf-8'));
+      for (const k of ['providerClaude', 'providerCodex', 'providerAll', 'providerFilterLabel', 'unifiedScopeLabel']) {
+        assert.ok(en[k], `en has ${k}`);
+        assert.ok(ko[k], `ko has ${k}`);
+      }
+    });
+
     it('should define all page render functions', () => {
       const fns = [
         'renderOverview', 'renderTokensPage', 'renderTokensCost', 'renderTokensCache',
