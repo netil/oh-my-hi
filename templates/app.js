@@ -653,10 +653,6 @@ window.name = 'oh-my-hi';
     if (p === 'codex') return t('providerCodex');
     return t('providerClaude');
   }
-  function providerIcon(p) {
-    if (p === 'codex') return '⌬';
-    return '✳️';
-  }
   // Classify a pricing-table key by tool: OpenAI/Codex keys are gpt-*, the rest
   // are Anthropic/Claude. Used to show only the active tool's rate table.
   function pricingKeyProvider(key) {
@@ -700,7 +696,7 @@ window.name = 'oh-my-hi';
     const show = provs.length > 1 && (p === 'claude' || p === 'codex') && provs.indexOf(p) !== -1;
     if (!show) { providerBadge.hidden = true; return; }
     providerBadge.hidden = false;
-    providerBadge.textContent = providerIcon(p) + ' ' + providerLabel(p);
+    providerBadge.textContent = providerLabel(p);
     providerBadge.setAttribute('data-provider', p);
   }
 
@@ -714,7 +710,7 @@ window.name = 'oh-my-hi';
     providerFilter.innerHTML = provs.map((p) =>
       '<button type="button" class="provider-filter-btn' + (p === currentProvider ? ' active' : '') +
       '" data-provider="' + p + '" title="' + escapeHtml(providerLabel(p)) + '">' +
-      providerIcon(p) + ' ' + escapeHtml(providerLabel(p)) + '</button>'
+      escapeHtml(providerLabel(p)) + '</button>'
     ).join('');
     providerFilter.querySelectorAll('.provider-filter-btn').forEach((btn) => {
       btn.addEventListener('click', () => onProviderChange(btn.dataset.provider));
