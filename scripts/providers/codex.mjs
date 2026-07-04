@@ -20,6 +20,27 @@ import { parseFrontmatter } from '../parsers/frontmatter.mjs';
  *   cacheRead: number, cacheCreation: number, rawInput: number }} NormalizedUsage
  */
 
+/**
+ * Build a human-readable preview for a Codex prompt. Codex parallel/batch runs
+ * wrap the real task in a system preamble:
+ *   "You are working in {cwd} [on branch {b}]. [The user asked to …]
+ *    [You are not alone …] [Ownership: …] Task: {actual task}"
+ * The real instruction is often past the 200-char cutoff, so extract it here so
+ * otherwise-identical sessions are distinguishable in the list. Plain prompts
+ * pass through unchanged.
+ * @param {string} text
+ * @returns {string}
+ */
+export function codexPromptPreview(text) {
+  if (/^You are working in /.test(text)) {
+    const task = text.match(/\bTask:\s*([\s\S]+)/);
+    if (task && task[1].trim()) return task[1].trim().slice(0, 200);
+    const stripped = text.replace(/^You are working in .+?\.\s+/, '').trim();
+    if (stripped) return stripped.slice(0, 200);
+  }
+  return text.slice(0, 200);
+}
+
 export const codexProvider = {
   id: 'codex',
   label: 'Codex',
@@ -111,8 +132,8 @@ export const codexProvider = {
           if (text && !(cutoffMs && tsMs && tsMs < cutoffMs)) {
             empty.promptStats.push({
               timestamp: tsMs || o.timestamp,
-              text,
-              preview: text.slice(0, 200),
+              text,                          // full text kept for FTS search
+              preview: codexPromptPreview(text),
               charLen: text.length,
               sessionId,
             });

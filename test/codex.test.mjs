@@ -5,7 +5,7 @@ import assert from 'node:assert';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-import { codexProvider, collectRolloutFiles, parseCodexStructure } from '../scripts/providers/codex.mjs';
+import { codexProvider, collectRolloutFiles, parseCodexStructure, codexPromptPreview } from '../scripts/providers/codex.mjs';
 import { calcEntryCost, resolvePricingKey, PRICING_FALLBACK } from '../scripts/export.mjs';
 
 function tmpCodexHome() {
@@ -106,6 +106,22 @@ test('parseUsage: extracts user prompts (for the session list / Context Explorer
   } finally {
     fs.rmSync(home, { recursive: true, force: true });
   }
+});
+
+test('codexPromptPreview: extracts the real task from parallel-run system preambles', () => {
+  // Task: label past the 200-char cutoff → extracted
+  const withTask = 'You are working in /Users/x/proj on branch b. The user asked to do things. '
+    + 'You are not alone in the codebase; do not revert. Ownership: a.ts and b.ts only. '
+    + 'You may read any files, but only edit those two files. Task: improve canvas axis rendering for v1';
+  assert.strictEqual(codexPromptPreview(withTask), 'improve canvas axis rendering for v1');
+  // No Task: label → strip the working-dir lead
+  assert.strictEqual(
+    codexPromptPreview('You are working in /Users/x/proj. Implement a focused perf fix. Ownership: x.ts'),
+    'Implement a focused perf fix. Ownership: x.ts');
+  // Plain prompt passes through
+  assert.strictEqual(codexPromptPreview('read the handoff doc'), 'read the handoff doc');
+  // iCloud path with spaces
+  assert.strictEqual(codexPromptPreview('You are working in /Users/x/Mobile Documents/work. do the thing'), 'do the thing');
 });
 
 test('parseUsage: cutoffMs filters out older entries', async () => {
