@@ -5317,6 +5317,14 @@ window.name = 'oh-my-hi';
       return '<span class="help-breadcrumb">' + parent + ' ›</span> ' + icon + ' ' + label;
     }
 
+    // 🧰 Multi-tool (Claude Code + Codex)
+    html += '<div class="section">'
+      + '<div class="section-title">🧰 ' + t('helpMultiTool') + '</div>'
+      + '<div class="card help-list">'
+      + helpRow('helpMultiToolTitle', 'helpMultiToolDesc', '🧰')
+      + helpRow('helpCodexTitle', 'helpCodexDesc', '⚙️')
+      + '</div></div>';
+
     // 🪙 토큰
     html += '<div class="section">'
       + '<div class="section-title">🪙 ' + t('tokens') + '</div>'

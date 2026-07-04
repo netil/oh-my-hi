@@ -643,6 +643,11 @@
   "cwe_legCodex": "Codex",
   "cwe_kindCodex": "codex",
   "cwe_kindCodexDetail": "Codex 작업",
+  "helpMultiTool": "멀티 도구",
+  "helpMultiToolTitle": "Claude Code & Codex",
+  "helpMultiToolDesc": "oh-my-hi는 발견한 모든 AI 코딩 도구를 나란히 보여줍니다. 사이드바 상단의 도구 필터와 scope 선택기로 전환하세요. 각 도구의 토큰·비용·세션·구조는 도구에 맞는 가격(Anthropic vs OpenAI)과 표현(CLAUDE.md vs AGENTS.md)으로 표시됩니다.",
+  "helpCodexTitle": "Codex 설정",
+  "helpCodexDesc": "Codex 데이터는 CODEX_HOME(기본 ~/.codex)에서 읽습니다. 설정이 다른 위치에 있으면 이 변수를 지정하세요. config 디렉토리가 없는 도구는 자동으로 제외되므로 Claude만 쓰는 환경은 그대로입니다.",
 
   "cwe_ev0_label": "대화 요약",
   "cwe_ev0_desc": "전체 대화를 하나의 구조화된 요약으로 응축한 것. 유지되는 내용: 요청/의도, 주요 기술 개념, 다룬 파일, 에러와 해결 과정, 남은 작업, 현재 진행 중인 작업. 사라지는 내용: 툴 출력 전문과 중간 추론 과정. Claude는 작업을 참고할 수 있지만 이전에 읽은 정확한 코드는 갖고 있지 않습니다.",

@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## [0.14.0] - 2026-07-04
 
 ### Added
 - **Multi-tool support (Claude Code + Codex)** — oh-my-hi now discovers each tool by its config directory (`CLAUDE_CONFIG_DIR` / `CODEX_HOME`) and shows them side by side. A tool whose directory is absent is skipped, so Claude-only setups are unchanged.

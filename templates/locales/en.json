@@ -643,6 +643,11 @@
   "cwe_legCodex": "Codex",
   "cwe_kindCodex": "codex",
   "cwe_kindCodexDetail": "Codex working",
+  "helpMultiTool": "Multi-tool",
+  "helpMultiToolTitle": "Claude Code & Codex",
+  "helpMultiToolDesc": "oh-my-hi shows every AI coding tool it finds side by side. Use the tool filter and scope selector at the top of the sidebar to switch — each tool's tokens, cost, sessions, and structure use tool-correct pricing (Anthropic vs OpenAI) and wording (CLAUDE.md vs AGENTS.md).",
+  "helpCodexTitle": "Codex setup",
+  "helpCodexDesc": "Codex data is read from CODEX_HOME (default ~/.codex); set it if your config lives elsewhere. A tool whose config directory is absent is simply skipped, so a Claude-only machine is unchanged.",
 
   "cwe_ev0_label": "Conversation summary",
   "cwe_ev0_desc": "The full conversation condensed into one structured summary. Keeps: your requests and intent, key technical concepts, files touched, errors and fixes, pending tasks, current work. Drops: verbatim tool outputs, intermediate reasoning. Claude can still reference the work but won't have the exact code it read earlier.",
