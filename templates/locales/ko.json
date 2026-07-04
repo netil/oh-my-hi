@@ -530,6 +530,8 @@
   "providerFilterLabel": "도구",
   "costFormulaDescCodex": "OpenAI API 토큰 단가 기준 환산 비용입니다 (1M 토큰당, USD). Codex의 실제 청구는 사용 방식(ChatGPT 구독 또는 API)에 따라 달라질 수 있어, 이 수치는 실제 청구와 다를 수 있는 참고 값입니다.",
   "costPricingFallbackCodex": "Codex 토큰 계산은 omh 내장 OpenAI 가격 기준입니다.",
+  "cachePageDescCodex": "OpenAI 프롬프트 캐시 효율 — 히트율, 예상 절감액, 사용 패턴 분석",
+  "insightCostDetailCodex": "총 예상 비용: {0} (OpenAI 가격 기준).",
   "partialBannerMsg": "최근 7일 데이터로 표시 중입니다. 전체 데이터를 백그라운드에서 로딩하고 있습니다\u2026",
   "firstRunBannerMsg": "✅ 전체 데이터 파싱이 완료되었습니다",
   "close": "닫기",

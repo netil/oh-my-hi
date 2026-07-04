@@ -2324,7 +2324,7 @@ window.name = 'oh-my-hi';
     const savingsStr = (totalSavings < 0 ? '-' : '') + fmtCost(Math.abs(totalSavings));
 
     let html = '<div class="page-header"><h1>♻️ ' + t('tokensCache') + '</h1>'
-      + '<div class="page-desc">' + t('cachePageDesc') + '</div></div>'
+      + '<div class="page-desc">' + t(scopeProvider(currentScope) === 'codex' ? 'cachePageDescCodex' : 'cachePageDesc') + '</div></div>'
       + renderPeriodFilter();
 
     // Headline metrics
@@ -3318,7 +3318,7 @@ window.name = 'oh-my-hi';
     tokenEntries.forEach((e) => { totalCostInsight += calcEntryCost(e); });
     if (totalCostInsight > 0) {
       const costByModel = modelEntries.map((e) => e[0] + ' ' + fmtCost(e[1].cost || 0)).join(', ');
-      let detail = t('insightCostDetail', fmtCost(totalCostInsight));
+      let detail = t(scopeProvider(currentScope) === 'codex' ? 'insightCostDetailCodex' : 'insightCostDetail', fmtCost(totalCostInsight));
       detail += '\n' + t('insightCostByModel', costByModel);
       insights.push({ icon: '💵', title: t('insightCostTitle'), detail: detail });
     }
