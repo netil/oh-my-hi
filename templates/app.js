@@ -1364,11 +1364,24 @@ window.name = 'oh-my-hi';
 
   // ── Data range helpers ──
   function getDataDateRange() {
-    let usage = getUsage();
-    let allItems = [].concat(usage.commands || [], usage.skills || [], usage.agents || []);
-    if (allItems.length === 0) return null;
-    const dates = allItems.map((i) => { return new Date(i.timestamp); }).sort((a, b) => { return a - b; });
-    return { start: dates[0], end: dates[dates.length - 1] };
+    const usage = getUsage();
+    // tokenEntries is the canonical activity source and the only one Codex
+    // populates (its skills/agents live in the structure catalog, not usage) —
+    // include it so the all-time range shows for every provider. Single-pass
+    // min/max avoids sorting large token arrays on each render.
+    const sources = [usage.tokenEntries, usage.commands, usage.skills, usage.agents, usage.promptStats, usage.latencyEntries];
+    let min = Infinity, max = -Infinity;
+    for (const arr of sources) {
+      if (!arr) continue;
+      for (let i = 0; i < arr.length; i++) {
+        const ts = new Date(arr[i].timestamp).getTime();
+        if (!Number.isFinite(ts)) continue;
+        if (ts < min) min = ts;
+        if (ts > max) max = ts;
+      }
+    }
+    if (min === Infinity) return null;
+    return { start: new Date(min), end: new Date(max) };
   }
 
   function getPeriodLabel() {

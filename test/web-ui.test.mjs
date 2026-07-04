@@ -85,6 +85,12 @@ describe('Web UI — Templates', () => {
       assert.ok(css.includes('.provider-filter-btn.active {\n  background: var(--card-bg);\n  color: var(--text);'), 'filter uses defined color vars');
     });
 
+    it('all-time date range includes tokenEntries (Codex has no skill/agent usage)', () => {
+      const idx = js.indexOf('function getDataDateRange');
+      const snippet = js.slice(idx, idx + 700);
+      assert.ok(snippet.includes('usage.tokenEntries'), 'considers tokenEntries for the range');
+    });
+
     it('badge shows only concrete tools that have data', () => {
       const idx = js.indexOf('function updateProviderBadge');
       const snippet = js.slice(idx, idx + 500);
