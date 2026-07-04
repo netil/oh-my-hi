@@ -1,9 +1,9 @@
 # 👋 oh-my-hi (Oh My Harness Insights)
-![oh-my-hi dashboard](https://img.shields.io/badge/Claude_Code-Plugin-blue)
+![oh-my-hi dashboard](https://img.shields.io/badge/Claude_Code_&_Codex-Insights-blue)
 
-> **Oh, so that's what Claude's been doing!** — A visual dashboard for your Claude Code harness.
+> **Oh, so that's what your coding agents have been doing!** — A visual dashboard for your AI coding harnesses (Claude Code & Codex).
 
-Parses your entire Claude Code configuration and usage data, stores results in a local SQLite database, and serves an interactive dashboard via a local HTTP server.
+Parses your Claude Code and Codex configuration and usage data, stores results in a local SQLite database, and serves an interactive dashboard via a local HTTP server. It discovers each tool by its config directory, so a single dashboard shows them side by side.
 
 <img src="./assets/dashboard.png?v=3" alt="Dashboard preview" width="800">
 
@@ -19,6 +19,7 @@ Parses your entire Claude Code configuration and usage data, stores results in a
 - **Context Window Explorer** — replay any past session turn-by-turn to see exactly how the context window filled up
 - **Activity heatmaps** — daily usage patterns across skills, agents, and commands
 - **Task categories** — auto-classified token usage by work type (code editing, docs, planning, etc.)
+- **Multi-tool** — Claude Code and Codex side by side; pick a tool from the selector to see its tokens, cost, sessions, and structure (each with tool-correct pricing and wording)
 - **Multi-workspace** — switch between global and per-project scopes
 
 <img src="./assets/token-overview.png?v=1" alt="Tokens" width="800">
@@ -40,7 +41,7 @@ Tracks how much the [cache TTL regression](https://github.com/anthropics/claude-
 
 ### Context Window Explorer
 
-Pick a real session from your Claude Code history and replay it turn-by-turn. The explorer breaks down every API turn into its contribution to the context window — system prompt, CLAUDE.md, memory, skill descriptions, MCP tools, user prompts, model responses, tool calls — so you can see exactly where your tokens went and when `/compact` kicked in.
+Pick a real session from your Claude Code or Codex history and replay it turn-by-turn. The explorer breaks down every API turn into its contribution to the context window — system prompt, CLAUDE.md / AGENTS.md, memory, skill descriptions, MCP tools, user prompts, model responses, tool calls — so you can see exactly where your tokens went and when compaction kicked in. For Codex, each turn is classified by the tool it used (`exec_command`, `apply_patch`, …).
 
 <img src="./assets/context-explorer.png" alt="Context Window Explorer" width="800">
 
@@ -147,12 +148,13 @@ See **[GUIDE.md](GUIDE.md)** for a detailed walkthrough of each dashboard sectio
 
 ## How it works
 
-1. **Parse** — Reads your Claude Code config directory for skills, agents, plugins, hooks, memory, MCP servers, rules, principles, commands, teams, plans, and usage transcripts
-2. **Analyze** — Extracts token usage, prompt stats, response latency, activity patterns from `.jsonl` transcripts
-3. **Classify** — Auto-categorizes token usage into work types (code editing, docs, planning, etc.) based on skill/agent descriptions. Saves to `task-categories.json` for user customization
-4. **Store** — Writes `data.json` (full data) and syncs token entries to `oh-my-hi.sqlite` for fast API queries
-5. **Serve** — Starts a local HTTP server (`serve.mjs`, port 7942) with `/api/meta` and `/api/usage` endpoints. Server is reused across builds via a lock file
-6. **Open** — On macOS, reuses an existing browser tab if found (AppleScript). On Windows/Linux, opens a new tab
+1. **Discover** — Resolves each tool's config directory from its environment variable (`CLAUDE_CONFIG_DIR` → `~/.claude`, `CODEX_HOME` → `~/.codex`). A tool whose directory is absent is skipped
+2. **Parse** — Reads the config for skills, agents, plugins, hooks, memory, MCP servers, rules, principles, commands, teams, plans, plus usage from Claude Code `.jsonl` transcripts and Codex `sessions/**/rollout-*.jsonl`
+3. **Analyze** — Extracts token usage, prompt stats, response latency, and activity patterns, normalizing each tool's token accounting into a common shape
+4. **Classify** — Auto-categorizes token usage into work types (code editing, docs, planning, etc.) based on skill/agent descriptions. Saves to `task-categories.json` for user customization
+5. **Store** — Writes `data.json` (structure/metadata) and syncs token entries — tagged by provider — to month-partitioned SQLite (`output/db/`) for fast API queries
+6. **Serve** — Starts a local HTTP server (`serve.mjs`, port 8282) with `/api/meta` and `/api/usage` endpoints. Server is reused across builds via a lock file
+7. **Open** — On macOS, reuses an existing browser tab if found (AppleScript). On Windows/Linux, opens a new tab
 
 ## i18n
 
@@ -161,11 +163,11 @@ See **[GUIDE.md](GUIDE.md)** for a detailed walkthrough of each dashboard sectio
 
 ## Privacy
 
-All data stays on your machine. `oh-my-hi` reads only local Claude Code config files and transcripts — nothing is sent to external servers. The dashboard is served by a local HTTP server on localhost; all API calls go to `127.0.0.1` only. Your usage data, token statistics, and configuration details never leave your local environment.
+All data stays on your machine. `oh-my-hi` reads only local Claude Code and Codex config files and transcripts — nothing is sent to external servers. The dashboard is served by a local HTTP server on localhost; all API calls go to `127.0.0.1` only. Your usage data, token statistics, and configuration details never leave your local environment.
 
 ## Browser support
 
-The dashboard is served locally via `http://localhost:7942` (or next available port). The server starts automatically on first `/omh` run and stays running between builds.
+The dashboard is served locally via `http://localhost:8282` (or next available port). The server starts automatically on first `/omh` run and stays running between builds.
 
 On macOS, subsequent builds will refresh the existing browser tab instead of opening a new one (Chrome and Safari supported).
 

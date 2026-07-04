@@ -1,7 +1,7 @@
 {
   "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
   "name": "oh-my-hi",
-  "description": "Oh, so that's what Claude's been doing! \u2014 Claude Code harness insights dashboard",
+  "description": "Oh, so that's what your coding agents have been doing! \u2014 Claude Code & Codex harness insights dashboard",
   "owner": {
     "name": "Jae Sung Park",
     "email": "alberto.park@gmail.com"
@@ -9,7 +9,7 @@
   "plugins": [
     {
       "name": "oh-my-hi",
-      "description": "Oh, so that's what Claude's been doing! \u2014 Visual dashboard for Claude Code harness. Usage/token analysis of skills, agents, plugins, hooks, memory, MCP servers, rules, and principles.",
+      "description": "Oh, so that's what your coding agents have been doing! \u2014 Visual dashboard for Claude Code & Codex. Usage/token analysis of skills, agents, plugins, hooks, memory, MCP servers, rules, and principles.",
       "version": "0.13.1",
       "author": {
         "name": "Jae Sung Park",

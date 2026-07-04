@@ -1,14 +1,14 @@
 ---
 name: omh
-description: Generate oh-my-hi dashboard. Visual catalog and usage/token analysis of skills, agents, plugins, hooks, memory, MCP servers, rules, and principles. Triggered by "/omh", "harness status", "dashboard", etc.
+description: Generate oh-my-hi dashboard. Visual catalog and usage/token analysis across Claude Code & Codex — skills, agents, plugins, hooks, memory, MCP servers, rules, and principles. Triggered by "/omh", "harness status", "dashboard", etc.
 argument-hint: "[--data-only] [--enable-auto] [--disable-auto] [--status] [--update] [--help]"
 ---
 
 # oh-my-hi
 
-> **Oh, so that's what Claude's been doing!**
+> **Oh, so that's what your coding agents have been doing!**
 
-Generates a full harness insights dashboard and opens it in the browser.
+Generates a full harness insights dashboard (Claude Code & Codex) and opens it in the browser.
 
 ## Usage
 
