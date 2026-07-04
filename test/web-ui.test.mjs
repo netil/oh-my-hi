@@ -103,6 +103,10 @@ describe('Web UI — Templates', () => {
       assert.ok(snippet.includes('DATA._dateRange') || snippet.includes('sorted[sorted.length - 1]'), 'bounds derived independently of current period');
       // only days with data are selectable as a boundary
       assert.ok(snippet.includes('const isDisabled = !hasData'), 'empty days are not selectable');
+      // opening the calendar loads the FULL-history day set regardless of period
+      assert.ok(js.includes('async function ensureAllActiveDays'), 'has all-time loader');
+      assert.ok(js.includes('ensureAllActiveDays(currentScope).then'), 'calendar loads full range on open');
+      assert.ok(snippet.includes('function computeBounds'), 're-reads bounds so they widen after load');
       const css = fs.readFileSync(path.join(TEMPLATES, 'styles.css'), 'utf-8');
       assert.ok(css.includes('.calendar-cell.has-data'), 'has-data styled');
     });

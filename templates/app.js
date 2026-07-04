@@ -798,6 +798,31 @@ window.name = 'oh-my-hi';
     }
   }
 
+  // The calendar must offer the FULL data range regardless of the current
+  // period, so once per scope fetch all-time usage (into the accumulator only —
+  // never replacing the current view's usage) to complete the active-days set.
+  const _activeDaysFull = {};
+  async function ensureAllActiveDays(scope) {
+    if (_activeDaysFull[scope]) return false;
+    if (!DATA._apiMode) {
+      recordActiveDays(scope, (DATA.scopeData[scope] || {}).usage);
+      _activeDaysFull[scope] = true;
+      return true;
+    }
+    const dr = DATA._dateRange;
+    const from = dr && dr.from ? Math.floor(dr.from) : 0;
+    const to = dr && dr.to ? Math.floor(dr.to) : Date.now();
+    try {
+      const res = await fetch('/api/usage?scope=' + encodeURIComponent(scope) + '&from=' + from + '&to=' + to);
+      if (!res.ok) return false;
+      const u = await res.json();
+      if (u && u.error) return false;
+      recordActiveDays(scope, u);
+      _activeDaysFull[scope] = true;
+      return true;
+    } catch (e) { return false; }
+  }
+
   // Compute the timestamp range (ms) matching the current period / custom
   // range controls. Used by the API loader to request only the needed slice.
   function computeCurrentPeriodRange() {
@@ -1786,28 +1811,27 @@ window.name = 'oh-my-hi';
     const existing = document.getElementById('calendar-overlay');
     if (existing) existing.remove();
 
-    // Seed the accumulator with the currently loaded usage, then derive BOTH the
-    // selectable bounds and the has-data markers from it — so nothing here
-    // depends on the current period's (possibly narrow) fetched usage. Without
-    // this, applying a narrow custom range then reopening would collapse the
-    // calendar's min/max to that range and disable every other day.
+    // The calendar reflects the FULL data range independent of the current
+    // period. Seed with the current usage, and (below) fetch the all-time set so
+    // days beyond the current period are shown and selectable too.
     recordActiveDays(currentScope, getUsage());
-    const dataDays = _activeDaysByScope[currentScope] || new Set();
+    const dataDays = _activeDaysByScope[currentScope] || (_activeDaysByScope[currentScope] = new Set());
 
-    let minDate, maxDate;
-    if (dataDays.size) {
-      const sorted = [...dataDays].sort();
-      const toLocal = (k) => { const p = k.split('-'); return new Date(+p[0], +p[1] - 1, +p[2]); };
-      minDate = toLocal(sorted[0]);
-      maxDate = toLocal(sorted[sorted.length - 1]);
-    } else if (DATA._dateRange && DATA._dateRange.from && DATA._dateRange.to) {
-      minDate = new Date(DATA._dateRange.from);
-      maxDate = new Date(DATA._dateRange.to);
-    } else {
+    // Bounds re-read the accumulator on each render, so they widen once the
+    // all-time set finishes loading.
+    function computeBounds() {
+      if (dataDays.size) {
+        const sorted = [...dataDays].sort();
+        const toLocal = (k) => { const p = k.split('-'); return new Date(+p[0], +p[1] - 1, +p[2]); };
+        return { min: toLocal(sorted[0]), max: toLocal(sorted[sorted.length - 1]) };
+      }
+      if (DATA._dateRange && DATA._dateRange.from && DATA._dateRange.to) {
+        return { min: new Date(DATA._dateRange.from), max: new Date(DATA._dateRange.to) };
+      }
       const dr = getDataDateRange();
-      minDate = dr ? dr.start : new Date(2020, 0, 1);
-      maxDate = dr ? dr.end : new Date();
+      return { min: dr ? dr.start : new Date(2020, 0, 1), max: dr ? dr.end : new Date() };
     }
+    let minDate = computeBounds().min, maxDate = computeBounds().max;
 
     let selStart = customDateRange ? customDateRange.start : new Date(maxDate);
     selStart = new Date(selStart);
@@ -1824,6 +1848,7 @@ window.name = 'oh-my-hi';
     overlay.className = 'calendar-overlay';
 
     function renderCalendar() {
+      const b = computeBounds(); minDate = b.min; maxDate = b.max; // widen once all-time loads
       const year = viewMonth.getFullYear();
       const month = viewMonth.getMonth();
       const daysInMonth = new Date(year, month + 1, 0).getDate();
@@ -1883,6 +1908,12 @@ window.name = 'oh-my-hi';
 
     renderCalendar();
     document.body.appendChild(overlay);
+
+    // Load the full-history active-days set (independent of the current period)
+    // and re-render so bounds/markers cover every month, not just the loaded one.
+    ensureAllActiveDays(currentScope).then((added) => {
+      if (added && document.body.contains(overlay)) renderCalendar();
+    });
 
     overlay.addEventListener('click', (e) => {
       if (e.target === overlay) { overlay.remove(); return; }
