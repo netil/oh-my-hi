@@ -87,6 +87,27 @@ test('parseUsage: turn_context model + token_count → normalized entries', asyn
   }
 });
 
+test('parseUsage: extracts user prompts (for the session list / Context Explorer)', async () => {
+  const home = tmpCodexHome();
+  try {
+    writeRollout(home, 'sessions', 'rollout-p.jsonl', [
+      { timestamp: '2026-06-02T09:00:00.000Z', type: 'turn_context', payload: { model: 'gpt-5.5' } },
+      { timestamp: '2026-06-02T09:00:30.000Z', type: 'event_msg', payload: { type: 'user_message', message: 'read the handoff doc please' } },
+      { timestamp: '2026-06-02T09:01:00.000Z', type: 'event_msg', payload: { type: 'token_count', info: {
+        last_token_usage: { input_tokens: 100, output_tokens: 10 } } } },
+      // developer/permission messages are response_item/message — not user prompts
+      { timestamp: '2026-06-02T09:00:20.000Z', type: 'response_item', payload: { type: 'message', role: 'developer', content: [{ type: 'input_text', text: 'permissions...' }] } },
+    ]);
+    const usage = await codexProvider.parseUsage(home, 0);
+    assert.strictEqual(usage.promptStats.length, 1, 'one user prompt');
+    assert.strictEqual(usage.promptStats[0].text, 'read the handoff doc please');
+    assert.strictEqual(usage.promptStats[0].sessionId, 'rollout-p');
+    assert.ok(usage.promptStats[0].charLen > 0);
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+});
+
 test('parseUsage: cutoffMs filters out older entries', async () => {
   const home = tmpCodexHome();
   try {

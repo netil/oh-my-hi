@@ -102,6 +102,23 @@ export const codexProvider = {
           continue;
         }
         const p = o.payload;
+        // User prompts — event_msg/user_message carries the raw prompt text.
+        // Needed for the session list / Context Explorer (a session is only
+        // replayable if it has a first-prompt preview).
+        if (o.type === 'event_msg' && p?.type === 'user_message') {
+          const text = typeof p.message === 'string' ? p.message : '';
+          const tsMs = o.timestamp ? new Date(o.timestamp).getTime() : 0;
+          if (text && !(cutoffMs && tsMs && tsMs < cutoffMs)) {
+            empty.promptStats.push({
+              timestamp: tsMs || o.timestamp,
+              text,
+              preview: text.slice(0, 200),
+              charLen: text.length,
+              sessionId,
+            });
+          }
+          continue;
+        }
         if (o.type !== 'event_msg' || p?.type !== 'token_count') continue;
 
         const info = p.info || {};
