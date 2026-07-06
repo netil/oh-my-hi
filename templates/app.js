@@ -5581,7 +5581,8 @@ window.name = 'oh-my-hi';
     const clrText  = cs.getPropertyValue('--text').trim()      || (isDark ? '#e7e5e4' : '#1c1917');
     const clrMuted = cs.getPropertyValue('--text-secondary').trim() || (isDark ? '#a8a29e' : '#78716c');
     const clrTertiary = cs.getPropertyValue('--text-tertiary').trim() || (isDark ? '#78716c' : '#a8a29e');
-    const clrAccent= cs.getPropertyValue('--accent').trim()    || (isDark ? '#14b8a6' : '#0f766e');
+    const clrAccent= cs.getPropertyValue('--accent').trim()    || (isDark ? '#ffb454' : '#a16207');
+    const clrAccentFg = cs.getPropertyValue('--accent-fg').trim() || '#fff';
     const arrowColor = clrBorderStrong;
 
     // Category accent colors (from CSS vars, matching sidebar)
@@ -5717,7 +5718,7 @@ window.name = 'oh-my-hi';
 
       var hasCount = n.count !== undefined;
       // Category nodes: use accent color for label text; special nodes use white
-      var textColor = isSpecial ? '#fff' : (accentColor || clrText);
+      var textColor = isSpecial ? (n.fg || '#fff') : (accentColor || clrText);
       var offsetX = 0;
       var txt = document.createElementNS(S, 'text');
       txt.setAttribute('x', n.x + n.w / 2 + offsetX);
@@ -5804,6 +5805,7 @@ window.name = 'oh-my-hi';
       drawHArrow(lg.x + lg.w, lg.y + lg.h / 2,
                  outputNode.x, outputNode.y + outputNode.h / 2);
     }
+    outputNode.fg = clrAccentFg;
     drawNode(outputNode, clrAccent, true);
   }
 

@@ -1,19 +1,23 @@
+/* Instrument-panel design language: warm panel greys, amber accent,
+   hairline borders, squared corners, monospace numerals. Dark theme is
+   the cockpit variant of the same language (see body.dark). */
 :root {
-  --bg: #f5f5f4;
-  --sidebar-bg: #fafaf9;
+  --bg: #edece7;
+  --sidebar-bg: #f2f1ec;
   --sidebar-width: 232px;
-  --card-bg: #ffffff;
-  --border: #e7e5e4;
-  --border-strong: #d6d3d1;
-  --text: #1c1917;
-  --text-secondary: #78716c;
-  --text-tertiary: #a8a29e;
-  --accent: #0f766e;
-  --accent-hover: #0d6b64;
-  --accent-muted: rgba(15,118,110,0.1);
-  --positive: #059669;
-  --negative: #dc2626;
-  --warning: #d97706;
+  --card-bg: #faf9f5;
+  --border: #d9d6cc;
+  --border-strong: #c4c0b2;
+  --text: #21201c;
+  --text-secondary: #6e6a5e;
+  --text-tertiary: #9b968a;
+  --accent: #a16207;
+  --accent-hover: #854d0e;
+  --accent-muted: rgba(161,98,7,0.1);
+  --accent-fg: #ffffff;
+  --positive: #15803d;
+  --negative: #b91c1c;
+  --warning: #c2410c;
   --color-skills: #2563eb;
   --color-agents: #7c3aed;
   --color-plugins: #059669;
@@ -22,11 +26,12 @@
   --color-mcp: #dc2626;
   --color-rules: #6b7280;
   --color-principles: #4f46e5;
-  --radius: 6px;
-  --radius-sm: 3px;
-  --shadow: 0 1px 2px rgba(0,0,0,0.06);
-  --shadow-md: 0 2px 4px rgba(0,0,0,0.06), 0 1px 2px rgba(0,0,0,0.04);
+  --radius: 3px;
+  --radius-sm: 2px;
+  --shadow: 0 1px 1px rgba(33,32,28,0.05);
+  --shadow-md: 0 1px 3px rgba(33,32,28,0.07);
   --transition: 120ms ease;
+  --font-mono: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
 }
 
 *, *::before, *::after {
@@ -378,7 +383,7 @@ body.dark .nav-tooltip {
 }
 .provider-filter-btn.active {
   background: var(--accent);
-  color: #fff;
+  color: var(--accent-fg);
   font-weight: 700;
   box-shadow: 0 1px 3px color-mix(in srgb, var(--accent) 45%, transparent);
 }
@@ -413,7 +418,7 @@ body.dark .nav-tooltip {
 
 .lang-btn.active {
   background: var(--accent);
-  color: #fff;
+  color: var(--accent-fg);
 }
 
 .scope-select {
@@ -474,13 +479,13 @@ body.dark .nav-tooltip {
   margin-top: 6px;
   padding: 3px 8px;
   background: var(--accent);
-  color: #fff;
+  color: var(--accent-fg);
   border-radius: var(--radius-sm);
 }
 
 body.dark .sidebar-period-range {
   background: var(--accent);
-  color: #fff;
+  color: var(--accent-fg);
 }
 
 .sidebar-period-range .file-path-label {
@@ -1156,7 +1161,7 @@ body.dark .period-tooltip {
 
 .period-btn.active {
   background: var(--accent);
-  color: #fff;
+  color: var(--accent-fg);
   border-color: var(--accent);
   font-weight: 500;
 }
@@ -1211,8 +1216,9 @@ body.dark .period-tooltip {
 }
 
 .stat-card .stat-value {
-  font-size: 32px;
-  font-weight: 600;
+  font-family: var(--font-mono);
+  font-size: 30px;
+  font-weight: 500;
   color: var(--text);
   line-height: 1.2;
   letter-spacing: -0.5px;
@@ -2059,7 +2065,7 @@ body.dark .json-null { color: #8b949e; }
 
 .skill-chip:hover {
   background: var(--accent);
-  color: #fff;
+  color: var(--accent-fg);
 }
 
 /* ── Hook / MCP detail ── */
@@ -2344,7 +2350,7 @@ body.dark .json-null { color: #8b949e; }
 
 .calendar-range-part.picking {
   background: var(--accent);
-  color: #fff;
+  color: var(--accent-fg);
 }
 
 .calendar-grid {
@@ -2416,7 +2422,7 @@ body.dark .json-null { color: #8b949e; }
 .calendar-cell.range-start,
 .calendar-cell.range-end {
   background: var(--accent);
-  color: #fff;
+  color: var(--accent-fg);
   font-weight: 600;
 }
 
@@ -2447,7 +2453,7 @@ body.dark .json-null { color: #8b949e; }
 .calendar-btn.apply {
   background: var(--accent);
   border: 1px solid var(--accent);
-  color: #fff;
+  color: var(--accent-fg);
 }
 
 .calendar-btn.apply:hover {
@@ -2456,20 +2462,21 @@ body.dark .json-null { color: #8b949e; }
 
 /* ── Dark mode ── */
 body.dark {
-  --bg: #111110;
-  --sidebar-bg: #191918;
-  --card-bg: #1c1c1b;
-  --border: #2a2927;
-  --border-strong: #3a3937;
-  --text: #e7e5e4;
-  --text-secondary: #a8a29e;
-  --text-tertiary: #78716c;
-  --accent: #14b8a6;
-  --accent-hover: #0d9488;
-  --accent-muted: rgba(20,184,166,0.1);
-  --positive: #34d399;
-  --negative: #f87171;
-  --warning: #fbbf24;
+  --bg: #0d0e0c;
+  --sidebar-bg: #101110;
+  --card-bg: #131411;
+  --border: #26271f;
+  --border-strong: #3d3b34;
+  --text: #d6d3cd;
+  --text-secondary: #a19d92;
+  --text-tertiary: #6b675d;
+  --accent: #ffb454;
+  --accent-hover: #e89a38;
+  --accent-muted: rgba(255,180,84,0.12);
+  --accent-fg: #171204;
+  --positive: #7fbf7f;
+  --negative: #e5484d;
+  --warning: #fb923c;
   --shadow: 0 1px 2px rgba(0,0,0,0.3);
   --shadow-md: 0 2px 4px rgba(0,0,0,0.4);
   color-scheme: dark;
@@ -2486,8 +2493,8 @@ body.dark {
 }
 
 body.dark .file-path {
-  background: #373a40;
-  color: #c1c2c5;
+  background: #1d1e19;
+  color: #a19d92;
 }
 
 body.dark .file-path-label {
@@ -2625,6 +2632,15 @@ body.dark .bb-tooltip .value {
 .update-banner {
   gap: 12px;
   background: var(--accent);
+  color: var(--accent-fg);
+}
+body.dark .update-banner button {
+  background: rgba(0,0,0,0.14);
+  border-color: rgba(0,0,0,0.28);
+  color: #171204;
+}
+body.dark .update-banner button:hover {
+  background: rgba(0,0,0,0.22);
 }
 
 /* Push content below the fixed banner so it doesn't cover the page title */
@@ -3155,7 +3171,7 @@ body.dark .health-factor-tooltip {
 }
 .health-factor-help:hover {
   background: var(--accent);
-  color: #fff;
+  color: var(--accent-fg);
 }
 .health-score-card {
   container-type: inline-size;
@@ -3378,7 +3394,7 @@ body.dark .health-factor-tooltip {
 }
 .bookmark-filter-btn.active {
   background: var(--accent);
-  color: #fff;
+  color: var(--accent-fg);
   border-color: var(--accent);
 }
 .bookmark-tag-pills {
@@ -3532,7 +3548,7 @@ body.dark .health-factor-tooltip {
 }
 .compare-tab.active {
   background: var(--accent);
-  color: #fff;
+  color: var(--accent-fg);
   border-color: var(--accent);
 }
 @media (max-width: 768px) {
@@ -4680,7 +4696,7 @@ body.dark .content table:not(.bb-tooltip) tbody tr:hover td {
 }
 .insight-filter-btn.active {
   background: var(--accent);
-  color: #fff;
+  color: var(--accent-fg);
   border-color: var(--accent);
 }
 .insight-severity-summary {
@@ -4828,3 +4844,14 @@ body.dark .insight-source-chip[data-source="anomaly"] { background: rgba(248,113
   color: var(--text-tertiary);
   font-size: 13px;
 }
+
+/* ── Instrument-panel signature: faint engineering grid on the content ground ── */
+.content {
+  background-image:
+    linear-gradient(color-mix(in srgb, var(--text) 3%, transparent) 1px, transparent 1px),
+    linear-gradient(90deg, color-mix(in srgb, var(--text) 3%, transparent) 1px, transparent 1px);
+  background-size: 28px 28px;
+}
+
+/* Chart axis/legend text follows the instrument numeral face */
+.bb svg text { font-family: var(--font-mono); }
