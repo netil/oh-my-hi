@@ -5569,8 +5569,10 @@ window.name = 'oh-my-hi';
     const pad = 24, vGap = 10, groupPad = 16, groupRx = 8, hGap = 32;
     const font = '-apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
 
-    // Read live CSS variables for theme compatibility
-    const cs = getComputedStyle(document.documentElement);
+    // Read live CSS variables for theme compatibility.
+    // Must read from body: dark-theme overrides live on body.dark, so
+    // documentElement always resolves the light :root values.
+    const cs = getComputedStyle(document.body);
     const isDark = document.body.classList.contains('dark');
     const bgCard   = cs.getPropertyValue('--card-bg').trim()   || (isDark ? '#1c1c1b' : '#ffffff');
     const bgPage   = cs.getPropertyValue('--bg').trim()        || (isDark ? '#111110' : '#f5f5f4');

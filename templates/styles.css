@@ -2627,6 +2627,13 @@ body.dark .bb-tooltip .value {
   background: var(--accent);
 }
 
+/* Push content below the fixed banner so it doesn't cover the page title */
+body:has(> .update-banner) .content,
+body:has(> .partial-banner) .content,
+body:has(> .firstrun-banner) .content {
+  padding-top: 72px;
+}
+
 .update-banner button {
   background: rgba(255,255,255,0.2);
   border: 1px solid rgba(255,255,255,0.3);
@@ -3028,7 +3035,7 @@ body.dark .budget-alert-dismiss:hover {
 /* ── Dev Build Badge ── */
 .dev-build-badge {
   position: fixed;
-  top: 12px;
+  bottom: 12px;
   right: 12px;
   background: #dc2626;
   color: #fff;
