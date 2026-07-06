@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.15.0] - 2026-07-06
+
+### Changed
+- **Instrument-panel design language** — full visual refresh of both themes, no functional changes. Light theme becomes a lab-instrument panel (warm greys `#edece7`, panel-white cards, amber accent `#a16207`); dark theme becomes a cockpit (near-black ground `#0d0e0c`, amber phosphor accent `#ffb454`, instrument palette for positive/negative). Hero numbers and chart axis text now use monospace numerals, corners squared (6px → 3px), and the content ground carries a faint engineering grid.
+- **New `--accent-fg` token** — text on accent-colored surfaces (period buttons, calendar, compare tabs, update banner, flowchart output node) resolves to white in light theme and dark umber in dark theme, keeping contrast on the amber accent.
+- **billboard.js 4.0.3** — dependency bump from 4.0.1.
+
+### Fixed
+- **Update banner covered the page title** — the fixed top banner (update / partial / first-run) now pushes the content down instead of overlaying the page header.
+- **DEV BUILD badge overlapped the banner's refresh button** — badge moved to the bottom-right corner.
+- **Structure flowchart ignored dark theme** — `drawFlowchart()` read CSS variables from `documentElement`, but dark-theme overrides live on `body.dark`; it now reads from `body`, so the flow diagram follows the active theme.
+
 ## [0.14.0] - 2026-07-04
 
 ### Added
