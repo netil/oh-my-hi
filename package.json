@@ -28,7 +28,7 @@
   "homepage": "https://github.com/netil/oh-my-hi",
   "dependencies": {
     "better-sqlite3": "^11.7.0",
-    "billboard.js": "^4.0.1",
+    "billboard.js": "^4.0.3",
     "esbuild": "^0.27.4"
   }
 }
