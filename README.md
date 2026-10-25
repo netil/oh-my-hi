@@ -47,7 +47,7 @@ Pick a real session from your Claude Code or Codex history and replay it turn-by
 
 You can also view a guided example session to walk through the mechanics before loading your own:
 
-<img src="./assets/session-replay.gif" alt="Context Window Explorer example replay" width="800">
+<img src="./assets/session-replay.gif?v=0.16.0" alt="Context Window Explorer example replay" width="800">
 
 ## Installation
 
