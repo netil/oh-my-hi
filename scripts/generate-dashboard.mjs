@@ -10,7 +10,9 @@
 /**
  * @typedef {{ globalClaudeTokens: number, projectClaudeTokens: number,
  *   autoMemoryTokens: number, skillsDescTokens: number,
- *   mcpToolsTokens: number, principlesTokens: number }} ContextStats
+ *   mcpToolsTokens: number, principlesTokens: number,
+ *   items: Array<{ kind: 'skills'|'mcpServers'|'principles', name: string, tokens: number }> }} ContextStats
+ * `items` is the per-item share of the startup estimates above (same formulas).
  */
 
 /**
@@ -21,7 +23,7 @@
 import { fileURLToPath } from 'url';
 import path from 'path';
 import fs from 'fs';
-import { execSync, spawnSync, spawn } from 'child_process';
+import { execSync, execFileSync, spawnSync, spawn } from 'child_process';
 
 // Auto-install dependencies if missing
 const __boot_dir = path.dirname(fileURLToPath(import.meta.url));
@@ -53,12 +55,16 @@ import { toMonthKey } from './util.mjs';
 import { claudeProvider } from './providers/claude.mjs';
 import { codexProvider } from './providers/codex.mjs';
 import { parseCodexStructure } from './providers/codex.mjs';
+import { resolveOutputDir, isDevCheckout, marketplaceInstall, legacyOutputDirs, migrateLegacyOutput } from './paths.mjs';
+import { semverGt, shouldAutoUpdate, repointAutoHook, installedPluginPath, readState, writeState } from './auto-update.mjs';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const ROOT = path.resolve(__dirname, '..');
 const TEMPLATES = path.join(ROOT, 'templates');
-const OUTPUT = process.env.OMH_OUTPUT_DIR || path.join(ROOT, 'output');
+// See paths.mjs: a marketplace install keeps its output in the plugin's
+// persistent data directory, which survives updates.
+const OUTPUT = resolveOutputDir(ROOT);
 
 // Dev vs plugin build detection.
 // Dev build:     script is running from the source git checkout (the folder
@@ -73,15 +79,7 @@ const OUTPUT = process.env.OMH_OUTPUT_DIR || path.join(ROOT, 'output');
 // invoking the binary from any directory still picks the right mode.
 // IS_DEV_BUILD: controls HTML rebuild skipping and plugin-mode behaviour.
 // OMH_BUILD_MODE=plugin forces false so tests can exercise the plugin code path.
-const IS_DEV_BUILD = (() => {
-  if (process.env.OMH_BUILD_MODE === 'plugin') return false;
-  if (process.env.OMH_BUILD_MODE === 'dev') return true;
-  try {
-    if (!fs.existsSync(path.join(ROOT, '.git'))) return false;
-    const pkg = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf-8'));
-    return pkg.name === 'oh-my-hi';
-  } catch { return false; }
-})();
+const IS_DEV_BUILD = isDevCheckout(ROOT);
 
 // IS_ACTUAL_DEV_REPO: true when the script is running from the real source
 // checkout (not a plugin install). Used only for the _devBuild badge so that
@@ -106,8 +104,10 @@ Usage:
   oh-my-hi --data-only        Regenerate data + web-ui (skip browser open)
   oh-my-hi --enable-auto      Enable auto data refresh on session end
   oh-my-hi --disable-auto     Disable auto data refresh
-  oh-my-hi --status           Check auto-refresh status
+  oh-my-hi --status           Check auto-refresh and auto-update status
   oh-my-hi --update           Check and install latest version
+  oh-my-hi --enable-auto-update   Install new releases automatically (default)
+  oh-my-hi --disable-auto-update  Stop installing new releases automatically
   oh-my-hi <path> [path...]   Include specified projects only
   oh-my-hi --help             Show help`);
   process.exit(0);
@@ -118,9 +118,11 @@ const PRICING_CACHE_FILE = path.join(OUTPUT, 'cache', '.pricing-cache.json');
 const PRICING_CACHE_TTL = 24 * 60 * 60 * 1000; // 24 hours
 
 function _modelNameToKey(name) {
-  // "Claude Opus 4.7 (deprecated)" → "opus-4-7", "Claude Sonnet 4" → "sonnet-4"
+  // "Claude Opus 4.7 (deprecated)" → "opus-4-7", "Claude Sonnet 4" → "sonnet-4".
+  // The pricing page appends a tagline to the name cell
+  // ("Claude Opus 5.5For long-running…"), so match the leading name only.
   const clean = name.replace(/\([^)]*\)/g, '').trim();
-  const m = clean.match(/^Claude\s+(Opus|Sonnet|Haiku)\s+(\d+)(?:\.(\d+))?$/i);
+  const m = clean.match(/^Claude\s+(Opus|Sonnet|Haiku|Fable|Mythos)\s+(\d+)(?:\.(\d+))?(?![\d.])/i);
   if (!m) return null;
   return [m[1].toLowerCase(), m[2], m[3]].filter(Boolean).join('-');
 }
@@ -140,7 +142,7 @@ function _parsePricingHtml(html) {
       );
     }
     if (cells.length < 4) continue;
-    if (!headerCols && /^model$/i.test(cells[0]) && cells.some(c => /input/i.test(c))) {
+    if (!headerCols && /^(model|name)$/i.test(cells[0]) && cells.some(c => /input/i.test(c))) {
       headerCols = cells.map(c => c.toLowerCase());
       continue;
     }
@@ -201,14 +203,23 @@ function notifyUpdateIfAvailable() {
   try {
     if (!fs.existsSync(UPDATE_CHECK_FILE)) return;
     const pkg = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf-8'));
+    const ko = detectSystemLocale() === 'ko';
+    const state = readState(AUTO_UPDATE_STATE);
+    // Announce a self-update once, from whichever version runs next
+    if (state.updated && !state.updated.notified) {
+      console.log(ko
+        ? `oh-my-hi: ✅ v${state.updated.to} 로 자동 업데이트했습니다. 다음 세션부터 적용됩니다 (지금 적용: /reload-plugins).`
+        : `oh-my-hi: ✅ auto-updated to v${state.updated.to}. It loads in your next session (or run /reload-plugins).`);
+      state.updated.notified = true;
+      writeState(AUTO_UPDATE_STATE, state);
+    }
     const cached = JSON.parse(fs.readFileSync(UPDATE_CHECK_FILE, 'utf-8'));
     if (!semverGt(cached.latest, pkg.version)) return;
-    const locale = detectSystemLocale();
-    if (locale === 'ko') {
-      console.log(`oh-my-hi: 🆕 최신 버전 v${cached.latest} 이 있습니다 — /omh --update`);
-    } else {
-      console.log(`oh-my-hi: 🆕 v${cached.latest} available — /omh --update to upgrade`);
-    }
+    if (autoUpdateDecision(cached.latest, state).run) return; // installing in the background
+    if (state.updated && state.updated.to === cached.latest) return; // installed, awaiting reload
+    console.log(ko
+      ? `oh-my-hi: 🆕 최신 버전 v${cached.latest} 이 있습니다. /omh --update`
+      : `oh-my-hi: 🆕 v${cached.latest} available. /omh --update to upgrade`);
   } catch { /* best effort */ }
 }
 
@@ -221,7 +232,9 @@ function scheduleUpdateCacheRefresh() {
   try {
     if (fs.existsSync(UPDATE_CHECK_FILE)) {
       const cached = JSON.parse(fs.readFileSync(UPDATE_CHECK_FILE, 'utf-8'));
-      if (Date.now() - (cached.timestamp || 0) < TWELVE_HOURS) return; // fresh, skip
+      const fresh = Date.now() - (cached.timestamp || 0) < TWELVE_HOURS;
+      // fresh and nothing to install: skip
+      if (fresh && !autoUpdateDecision(cached.latest).run) return;
     }
     const child = spawn(process.execPath, [__filename, '--_update-cache'], {
       detached: true, stdio: 'ignore',
@@ -273,8 +286,66 @@ async function _runUpdateCacheRefresh() {
       fs.mkdirSync(path.dirname(UPDATE_CHECK_FILE), { recursive: true });
       fs.writeFileSync(UPDATE_CHECK_FILE,
         JSON.stringify({ timestamp: Date.now(), current: pkg.version, latest }), 'utf8');
+      autoUpdateTo(latest);
     }
   } catch { /* best effort */ }
+}
+
+// ── Self-update (see auto-update.mjs) ──
+const AUTO_UPDATE_STATE = path.join(OUTPUT, 'cache', '.auto-update.json');
+
+function autoUpdateDecision(latest, state = readState(AUTO_UPDATE_STATE)) {
+  const pkg = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf-8'));
+  return shouldAutoUpdate({
+    current: pkg.version, latest,
+    marketplaceInstall: !!marketplaceInstall(ROOT),
+    disabled: !!state.disabled, env: process.env,
+    lastAttempt: state.lastAttempt, now: Date.now(),
+  });
+}
+
+/** Install `latest` when the decision allows it. Runs in the detached
+ *  update-check child; one run at a time (exclusive lock file). */
+function autoUpdateTo(latest) {
+  const state = readState(AUTO_UPDATE_STATE);
+  if (!autoUpdateDecision(latest, state).run) return;
+  const install = marketplaceInstall(ROOT);
+  const lockFile = path.join(OUTPUT, 'cache', '.auto-update.lock');
+  try {
+    fs.writeFileSync(lockFile, String(process.pid), { flag: 'wx' });
+  } catch {
+    // Held: by a live run (skip), or left behind by a dead one (take it over)
+    try { process.kill(Number(fs.readFileSync(lockFile, 'utf-8')), 0); return; } catch { /* stale */ }
+    fs.writeFileSync(lockFile, String(process.pid));
+  }
+  const pkg = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf-8'));
+  const id = `${install.plugin}@${install.marketplace}`;
+  const attempt = { version: latest, at: Date.now(), ok: false };
+  try {
+    const claudeBin = findClaudeBin();
+    if (!claudeBin) throw new Error('claude CLI not found');
+    const run = (cliArgs) => execFileSync(claudeBin, cliArgs, {
+      stdio: 'pipe', timeout: 180000, env: { ...process.env, CLAUDE_CONFIG_DIR },
+    });
+    run(['plugin', 'marketplace', 'update', install.marketplace]);
+    run(['plugin', 'update', id]);
+    // Trust only what Claude Code recorded as installed
+    const installed = installedPluginPath(install.pluginsRoot, id);
+    if (!installed || !installed.version || !semverGt(installed.version, pkg.version)) {
+      throw new Error('plugin update finished but the installed version did not change');
+    }
+    attempt.ok = true;
+    state.updated = { from: pkg.version, to: installed.version, at: Date.now(), notified: false };
+    // The Stop hook embeds this version's path; move it to the new one
+    const settings = readSettings();
+    if (repointAutoHook(settings, autoHookCommand(installed.path))) writeSettings(settings);
+  } catch (e) {
+    attempt.error = String(e.message || e).slice(0, 300);
+  } finally {
+    state.lastAttempt = attempt;
+    try { writeState(AUTO_UPDATE_STATE, state); } catch { /* best effort */ }
+    try { fs.unlinkSync(lockFile); } catch { /* ignore */ }
+  }
 }
 
 // ── Update ──
@@ -319,13 +390,8 @@ async function runUpdate() {
     }
   }
 
-  // Refresh marketplace cache so claude plugin update sees latest tags
-  const marketplaceCacheDir = path.join(CLAUDE_CONFIG_DIR, 'plugins', 'marketplaces', marketplace);
-  if (fs.existsSync(marketplaceCacheDir)) {
-    try {
-      execSync('git fetch --tags --quiet', { cwd: marketplaceCacheDir, stdio: 'pipe', timeout: 10000 });
-    } catch { /* best effort — offline or not a git repo */ }
-  }
+  const install = marketplaceInstall(ROOT);
+  if (install) marketplace = install.marketplace;
 
   try {
     // Check latest version via GitHub tags API (git-based distribution)
@@ -381,10 +447,20 @@ async function runUpdate() {
     console.log(`oh-my-hi: updating v${pkg.version} → v${latest}...`);
     const claudeBin = findClaudeBin();
     if (!claudeBin) throw new Error('claude CLI not found — install Claude Code or add it to PATH');
-    execSync(`"${claudeBin}" plugin update ${pkg.name}@${marketplace}`, {
+    // Refresh the catalog first so `plugin update` sees the new release
+    try {
+      execFileSync(claudeBin, ['plugin', 'marketplace', 'update', marketplace], { stdio: 'pipe', timeout: 180000, env: { ...process.env, CLAUDE_CONFIG_DIR } });
+    } catch { /* best effort: plugin update may still find it */ }
+    execFileSync(claudeBin, ['plugin', 'update', `${pkg.name}@${marketplace}`], {
       stdio: 'inherit',
       env: { ...process.env, CLAUDE_CONFIG_DIR },
     });
+    // The Stop hook embeds this version's path; move it to the new one
+    const installed = install && installedPluginPath(install.pluginsRoot, `${pkg.name}@${marketplace}`);
+    if (installed) {
+      const settings = readSettings();
+      if (repointAutoHook(settings, autoHookCommand(installed.path))) writeSettings(settings);
+    }
     console.log(`oh-my-hi: ✅ updated to v${latest}`);
   } catch (e) {
     if (e.name === 'AbortError') console.log('oh-my-hi: ❌ network timeout');
@@ -397,18 +473,8 @@ async function runUpdate() {
 const SETTINGS_PATH = path.join(CLAUDE_CONFIG_DIR, 'settings.json');
 // Stop hook runs --_auto-refresh which immediately spawns a detached child and exits.
 // The detached child does the actual --data-only work silently in the background.
-const AUTO_HOOK_CMD = `node "${path.join(ROOT, 'scripts', 'generate-dashboard.mjs')}" --_auto-refresh`;
-
-/** Returns true if version a is greater than version b (semver, numeric comparison) */
-function semverGt(a, b) {
-  const pa = a.split('.').map(Number);
-  const pb = b.split('.').map(Number);
-  for (let i = 0; i < 3; i++) {
-    if ((pa[i] || 0) > (pb[i] || 0)) return true;
-    if ((pa[i] || 0) < (pb[i] || 0)) return false;
-  }
-  return false;
-}
+const autoHookCommand = (root) => `node "${path.join(root, 'scripts', 'generate-dashboard.mjs')}" --_auto-refresh`;
+const AUTO_HOOK_CMD = autoHookCommand(ROOT);
 
 function readSettings() {
   if (!fs.existsSync(SETTINGS_PATH)) return {};
@@ -475,11 +541,30 @@ function showStatus() {
     console.log('oh-my-hi: ℹ️ To enable, run `/omh --enable-auto`.');
     console.log('oh-my-hi: ℹ️ To refresh data manually, run `/omh --data-only`.');
   }
+  const state = readState(AUTO_UPDATE_STATE);
+  if (!marketplaceInstall(ROOT)) {
+    console.log('oh-my-hi: Auto-update status: ➖ Not a marketplace install (update with your package manager)');
+  } else {
+    console.log('oh-my-hi: Auto-update status: ' + (state.disabled ? '❌ Disabled (enable: /omh --enable-auto-update)' : '✅ Enabled'));
+    const a = state.lastAttempt;
+    if (a) console.log(`oh-my-hi: ℹ️ Last update attempt: v${a.version} ${a.ok ? 'succeeded' : 'failed (' + (a.error || 'unknown') + ')'} at ${new Date(a.at).toLocaleString()}`);
+  }
+}
+
+function setAutoUpdate(enabled) {
+  const state = readState(AUTO_UPDATE_STATE);
+  state.disabled = !enabled;
+  writeState(AUTO_UPDATE_STATE, state);
+  console.log(enabled
+    ? 'oh-my-hi: ✅ Auto-update enabled. New releases install in the background and load in your next session.'
+    : 'oh-my-hi: ✅ Auto-update disabled. Run `/omh --update` to update manually.');
 }
 
 if (args.includes('--enable-auto')) { addAutoHook(); process.exit(0); }
 if (args.includes('--disable-auto')) { removeAutoHook(); process.exit(0); }
 if (args.includes('--status')) { showStatus(); process.exit(0); }
+if (args.includes('--enable-auto-update')) { setAutoUpdate(true); process.exit(0); }
+if (args.includes('--disable-auto-update')) { setAutoUpdate(false); process.exit(0); }
 
 // Stop hook entry point: spawn a detached background child and exit immediately.
 // This keeps the session-end seamless — no terminal output, no blocking.
@@ -505,6 +590,28 @@ async function main() {
   const indexPath = path.join(OUTPUT, 'index.html');
   const dataPath = path.join(OUTPUT, 'data.json');
 
+  // First run with the persistent data directory: bring over the usage
+  // history an older version kept inside its own install directory.
+  const install = !process.env.OMH_OUTPUT_DIR && !IS_DEV_BUILD ? marketplaceInstall(ROOT) : null;
+  if (install) {
+    try {
+      const from = migrateLegacyOutput(OUTPUT, legacyOutputDirs(install));
+      if (from) console.log(`oh-my-hi: moved usage data from ${from} → ${OUTPUT}`);
+    } catch (e) {
+      console.warn('oh-my-hi: could not copy usage data from the previous version —', e.message);
+    }
+    // Self-heal the Stop hook when it still points at an older version's
+    // directory (only the version Claude Code records as installed fixes it,
+    // so a still-running older copy never points it backwards)
+    try {
+      const installed = installedPluginPath(install.pluginsRoot, `${install.plugin}@${install.marketplace}`);
+      if (installed && path.resolve(installed.path) === ROOT) {
+        const settings = readSettings();
+        if (repointAutoHook(settings, AUTO_HOOK_CMD)) writeSettings(settings);
+      }
+    } catch { /* best effort */ }
+  }
+
   // Ensure output directory exists
   fs.mkdirSync(OUTPUT, { recursive: true });
 
@@ -521,13 +628,17 @@ async function main() {
       }
     };
     if (fs.existsSync(LEGACY_DB)) {
-      if (dbModule.listMonthlyDbs(OUTPUT).length === 0) {
-        console.log('oh-my-hi: 레거시 DB를 월별 파일로 분리하는 중...');
+      // Monthly writes are idempotent, so a split interrupted by an earlier run
+      // is simply redone. The legacy file is removed only after a full split.
+      console.log('oh-my-hi: 레거시 DB를 월별 파일로 분리하는 중...');
+      try {
         const legacyDb = dbModule.openDb(LEGACY_DB);
         try { dbModule.splitLegacyDb(legacyDb, OUTPUT); } finally { legacyDb.close(); }
         console.log('oh-my-hi: ✅ 레거시 DB 분리 완료');
+        removeLegacyFiles();
+      } catch (e) {
+        console.warn('oh-my-hi: 레거시 DB 분리 실패. 원본을 남겨 두고 다음 실행에서 다시 시도합니다:', e.message);
       }
-      removeLegacyFiles();
     } else {
       // No oh-my-hi.sqlite, but leftover WAL/SHM/.migrated may exist — clean them up
       removeLegacyFiles();
@@ -677,19 +788,51 @@ async function main() {
     try { mtimeIndex = JSON.parse(fs.readFileSync(CODEX_MTIME_PATH, 'utf-8')); } catch { /* first run */ }
     try {
       const usage = await codexProvider.parseUsage(dir, cutoffMs, { mtimeIndex });
+      let ok = true;
       if (usage.tokenEntries.length || usage.latencyEntries.length) {
-        if (await appendToMonthly('codex', usage)) {
-          console.log(`  codex: ${usage.tokenEntries.length} new token entries, ${usage.latencyEntries.length} latency`);
-        }
+        ok = await appendToMonthly('codex', usage);
+        if (ok) console.log(`  codex: ${usage.tokenEntries.length} new token entries, ${usage.latencyEntries.length} latency`);
       }
-      // Persist index only after a successful pass so a failed write re-parses.
-      try {
-        fs.mkdirSync(path.dirname(CODEX_MTIME_PATH), { recursive: true });
-        fs.writeFileSync(CODEX_MTIME_PATH, JSON.stringify(mtimeIndex));
-      } catch { /* best effort */ }
+      // Persist index only after a successful write so a failed write re-parses.
+      if (ok) {
+        try {
+          fs.mkdirSync(path.dirname(CODEX_MTIME_PATH), { recursive: true });
+          fs.writeFileSync(CODEX_MTIME_PATH, JSON.stringify(mtimeIndex));
+        } catch { /* best effort */ }
+      }
     } catch (e) {
       console.warn('oh-my-hi: codex ingest failed —', e.message);
     }
+  };
+
+  // One-time cleanup of pre-v4 usage rows (see purgeLegacyRows in db.mjs):
+  // re-parse every transcript, then drop this machine's legacy rows from each
+  // scope's earliest re-parsed moment before the idempotent append writes the
+  // same data back with message/event ids. A marker file stops the re-parse
+  // once the cleanup has committed.
+  const LEGACY_DONE_PATH = path.join(OUTPUT, 'cache', 'legacy-v4-purged');
+  const needsLegacyReparse = () => {
+    if (!dbModule || fs.existsSync(LEGACY_DONE_PATH)) return false;
+    let legacy;
+    try { legacy = dbModule.hasLegacyRows(OUTPUT); } catch { return false; }
+    // Nothing to clean (fresh install, or cleanup finished): mark it so later
+    // builds skip the scan of every monthly DB.
+    if (!legacy) markLegacyDone();
+    return legacy;
+  };
+  const purgeLegacyForScopes = (usageByScope) => {
+    for (const [scopeId, usage] of Object.entries(usageByScope)) {
+      const fromMs = earliestUsageTimestamp(usage);
+      if (fromMs == null) continue;
+      const n = dbModule.purgeLegacyRows(OUTPUT, scopeId, fromMs);
+      if (n) console.log(`  ${scopeId}: replaced ${n} pre-v4 row(s) from ${new Date(fromMs).toISOString().slice(0, 10)} with re-parsed data`);
+    }
+  };
+  const markLegacyDone = () => {
+    try {
+      fs.mkdirSync(path.dirname(LEGACY_DONE_PATH), { recursive: true });
+      fs.writeFileSync(LEGACY_DONE_PATH, new Date().toISOString());
+    } catch { /* retried next run */ }
   };
 
   const getDbCtxNames = () => {
@@ -719,7 +862,8 @@ async function main() {
     console.log('oh-my-hi: collecting data (lightweight)...');
 
     // Load mtime index (tiny file) instead of full cache
-    const mtimeIndex = loadMtimeIndex(CACHE_PATH);
+    const legacyReparse = needsLegacyReparse();
+    const mtimeIndex = legacyReparse ? {} : loadMtimeIndex(CACHE_PATH);
     const mtimeIndexSize = Object.keys(mtimeIndex).length;
     const cache = {};
     for (const [fp, mtimeMs] of Object.entries(mtimeIndex)) {
@@ -759,10 +903,12 @@ async function main() {
           try {
             // Route new entries per-scope (global + matching project), same as full mode
             const newByScope = collectNewUsageByScope(cache, projectScopes);
+            if (legacyReparse) purgeLegacyForScopes(newByScope);
             for (const [scopeId, usage] of Object.entries(newByScope)) {
               if (usageIsEmpty(usage)) continue;
               if (!await appendToMonthly(scopeId, usage)) dataOnlyDbOk = false;
             }
+            if (legacyReparse && dataOnlyDbOk) markLegacyDone();
           } finally {
             releaseLock();
           }
@@ -832,6 +978,7 @@ async function main() {
     if (needsMigration) await migrateWithProgress(dbModule, OUTPUT, dataPath);
 
     await flushRescue();
+    scheduleUpdateCacheRefresh(); // Stop-hook-only users get updates too
     console.log('oh-my-hi: done (lightweight)');
     return;
   }
@@ -875,9 +1022,15 @@ async function main() {
     console.log('  [4/4] loading full history (this may take a moment)...');
     // cachePath: saves mtime-index (no seg-*.json.gz — collectAllScopes no longer calls saveTranscriptCache)
     const phase2ScopeData = await collectAllScopes(scopes, { days: 0, cache, cachePath: CACHE_PATH, progress: true });
+    const legacyReparse = needsLegacyReparse();
+    if (legacyReparse) {
+      purgeLegacyForScopes(Object.fromEntries(Object.entries(phase2ScopeData).map(([id, d]) => [id, d?.usage || {}])));
+    }
     // If SQLite write fails, delete mtime-index so next run re-parses transcripts
     if (!await syncDb(phase2ScopeData)) {
       try { fs.unlinkSync(path.join(OUTPUT, 'cache', 'mtime-index.json')); } catch { /* ignore */ }
+    } else if (legacyReparse) {
+      markLegacyDone();
     }
     const dbCtxNames = getDbCtxNames();
     const weeklyDigest = computeWeeklyDigestsFromDb(dbModule, OUTPUT, scopes.map(s => s.id), modelPricing);
@@ -923,7 +1076,8 @@ async function main() {
         console.warn(`oh-my-hi: data gap detected — transcripts exist but no DB for: ${detail}. Parsing now...`);
       }
 
-      const mtimeIndex = loadMtimeIndex(CACHE_PATH);
+      const legacyReparse = needsLegacyReparse();
+      const mtimeIndex = legacyReparse ? {} : loadMtimeIndex(CACHE_PATH);
       const stubCache = Object.fromEntries(Object.entries(mtimeIndex).map(([fp, mtimeMs]) => [fp, { mtimeMs, size: 0, result: null }]));
       stubCache._parsed = 0;
       stubCache._processed = 0;
@@ -944,10 +1098,12 @@ async function main() {
           dbWriteOk = false;
         } else {
           try {
+            if (legacyReparse) purgeLegacyForScopes(newByScope);
             for (const [scopeId, usage] of Object.entries(newByScope)) {
               if (usageIsEmpty(usage)) continue;
               if (!await appendToMonthly(scopeId, usage)) dbWriteOk = false;
             }
+            if (legacyReparse && dbWriteOk) markLegacyDone();
           } finally {
             releaseLock();
           }
@@ -1085,6 +1241,8 @@ async function collectAllScopes(scopes, { days = 0, cache, cachePath, skipUsage 
       sd.contextStats.skillsDescTokens += gs.skillsDescTokens;
       sd.contextStats.mcpServersCount += gs.mcpServersCount;
       sd.contextStats.mcpToolsTokens += gs.mcpToolsTokens;
+      sd.contextStats.items = sd.contextStats.items.concat(
+        gs.items.filter(it => it.kind === 'skills' || it.kind === 'mcpServers'));
     }
   }
 
@@ -1219,6 +1377,23 @@ async function migrateWithProgress(dbMod, outputDir, dataPath) {
  * Write index.html (the dashboard shell — CSS, JS, locales, billboard.js).
  * Only needed on version change or first build. Data is loaded via <script src="data.js">.
  */
+// Pure helper modules inlined before app.js (see writeHtml), dependencies first.
+const INLINED_MODULE_FILES = [
+  'date-key.mjs',
+  'pricing.mjs',
+  'session-events.mjs',
+  'context-example.mjs',
+  'cost-projection.mjs',
+  'canvas-bars.mjs',
+  'regression.mjs',
+  'health-score.mjs',
+  'context-optimizer.mjs',
+  'session-bookmarks.mjs',
+  'cache-ttl.mjs',
+  'anomaly.mjs',
+  'overview-data.mjs',
+];
+
 function writeHtml(indexPath, systemLocale) {
   const LOCALES_DIR = path.join(TEMPLATES, 'locales');
   const enObj = JSON.parse(fs.readFileSync(path.join(LOCALES_DIR, 'en.json'), 'utf-8'));
@@ -1272,19 +1447,10 @@ function writeHtml(indexPath, systemLocale) {
   // so they can be unit-tested. Strip the `export ` keywords and prepend the
   // code before app.js so the symbols land in the same script scope. Source
   // of truth is the .mjs file — never edit the inlined copy.
-  const stripExports = (src) => src.replace(/^export\s+/gm, '');
-  const INLINED_MODULES = [
-    'session-events.mjs',
-    'context-example.mjs',
-    'cost-projection.mjs',
-    'canvas-bars.mjs',
-    'regression.mjs',
-    'health-score.mjs',
-    'context-optimizer.mjs',
-    'session-bookmarks.mjs',
-    'cache-ttl.mjs',
-    'anomaly.mjs',
-  ].map(f => stripExports(fs.readFileSync(path.join(TEMPLATES, f), 'utf-8'))).join('\n');
+  // Imports between these modules are dropped too: the concatenation already
+  // puts every symbol in scope, as long as dependencies are listed first.
+  const stripExports = (src) => src.replace(/^import\s.*from\s+'\.\/[^']+';\n/gm, '').replace(/^export\s+/gm, '');
+  const INLINED_MODULES = INLINED_MODULE_FILES.map(f => stripExports(fs.readFileSync(path.join(TEMPLATES, f), 'utf-8'))).join('\n');
 
   const rawAppJs = (INLINED_MODULES + '\n' + fs.readFileSync(path.join(TEMPLATES, 'app.js'), 'utf-8'))
     .replace(/__VERSION__/g, JSON.stringify(pkg.version));
@@ -1329,7 +1495,7 @@ function needsHtmlRebuild(indexPath) {
     if (!fs.existsSync(path.join(staticDir, `styles-${pkg.version}.css`))) return true;
     // Rebuild if any template file is newer than the output
     const outMtime = fs.statSync(indexPath).mtimeMs;
-    const templateFiles = ['app.js', 'styles.css', 'dashboard.html', 'session-events.mjs', 'context-example.mjs', 'cost-projection.mjs', 'canvas-bars.mjs', 'regression.mjs', 'health-score.mjs', 'context-optimizer.mjs', 'session-bookmarks.mjs', 'cache-ttl.mjs', 'anomaly.mjs'].map(f => path.join(TEMPLATES, f));
+    const templateFiles = ['app.js', 'styles.css', 'dashboard.html', ...INLINED_MODULE_FILES].map(f => path.join(TEMPLATES, f));
     return templateFiles.some(f => fs.existsSync(f) && fs.statSync(f).mtimeMs > outMtime);
   } catch { return true; }
 }
@@ -1343,21 +1509,23 @@ function writeDashboard(data, dataPath, indexPath, systemLocale) {
 
 /** Collect global scope data (sync parsers + async usage in parallel) */
 async function collectScopeData(configDir, { days = 0, cache, cachePath, skipUsage = false } = {}) {
-  // Run sync parsers immediately (fast, small files)
+  // Run sync parsers immediately (fast, small files). Each is isolated so one
+  // broken file (e.g. malformed settings.json) empties its section instead of
+  // aborting the whole build.
   const syncData = {
-    configFiles: parseConfigFiles(configDir),
-    skills: parseSkills(configDir),
-    agents: parseAgents(configDir),
-    plugins: parsePlugins(configDir),
-    hooks: parseHooks(configDir),
-    memory: parseMemory(configDir),
-    mcpServers: parseMcpServers(configDir),
-    rules: parseRules(configDir),
-    principles: parsePrinciples(configDir),
-    commands: parseCommands(configDir),
-    teams: parseTeams(configDir),
-    plans: parsePlans(configDir),
-    todos: parseTodos(configDir),
+    configFiles: safeCall(() => parseConfigFiles(configDir)),
+    skills: safeCall(() => parseSkills(configDir)),
+    agents: safeCall(() => parseAgents(configDir)),
+    plugins: safeCall(() => parsePlugins(configDir)),
+    hooks: safeCall(() => parseHooks(configDir)),
+    memory: safeCall(() => parseMemory(configDir)),
+    mcpServers: safeCall(() => parseMcpServers(configDir)),
+    rules: safeCall(() => parseRules(configDir)),
+    principles: safeCall(() => parsePrinciples(configDir)),
+    commands: safeCall(() => parseCommands(configDir)),
+    teams: safeCall(() => parseTeams(configDir)),
+    plans: safeCall(() => parsePlans(configDir)),
+    todos: safeCall(() => parseTodos(configDir)),
   };
 
   const usage = skipUsage ? emptyScopeData().usage : await parseUsage(configDir, days, null, { cache, cachePath });
@@ -1577,24 +1745,30 @@ function computeContextStats(scopeData, globalConfigDir, scope) {
   }
 
   // Skill descriptions: the startup context holds one-liners per skill. Sum description tokens.
+  // Each skill adds a small framing overhead (~10 tokens) to match observed context cost.
+  const items = [];
   const skills = scopeData.skills || [];
   let skillsDescTokens = 0;
   for (const s of skills) {
-    if (s.description) skillsDescTokens += estimateTokens(s.description);
+    const tokens = (s.description ? estimateTokens(s.description) : 0) + 10;
+    skillsDescTokens += tokens;
+    items.push({ kind: 'skills', name: s.name, tokens });
   }
-  // Add a small per-skill framing overhead (~10 tokens) to match observed context cost.
-  skillsDescTokens += skills.length * 10;
 
   // MCP tool listing (deferred): estimate ~50 tokens per server (server name + typical tool names).
   // Actual cost depends on the number of tools each server exposes, which isn't known at build time.
   const mcpServersCount = (scopeData.mcpServers || []).length;
   const mcpToolsTokens = mcpServersCount * 50;
+  for (const m of scopeData.mcpServers || []) items.push({ kind: 'mcpServers', name: m.name, tokens: 50 });
 
   // Principles: always-on instruction files loaded alongside CLAUDE.md at startup.
   const principles = scopeData.principles || [];
   let principlesTokens = 0;
   for (const p of principles) {
-    if (p.body) principlesTokens += estimateTokens(p.body);
+    if (!p.body) continue;
+    const tokens = estimateTokens(p.body);
+    principlesTokens += tokens;
+    items.push({ kind: 'principles', name: p.name, tokens });
   }
 
   return {
@@ -1606,6 +1780,7 @@ function computeContextStats(scopeData, globalConfigDir, scope) {
     mcpServersCount,
     mcpToolsTokens,
     principlesTokens,
+    items,
     scopeType: scope.type,
   };
 }
@@ -1652,6 +1827,18 @@ function usageIsEmpty(usage) {
   return USAGE_FIELDS.every(f => !usage[f]?.length);
 }
 
+/** Earliest epoch-ms timestamp across a usage object's timed entries, or null. */
+function earliestUsageTimestamp(usage) {
+  let min = null;
+  for (const f of ['tokenEntries', 'skills', 'agents', 'mcpCalls']) {
+    for (const e of usage[f] || []) {
+      const ts = Number(e.timestamp);
+      if (ts > 0 && (min === null || ts < min)) min = ts;
+    }
+  }
+  return min;
+}
+
 /** Exclusive writer lock for SQLite appends — serializes concurrent runs
  *  (e.g. two sessions' Stop hooks firing --data-only at the same time).
  *  Returns a release() function, or null when a live process holds the lock.
@@ -1692,22 +1879,51 @@ function acquireWriteLock() {
 async function spawnServeOrRefresh() {
   const LOCK = path.join(OUTPUT, 'cache', '.serve.json');
 
-  // Case 1: server alive → reuse port, do not open browser
+  // Case 1: server alive → reuse port, do not open browser. A server that runs
+  // from another install (the version before an update) serves stale code and
+  // output: replace it, still without opening the browser.
   if (fs.existsSync(LOCK)) {
+    let lock = null;
     try {
-      const { port, pid } = JSON.parse(fs.readFileSync(LOCK, 'utf-8'));
-      process.kill(pid, 0); // throws if dead
-      return `http://127.0.0.1:${port}`;
+      lock = JSON.parse(fs.readFileSync(LOCK, 'utf-8'));
+      process.kill(lock.pid, 0); // throws if dead
     } catch {
       // Stale lock file (server crashed/killed) — clean up and restart WITHOUT --open.
       // Browser already has the tab from the previous session.
       try { fs.unlinkSync(LOCK); } catch { /* ignore */ }
       return spawnServe(LOCK, { open: false });
     }
+    if (lock.root && path.resolve(lock.root) !== ROOT) {
+      await stopServer(lock.pid);
+      try { fs.unlinkSync(LOCK); } catch { /* ignore */ }
+      return spawnServe(LOCK, { open: false });
+    }
+    return `http://127.0.0.1:${lock.port}`;
   }
 
-  // Case 2: no lock file — true first launch, open browser once
+  // Case 2: a server still runs from an older version's output directory
+  // (first run after moving output to the persistent data directory)
+  const install = marketplaceInstall(ROOT);
+  for (const dir of install ? legacyOutputDirs(install) : []) {
+    try {
+      const { pid } = JSON.parse(fs.readFileSync(path.join(dir, 'cache', '.serve.json'), 'utf-8'));
+      process.kill(pid, 0);
+      await stopServer(pid);
+      return spawnServe(LOCK, { open: false });
+    } catch { /* no live server there */ }
+  }
+
+  // Case 3: no lock file — true first launch, open browser once
   return spawnServe(LOCK, { open: true });
+}
+
+/** Stop a server process and wait (up to 3s) until it has exited. */
+async function stopServer(pid) {
+  try { process.kill(pid); } catch { return; }
+  for (let i = 0; i < 15; i++) {
+    await new Promise(r => setTimeout(r, 200));
+    try { process.kill(pid, 0); } catch { return; }
+  }
 }
 
 async function spawnServe(lockPath, { open }) {

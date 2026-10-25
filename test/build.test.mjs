@@ -7,7 +7,7 @@ import { fileURLToPath } from 'url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, '..');
-const OUTPUT = path.join(ROOT, 'output');
+const OUTPUT = process.env.OMH_OUTPUT_DIR || path.join(ROOT, 'output');
 
 describe('Build', () => {
   // Snapshot output files immediately after the build so concurrent test runs
@@ -16,11 +16,15 @@ describe('Build', () => {
   let htmlSnapshot;
   let htmlMtime;
   before(() => {
-    execSync('node scripts/generate-dashboard.mjs --data-only', {
-      cwd: ROOT,
-      encoding: 'utf-8',
-      timeout: 30000,
-    });
+    // OUTPUT is a fresh temp dir (test/setup.mjs): run the first-run build, then a
+    // normal build so the --data-only run below starts from an established cache.
+    for (const args of ['', '', '--data-only']) {
+      execSync(`node scripts/generate-dashboard.mjs ${args}`, {
+        cwd: ROOT,
+        encoding: 'utf-8',
+        timeout: 120000,
+      });
+    }
     buildSnapshot = JSON.parse(fs.readFileSync(path.join(OUTPUT, 'data.json'), 'utf-8'));
     const indexPath = path.join(OUTPUT, 'index.html');
     if (fs.existsSync(indexPath)) {
@@ -61,6 +65,15 @@ describe('Build', () => {
       for (const key of ['skills', 'agents', 'plugins', 'hooks', 'memory', 'mcpServers', 'rules', 'principles', 'commands', 'teams', 'plans', 'todos']) {
         assert.ok(Array.isArray(global[key]), `global.${key} is array`);
       }
+    });
+
+    it('keeps per-item startup context estimates that add up to the totals', () => {
+      const cs = data.scopeData?.global?.contextStats;
+      assert.ok(Array.isArray(cs.items));
+      const sum = (kind) => cs.items.filter(i => i.kind === kind).reduce((s, i) => s + i.tokens, 0);
+      assert.equal(sum('skills'), cs.skillsDescTokens);
+      assert.equal(sum('mcpServers'), cs.mcpToolsTokens);
+      assert.equal(sum('principles'), cs.principlesTokens);
     });
 
     it('should not include usage arrays in data.json (SQLite is authoritative)', () => {
@@ -141,6 +154,11 @@ describe('Build', () => {
       assert.ok(html.includes('href="/static/billboard-dark.min.css"'), 'billboard dark CSS link tag');
     });
 
+    it('marks the pre-v4 cleanup done when there are no legacy rows', () => {
+      // Otherwise every later build rescans all monthly DBs for legacy rows
+      assert.ok(fs.existsSync(path.join(OUTPUT, 'cache', 'legacy-v4-purged')));
+    });
+
     it('should have static directory with versioned files', () => {
       const pkg = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf-8'));
       const staticDir = path.join(OUTPUT, 'static');
@@ -150,6 +168,8 @@ describe('Build', () => {
       assert.ok(fs.existsSync(path.join(staticDir, '.bb-version')), '.bb-version marker');
       const appJs = fs.readFileSync(path.join(staticDir, `app-${pkg.version}.js`), 'utf-8');
       assert.ok(appJs.includes('renderContent'), 'app.js contains renderContent');
+      // Loaded as a classic <script>: leftover module syntax would break the page
+      assert.doesNotThrow(() => new Function(appJs), 'app.js parses as a classic script');
       const styles = fs.readFileSync(path.join(staticDir, `styles-${pkg.version}.css`), 'utf-8');
       assert.ok(styles.includes('--accent') || styles.includes('.sidebar'), 'styles.css contains CSS');
     });

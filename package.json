@@ -1,6 +1,6 @@
 {
   "name": "oh-my-hi",
-  "version": "0.15.0",
+  "version": "0.16.0",
   "description": "Oh, so that's what your coding agents have been doing! — Claude Code & Codex harness insights dashboard",
   "repository": {
     "type": "git",
@@ -21,7 +21,7 @@
     "analytics"
   ],
   "scripts": {
-    "test": "node --experimental-test-coverage --test test/*.test.mjs",
+    "test": "node --import ./test/setup.mjs --experimental-test-coverage --test test/*.test.mjs",
     "build": "node scripts/generate-dashboard.mjs --data-only",
     "postinstall": "node scripts/postinstall.mjs"
   },

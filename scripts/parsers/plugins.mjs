@@ -36,12 +36,21 @@ export function parsePlugins(configDir) {
 
   if (!fs.existsSync(pluginsFile)) return [];
 
-  const installed = JSON.parse(fs.readFileSync(pluginsFile, 'utf-8'));
+  // Malformed JSON must not abort the whole build: show no plugins.
+  let installed;
+  try {
+    installed = JSON.parse(fs.readFileSync(pluginsFile, 'utf-8'));
+  } catch {
+    return [];
+  }
 
   // enabledPlugins can be an object { "name@market": true } or an array
   let enabledSet = new Set();
   if (fs.existsSync(settingsFile)) {
-    const settings = JSON.parse(fs.readFileSync(settingsFile, 'utf-8'));
+    let settings = {};
+    try {
+      settings = JSON.parse(fs.readFileSync(settingsFile, 'utf-8'));
+    } catch { /* malformed settings.json: treat every plugin as not enabled */ }
     const ep = settings.enabledPlugins;
     if (Array.isArray(ep)) {
       ep.forEach(k => enabledSet.add(k));

@@ -149,7 +149,7 @@ describe('Plugin — Parameter Behavior', () => {
 
 describe('Plugin — Update Check', () => {
   const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-  const OUTPUT = path.join(ROOT, 'output');
+  const OUTPUT = process.env.OMH_OUTPUT_DIR || path.join(ROOT, 'output');
 
   it('--update should show current version and check registry', () => {
     const output = execSync('node scripts/generate-dashboard.mjs --update', {

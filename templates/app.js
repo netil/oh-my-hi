@@ -119,7 +119,10 @@ window.name = 'oh-my-hi';
 
   function t(key) {
     const args = Array.from(arguments).slice(1);
-    let str = (I18N[currentLang] && I18N[currentLang][key]) || (I18N.en[key]) || key;
+    // `in` check so an intentionally empty translation ('') is honored instead of
+    // falling back to the raw key name.
+    const dict = I18N[currentLang] && key in I18N[currentLang] ? I18N[currentLang] : I18N.en;
+    let str = key in dict ? dict[key] : key;
     args.forEach((a, i) => { str = str.replace('{' + i + '}', a); });
     if (str.indexOf('{{') !== -1) {
       str = str.replace(/\{\{configDir\}\}/g, DATA.configDir || '');
@@ -344,7 +347,24 @@ window.name = 'oh-my-hi';
     // Wire unified tooltip for content area heatmap cells.
     // Health-factor-help elements have their own tooltip binding in
     // bindContentActions and are intentionally excluded here to avoid conflicts.
-    bindDelegatedTooltips(content, '.heatmap-cell[data-tooltip]');
+    bindDelegatedTooltips(content, '.heatmap-cell[data-tooltip], .ov-heat-cell[data-tooltip]');
+
+    // Sidebar containers persist across re-renders (only their innerHTML is
+    // replaced), so their delegated listeners are bound once here rather than in
+    // renderSidebar()/renderSidebarPeriod(), which would stack a copy per render.
+    const sidebarPeriodEl = document.getElementById('sidebar-period');
+    if (sidebarPeriodEl) bindDelegatedTooltips(sidebarPeriodEl);
+    // Keyboard: Enter/Space activates toggle-category items (which are non-anchor)
+    sidebarNav.addEventListener('keydown', (e) => {
+      if (e.key !== 'Enter' && e.key !== ' ') return;
+      const navItemEl = e.target.closest('[data-action]');
+      if (!navItemEl) return;
+      const action = navItemEl.dataset.action;
+      if (action === 'toggle-category') {
+        e.preventDefault();
+        navItemEl.click();
+      }
+    });
 
     // Apply initial hash
     if (window.location.hash) {
@@ -816,6 +836,9 @@ window.name = 'oh-my-hi';
     } catch (e) { return false; }
   }
 
+  // The overview's 30-day panels compare against the 30 days before them.
+  const USAGE_MIN_FETCH_DAYS = 60;
+
   // Compute the timestamp range (ms) matching the current period / custom
   // range controls. Used by the API loader to request only the needed slice.
   function computeCurrentPeriodRange() {
@@ -832,8 +855,14 @@ window.name = 'oh-my-hi';
       }
       return { from: 0, to: now };
     }
-    const from = now - (currentPeriod * 24 * 60 * 60 * 1000);
-    return { from, to: now };
+    // Fetch more than the period: the previous equal-length period (for the
+    // % change figures) and at least USAGE_MIN_FETCH_DAYS for the overview's
+    // fixed 7/30-day panels. Pages filter to the period themselves (as in file
+    // mode, which holds all data). Start at local midnight like filterByPeriod.
+    const start = new Date();
+    start.setDate(start.getDate() - (Math.max(currentPeriod * 2, USAGE_MIN_FETCH_DAYS) - 1));
+    start.setHours(0, 0, 0, 0);
+    return { from: start.getTime(), to: now };
   }
 
   // Abort controller for in-flight /api/usage fetches — cancelled on each new request.
@@ -975,13 +1004,6 @@ window.name = 'oh-my-hi';
     return items.filter((i) => { return new Date(i[dateField]) >= cutoff; });
   }
 
-  function matchUsageName(logName, itemName) {
-    if (logName === itemName) return true;
-    // Match "plugin:skill" to "skill" (e.g., "superpowers:brainstorming" matches "brainstorming")
-    if (logName.includes(':') && logName.split(':').pop() === itemName) return true;
-    return false;
-  }
-
   function getUsageList(type) {
     let usage = getUsage();
     if (type === 'mcpServers') return usage.mcpCalls || [];
@@ -991,8 +1013,8 @@ window.name = 'oh-my-hi';
   function countUsage(type, name, days) {
     let list = getUsageList(type);
     const filtered = filterByPeriod(list, 'timestamp', days);
-    if (!name) return filtered.length;
-    return filtered.filter((i) => { return matchUsageName(i.name, name); }).length;
+    const matched = name ? filtered.filter((i) => matchUsageName(i.name, name)) : filtered;
+    return matched.reduce((sum, r) => sum + countOf(r), 0);
   }
 
   function getLastUsed(type, name) {
@@ -1217,62 +1239,18 @@ window.name = 'oh-my-hi';
   }
 
   // Claude model pricing per 1M tokens (USD).
-  // Fetched from Anthropic pricing docs at build time (DATA.modelPricing).
-  // Hardcoded table below is the fallback when the build-time fetch fails.
-  // cacheCreation = 5-minute cache write (1.25x input); cacheRead = cache hit (0.1x input)
-  // Opus 4.5+ dropped to $5/$25 — distinct from original Opus 4 / 4.1 ($15/$75)
-  const _PRICING_FALLBACK = {
-    'opus-4-7': { input: 5, output: 25, cacheRead: 0.5, cacheCreation: 6.25 },
-    'opus-4-6': { input: 5, output: 25, cacheRead: 0.5, cacheCreation: 6.25 },
-    'opus-4-5': { input: 5, output: 25, cacheRead: 0.5, cacheCreation: 6.25 },
-    'opus-4': { input: 15, output: 75, cacheRead: 1.5, cacheCreation: 18.75 },
-    'sonnet-4': { input: 3, output: 15, cacheRead: 0.3, cacheCreation: 3.75 },
-    'haiku-4-5': { input: 1, output: 5, cacheRead: 0.1, cacheCreation: 1.25 },
-    'haiku-4': { input: 0.8, output: 4, cacheRead: 0.08, cacheCreation: 1 },
-    'sonnet-3-5': { input: 3, output: 15, cacheRead: 0.3, cacheCreation: 3.75 },
-    'haiku-3-5': { input: 0.8, output: 4, cacheRead: 0.08, cacheCreation: 1 },
-    'opus-3': { input: 15, output: 75, cacheRead: 1.5, cacheCreation: 18.75 },
-    'sonnet-3': { input: 3, output: 15, cacheRead: 0.3, cacheCreation: 3.75 },
-    'haiku-3': { input: 0.25, output: 1.25, cacheRead: 0.03, cacheCreation: 0.3 },
-    // OpenAI / Codex (USD per 1M tokens). Cached input = 10% of input; Codex has
-    // no cache-creation, so cacheCreation is 0. Keep in sync with export.mjs.
-    'gpt-5.5': { input: 5, output: 30, cacheRead: 0.5, cacheCreation: 0 },
-    'gpt-5.4': { input: 2.5, output: 15, cacheRead: 0.25, cacheCreation: 0 },
-    'gpt-5.1': { input: 0.63, output: 5, cacheRead: 0.063, cacheCreation: 0 },
-    'gpt-5.3-codex': { input: 1.75, output: 14, cacheRead: 0.175, cacheCreation: 0 },
-    'gpt-5.2-codex': { input: 1.75, output: 14, cacheRead: 0.175, cacheCreation: 0 },
-    'gpt-5.1-codex': { input: 1.25, output: 10, cacheRead: 0.125, cacheCreation: 0 },
-    'gpt-5.1-codex-mini': { input: 0.25, output: 2, cacheRead: 0.025, cacheCreation: 0 },
-  };
-  // Merge (not replace): fetched Claude pricing overlays the fallback, but the
+  // Pricing table and cost formula live in templates/pricing.mjs (inlined
+  // before this file by the build). Prices fetched from the Anthropic pricing
+  // page at build time (DATA.modelPricing) overlay the fallback table; the
   // fallback's OpenAI/Codex entries persist since the Claude feed omits them.
-  const MODEL_PRICING = Object.assign({}, _PRICING_FALLBACK, DATA.modelPricing || {});
+  const MODEL_PRICING = Object.assign({}, PRICING_FALLBACK, DATA.modelPricing || {});
 
   function resolvePricingKey(model) {
-    if (!model || model === 'unknown') return null;
-    const s = model.replace(/^claude-/, '').replace(/-\d{8,}$/, '');
-    if (MODEL_PRICING[s]) return s;
-    const m = s.match(/^(opus|sonnet|haiku)-(\d+)(?:-(\d+))?$/);
-    if (m) {
-      // Check with minor version first (e.g. opus-4-6) then fall back to major (opus-4)
-      if (m[3]) {
-        const withMinor = m[1] + '-' + m[2] + '-' + m[3];
-        if (MODEL_PRICING[withMinor]) return withMinor;
-      }
-      const base = m[1] + '-' + m[2];
-      if (MODEL_PRICING[base]) return base;
-    }
-    return null;
+    return pricingKeyFor(model, MODEL_PRICING);
   }
 
   function calcEntryCost(entry) {
-    const key = resolvePricingKey(entry.model);
-    if (!key) return 0;
-    const p = MODEL_PRICING[key];
-    return ((entry.rawInput || 0) * p.input
-      + (entry.outputTokens || 0) * p.output
-      + (entry.cacheRead || 0) * p.cacheRead
-      + (entry.cacheCreation || 0) * p.cacheCreation) / 1e6;
+    return entryCost(entry, MODEL_PRICING);
   }
 
   // ── Usage export (CSV / JSON) ──
@@ -1411,6 +1389,15 @@ window.name = 'oh-my-hi';
     return text.replace(/[&<>"']/g, (c) => { return map[c]; });
   }
 
+  // Memory type badge: the type comes from user-authored frontmatter, so escape
+  // the label and only let known types into the class attribute.
+  const MEMORY_TYPES = ['user', 'feedback', 'project', 'reference'];
+  function memoryTypeBadge(type) {
+    const mtype = String(type || 'reference');
+    const cls = MEMORY_TYPES.indexOf(mtype) !== -1 ? ' badge-type-' + mtype : '';
+    return '<span class="badge' + cls + '">' + escapeHtml(mtype) + '</span>';
+  }
+
   // ── Data range helpers ──
   function getDataDateRange() {
     const usage = getUsage();
@@ -1453,33 +1440,42 @@ window.name = 'oh-my-hi';
   }
 
   // ── Sidebar rendering ──
+  // Insight count for the sidebar badge. computeAllInsights scans every token
+  // entry, so memoize on the inputs it depends on (usage/scope-data references,
+  // period, custom range, and the day since 7d/30d cutoffs are relative to today).
+  let _sidebarInsightCache = null;
+  function sidebarInsightCount(usage, sd) {
+    const range = customDateRange ? +customDateRange.start + '|' + +customDateRange.end : '';
+    const day = new Date().toDateString();
+    const c = _sidebarInsightCache;
+    if (c && c.usage === usage && c.sd === sd && c.period === currentPeriod && c.range === range && c.day === day) {
+      return c.count;
+    }
+    const count = computeAllInsights(usage, currentPeriod, sd).length;
+    _sidebarInsightCache = { usage, sd, period: currentPeriod, range, day, count };
+    return count;
+  }
+
   function renderSidebar() {
     let sd = getScopeData();
     let html = '';
 
-    html += navItem('overview', '📊', t('overview'), null, currentView === 'overview' && !currentDetail);
-    const isTokensArea = currentView === 'tokens' || currentView === 'tokens-cost' || currentView === 'tokens-cache' || currentView === 'breakdown';
-    // Tokens group is always expanded — no collapse toggle, sub-items
-    // visible from first render. Clicking the header still navigates
-    // to the Tokens overview.
-    html += navItem('tokens', '🪙', t('tokens'), null, currentView === 'tokens');
-    html += '<div class="nav-sub">'
-      + navItem('tokens-cost', '💰', t('tokensCost'), null, currentView === 'tokens-cost')
-      + navItem('tokens-cache', '♻️', t('tokensCache'), null, currentView === 'tokens-cache')
-      + navItem('breakdown', '📊', t('bdTitle'), null, currentView === 'breakdown')
-      + '</div>';
-    html += '<div class="nav-section-label">' + t('usageAnalysis') + '</div>';
-    html += navItem('context', '🪟', t('contextExplorer'), null, currentView === 'context' && !currentDetail);
-    html += navItem('tokens-prompt', '💬', t('tokensPrompt'), null, currentView === 'tokens-prompt');
-    html += navItem('tokens-session', '📋', t('tokensSession'), null, currentView === 'tokens-session' || currentView === 'session');
-    const lintCount = (sd.lint || []).length;
-    html += navItem('structure', '🗂️', t('structure'), lintCount > 0 ? '⚠️ ' + fmtNum(lintCount) : null, currentView === 'structure' && !currentDetail);
     const usage = getUsage();
-    const insightsBadge = (typeof computeAllInsights === 'function')
-      ? (function() { var all = computeAllInsights(usage, currentPeriod, sd); return all.length > 0 ? fmtNum(all.length) : null; })()
-      : null;
-    html += navItem('insights', '💡', t('insights'), insightsBadge, currentView === 'insights');
-    html += '<div class="nav-separator"></div>';
+    const insightCount = sidebarInsightCount(usage, sd);
+    const lintCount = (sd.lint || []).length;
+    html += navItem('overview', t('navOverview'), null, currentView === 'overview' && !currentDetail);
+    html += navItem('insights', t('insights'), insightCount > 0 ? fmtNum(insightCount) : null, currentView === 'insights', true);
+    html += '<div class="nav-section-label">' + t('navGroupTokens') + '</div>';
+    html += navItem('tokens', t('navTokensUsage'), null, currentView === 'tokens');
+    html += navItem('tokens-cost', t('tokensCost'), null, currentView === 'tokens-cost');
+    html += navItem('tokens-cache', t('tokensCache'), null, currentView === 'tokens-cache');
+    html += navItem('breakdown', t('bdTitle'), null, currentView === 'breakdown');
+    html += '<div class="nav-section-label">' + t('usageAnalysis') + '</div>';
+    html += navItem('context', t('contextExplorer'), null, currentView === 'context' && !currentDetail);
+    html += navItem('tokens-prompt', t('tokensPrompt'), null, currentView === 'tokens-prompt');
+    html += navItem('tokens-session', t('tokensSession'), null, currentView === 'tokens-session' || currentView === 'session');
+    html += navItem('structure', t('structure'), lintCount > 0 ? fmtNum(lintCount) : null, currentView === 'structure' && !currentDetail, true);
+    html += '<div class="nav-section-label">' + t('navGroupComponents') + '</div>';
 
     // F2: top 3 cost contributors for 🔥 badges on sidebar.
     // Restrict to items that actually appear in this user's item list so
@@ -1505,7 +1501,7 @@ window.name = 'oh-my-hi';
       const badgeText = searchQuery ? fmtNum(filteredItems.length) + '/' + fmtNum(items.length) : fmtNum(items.length);
 
       html += '<div class="nav-item' + (isActive ? ' active' : '') + '" data-action="toggle-category" data-category="' + cat.key + '" title="' + escapeHtml(getCatLabel(cat)) + '" data-label="' + escapeHtml(getCatLabel(cat)) + '" tabindex="0" role="button">'
-        + '<span class="icon">' + cat.icon + '</span>'
+        + '<span class="icon"><span class="nav-dot" style="background:' + cat.color + '"></span></span>'
         + '<span class="label">' + getCatLabel(cat) + '</span>'
         + '<span class="badge">' + badgeText + '</span>'
         + '<span class="chevron' + (isExpanded ? ' expanded' : '') + '">▶</span>'
@@ -1579,25 +1575,33 @@ window.name = 'oh-my-hi';
         render();
       }
     };
-
-    // Keyboard: Enter/Space activates toggle-category items (which are non-anchor)
-    sidebarNav.addEventListener('keydown', (e) => {
-      if (e.key !== 'Enter' && e.key !== ' ') return;
-      const navItemEl = e.target.closest('[data-action]');
-      if (!navItemEl) return;
-      const action = navItemEl.dataset.action;
-      if (action === 'toggle-category') {
-        e.preventDefault();
-        navItemEl.click();
-      }
-    });
   }
 
-  function navItem(view, icon, label, badge, active) {
-    return '<a class="nav-item' + (active ? ' active' : '') + '" href="#' + view + '" data-action="nav" data-view="' + view + '" data-label="' + escapeHtml(label) + '">'
-      + '<span class="icon">' + icon + '</span>'
+  // Stroke icons for the fixed pages (24px grid, drawn at 15px).
+  const NAV_ICONS = {
+    overview: '<rect x="3.5" y="3.5" width="7" height="7"/><rect x="13.5" y="3.5" width="7" height="7"/><rect x="3.5" y="13.5" width="7" height="7"/><rect x="13.5" y="13.5" width="7" height="7"/>',
+    insights: '<path d="M9 18h6M10 21h4M12 3a6 6 0 0 0-3.5 10.9c.6.5 1 1.2 1 2.1h5c0-.9.4-1.6 1-2.1A6 6 0 0 0 12 3z"/>',
+    tokens: '<path d="M4 19V9M10 19V5M16 19v-7M22 19H2"/>',
+    'tokens-cost': '<circle cx="12" cy="12" r="9"/><path d="M15 9.5c-.5-1-1.6-1.5-3-1.5-1.7 0-3 .8-3 2s1.3 1.7 3 2 3 .8 3 2-1.3 2-3 2c-1.4 0-2.5-.5-3-1.5M12 6v2M12 16v2"/>',
+    'tokens-cache': '<path d="M20 11a8 8 0 0 0-14.3-4.9L4 8M4 4v4h4M4 13a8 8 0 0 0 14.3 4.9L20 16M20 20v-4h-4"/>',
+    breakdown: '<path d="M4 6h16M4 12h10M4 18h6"/>',
+    context: '<rect x="3.5" y="4.5" width="17" height="15" rx="1"/><path d="M3.5 9h17M9 9v10.5"/>',
+    'tokens-prompt': '<path d="M20 15a2 2 0 0 1-2 2H8l-4 4V5a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2z"/>',
+    'tokens-session': '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>',
+    structure: '<path d="M3.5 6.5h6l2 2h9v10h-17z"/>',
+  };
+
+  function navIcon(view) {
+    return '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">'
+      + (NAV_ICONS[view] || '') + '</svg>';
+  }
+
+  // `alert` styles the badge as something to look at (insights, lint warnings).
+  function navItem(view, label, badge, active, alert) {
+    return '<a class="nav-item' + (active ? ' active' : '') + '" href="#' + view + '" data-action="nav" data-view="' + view + '" data-label="' + escapeHtml(label) + '"' + (active ? ' aria-current="page"' : '') + '>'
+      + '<span class="icon">' + navIcon(view) + '</span>'
       + '<span class="label">' + label + '</span>'
-      + (badge !== null ? '<span class="badge">' + badge + '</span>' : '')
+      + (badge !== null ? '<span class="badge' + (alert ? ' badge-alert' : '') + '">' + badge + '</span>' : '')
       + '</a>';
   }
 
@@ -1749,8 +1753,7 @@ window.name = 'oh-my-hi';
       + '</div>'
       + (rangeText ? '<div class="sidebar-period-range">' + rangeText + '</div>' : '');
 
-    // Use unified shared tooltip for period buttons
-    bindDelegatedTooltips(sidebarPeriod);
+    // Period button tooltips use the shared delegated tooltip bound once in init().
 
     // Bind period buttons
     const removePeriodTooltips = () => { hideSharedTooltip(_sharedTipTarget); };
@@ -2212,8 +2215,7 @@ window.name = 'oh-my-hi';
         outputCost += (e.outputTokens || 0) * p.output / 1e6;
         cacheCost += ((e.cacheRead || 0) * p.cacheRead + (e.cacheCreation || 0) * p.cacheCreation) / 1e6;
       }
-      const d = typeof e.timestamp === 'number' ? new Date(e.timestamp) : new Date(e.timestamp);
-      const dk = d.toISOString().substring(0, 10);
+      const dk = tsDateKey(e.timestamp);
       if (dk) costDailyMap[dk] = (costDailyMap[dk] || 0) + cost;
     });
     const changeCost       = calcTokenChange(allTokenEntries, days, (e) => calcEntryCost(e));
@@ -2451,7 +2453,7 @@ window.name = 'oh-my-hi';
     }
     tokenEntries.forEach((e) => {
       const ts = e.timestamp;
-      const key = typeof ts === 'string' ? ts.substring(0, 10) : typeof ts === 'number' ? new Date(ts).toISOString().substring(0, 10) : '';
+      const key = tsDateKey(ts);
       if (daily.hasOwnProperty(key)) {
         daily[key].read += e.cacheRead || 0;
         daily[key].write += e.cacheCreation || 0;
@@ -2904,12 +2906,12 @@ window.name = 'oh-my-hi';
   }
 
   function renderSessionDetail() {
-    if (!currentSessionId) { currentView = 'tokens-session'; renderTokensAnalysis(); return; }
+    if (!currentSessionId) { currentView = 'tokens-session'; renderTokensSession(); return; }
 
     const usage = getUsage();
     const tokenEntries = (usage.tokenEntries || []).filter((e) => e.sessionId === currentSessionId);
     if (tokenEntries.length === 0) {
-      currentView = 'tokens-session'; renderTokensAnalysis(); return;
+      currentView = 'tokens-session'; renderTokensSession(); return;
     }
 
     const skills = (usage.skills || []).filter((e) => e.sessionId === currentSessionId);
@@ -3343,8 +3345,8 @@ window.name = 'oh-my-hi';
     const hourTokens = new Array(24).fill(0);
     tokenEntries.forEach((e) => {
       const ts = e.timestamp;
-      const d = typeof ts === 'number' ? new Date(ts) : new Date(ts);
-      const key = d.toISOString().substring(0, 10);
+      const d = new Date(ts);
+      const key = tsDateKey(ts);
       const tokVal = (e.rawInput || 0) + (e.outputTokens || 0) + (e.cacheRead || 0) + (e.cacheCreation || 0);
       if (key) dailyMap[key] = (dailyMap[key] || 0) + tokVal;
       if (!isNaN(d.getTime())) {
@@ -3451,7 +3453,7 @@ window.name = 'oh-my-hi';
 
     tokenEntries.forEach((e) => {
       let ts = e.timestamp;
-      let key = typeof ts === 'string' ? ts.substring(0, 10) : typeof ts === 'number' ? new Date(ts).toISOString().substring(0, 10) : '';
+      let key = tsDateKey(ts);
       if (dailyInput.hasOwnProperty(key)) {
         dailyInput[key] += (e.rawInput || 0) + (e.cacheRead || 0) + (e.cacheCreation || 0);
         dailyOutput[key] += e.outputTokens || 0;
@@ -3481,7 +3483,7 @@ window.name = 'oh-my-hi';
       }
       prevEntries.forEach((e) => {
         const ts = e.timestamp;
-        const key = typeof ts === 'string' ? ts.substring(0, 10) : typeof ts === 'number' ? new Date(ts).toISOString().substring(0, 10) : '';
+        const key = tsDateKey(ts);
         if (prevDailyTotal.hasOwnProperty(key)) {
           prevDailyTotal[key] += (e.rawInput || 0) + (e.outputTokens || 0) + (e.cacheRead || 0) + (e.cacheCreation || 0);
         }
@@ -3627,21 +3629,21 @@ window.name = 'oh-my-hi';
 
     // Progress bars
     if (tokenBudget) {
-      const today = new Date().toISOString().substring(0, 10);
+      const today = dateKey(new Date());
       const todayCost = costDailyMap[today] || 0;
 
       // Weekly: sum last 7 days
       let weeklyCost = 0;
       for (let i = 0; i < 7; i++) {
         const d = new Date(); d.setDate(d.getDate() - i);
-        weeklyCost += costDailyMap[d.toISOString().substring(0, 10)] || 0;
+        weeklyCost += costDailyMap[dateKey(d)] || 0;
       }
 
       // Monthly: sum last 30 days
       let monthlyCost = 0;
       for (let i = 0; i < 30; i++) {
         const d = new Date(); d.setDate(d.getDate() - i);
-        monthlyCost += costDailyMap[d.toISOString().substring(0, 10)] || 0;
+        monthlyCost += costDailyMap[dateKey(d)] || 0;
       }
 
       const bars = [];
@@ -3673,7 +3675,7 @@ window.name = 'oh-my-hi';
     }
 
     // Month-end projection (F1)
-    const todayISO = new Date().toISOString().substring(0, 10);
+    const todayISO = dateKey(new Date());
     const proj = projectMonthEnd(costDailyMap, todayISO, tokenBudget && tokenBudget.monthly);
     if (proj) {
       html += '<div class="budget-projection">';
@@ -3761,24 +3763,24 @@ window.name = 'oh-my-hi';
     if (entries.length === 0) return [];
     const costDailyMap = {};
     entries.forEach((e) => {
-      const dk = new Date(e.timestamp).toISOString().substring(0, 10);
+      const dk = tsDateKey(e.timestamp);
       costDailyMap[dk] = (costDailyMap[dk] || 0) + calcEntryCost(e);
     });
     const sumLastDays = (n) => {
       let s = 0;
       for (let i = 0; i < n; i++) {
         const d = new Date(); d.setDate(d.getDate() - i);
-        s += costDailyMap[d.toISOString().substring(0, 10)] || 0;
+        s += costDailyMap[dateKey(d)] || 0;
       }
       return s;
     };
-    const today = new Date().toISOString().substring(0, 10);
+    const today = dateKey(new Date());
     // Dismissal period keys: calendar day / week (Monday) / month — a new
     // period produces a new key, which un-hides the banner.
     const wd = new Date();
     const dow = wd.getDay();
     wd.setDate(wd.getDate() + (dow === 0 ? -6 : 1 - dow));
-    const weekKey = wd.toISOString().substring(0, 10);
+    const weekKey = dateKey(wd);
     const monthKey = today.substring(0, 7);
     const defs = [
       { type: 'daily', labelKey: 'budgetDaily', spent: costDailyMap[today] || 0, budget: tokenBudget.daily, periodKey: today },
@@ -4302,192 +4304,91 @@ window.name = 'oh-my-hi';
     // bar chart is rendered inline via renderBarCard — no deferred draw needed
   }
 
-  // ── Overview page ──
-  // ── Weekly digest (Overview) ──
-  // Build-time summary (DATA.weeklyDigest, per scope): last 7 days' cost /
-  // tokens / sessions with % deltas vs the previous 7 days.
-  function renderWeeklyDigestCard() {
-    const digest = DATA.weeklyDigest && DATA.weeklyDigest[currentScope];
-    if (!digest || !digest.current) return '';
-    const cur = digest.current;
-    const prev = digest.previous || {};
-    const delta = digest.delta || {};
-    const deltaBadge = (d) => {
-      if (d === null || d === undefined) return '<span class="digest-delta flat">—</span>';
-      const cls = d > 0 ? 'up' : d < 0 ? 'down' : 'flat';
-      const arrow = d > 0 ? '▲' : d < 0 ? '▼' : '◆';
-      const prefix = d > 0 ? '+' : '';
-      return '<span class="digest-delta ' + cls + '" title="' + escapeHtml(t('digestVsPrev')) + '">'
-        + arrow + ' ' + prefix + fmtCompact(d) + '%</span>';
-    };
-    const metric = (label, valueHtml, d, prevHtml) =>
-      '<div class="digest-metric">'
-      + '<div class="digest-metric-label">' + label + '</div>'
-      + '<div class="digest-metric-value">' + valueHtml + '</div>'
-      + '<div class="digest-metric-sub">' + deltaBadge(d)
-      + ' <span class="digest-prev">' + t('digestPrevWeek', prevHtml) + '</span></div>'
-      + '</div>';
-    return '<div class="section">'
-      + '<div class="section-title">' + t('digestTitle')
-      + ' <span class="section-title-sub">' + t('digestDesc') + '</span></div>'
-      + '<div class="card digest-card">'
-      + metric(t('digestCost'), fmtCost(cur.cost || 0), delta.cost, fmtCost(prev.cost || 0))
-      + metric(t('digestTokens'), fmtCompact(cur.tokens || 0), delta.tokens, fmtCompact(prev.tokens || 0))
-      + metric(t('digestSessions'), fmtNum(cur.sessions || 0), delta.sessions, fmtNum(prev.sessions || 0))
-      + '</div></div>';
+  // ── Overview (control panel) ──
+  // KPI strip, daily calls + things to check, health / context budget /
+  // hourly activity, then the harness items workbench.
+
+  // Local day keys the selected period covers, oldest first.
+  function periodDayKeys(days) {
+    if (customDateRange) {
+      const start = customDateRange.start, end = customDateRange.end;
+      const n = Math.round((new Date(end.getFullYear(), end.getMonth(), end.getDate())
+        - new Date(start.getFullYear(), start.getMonth(), start.getDate())) / 86400000) + 1;
+      return dayKeysEnding(end, Math.max(n, 1));
+    }
+    if (days === 0) {
+      const range = getDataDateRange();
+      if (!range) return dayKeysEnding(new Date(), 30);
+      const s = range.start, e = range.end;
+      const n = Math.round((new Date(e.getFullYear(), e.getMonth(), e.getDate())
+        - new Date(s.getFullYear(), s.getMonth(), s.getDate())) / 86400000) + 1;
+      return dayKeysEnding(e, Math.max(n, 1));
+    }
+    return dayKeysEnding(new Date(), days);
   }
 
-  function renderOverview() {
-    let scope = DATA.scopes.find((s) => { return s.id === currentScope; });
-    const scopePath = scope ? (scope.projectPath || scope.configPath || currentScope) : currentScope;
-    const usage = getUsage();
-    let days = customDateRange ? 0 : currentPeriod;
+  function periodShortLabel(days) {
+    if (customDateRange) return getPeriodLabel();
+    return days === 0 ? t('all') : t('ovDays', fmtNum(days));
+  }
 
-    const totalCommands = countUsageList(usage.commands, days);
-    const totalSkills = countUsageList(usage.skills, days);
-    const totalAgents = countUsageList(usage.agents, days);
-    const totalAll = totalCommands + totalSkills + totalAgents;
+  const sumArr = (arr) => arr.reduce((s, v) => s + v, 0);
 
-    const allList = [].concat(usage.commands || [], usage.skills || [], usage.agents || []);
-    const changeAll = calcChangeForList(allList, days);
-    const changeSkills = calcChangeForList(usage.skills || [], days);
-    const changeAgents = calcChangeForList(usage.agents || [], days);
-    const changeCommands = calcChangeForList(usage.commands || [], days);
+  // % change of `cur` over `prev`; null when there is nothing to compare with.
+  function pctChange(cur, prev) {
+    if (!prev) return null;
+    return Math.round((cur - prev) / prev * 100);
+  }
 
-    // Popular skills — normalize plugin:skill names to match actual skill catalog
-    let skillCounts = {};
-    let sd = getScopeData();
-    const actualSkillNames = (sd.skills || []).map((s) => { return s.name; });
-    const skillList = filterByPeriod(usage.skills || [], 'timestamp', days);
-    skillList.forEach((s) => {
-      let name = s.name;
-      // Resolve "plugin:skill" to actual skill name if it exists in catalog
-      if (name.includes(':')) {
-        let shortName = name.split(':').pop();
-        if (actualSkillNames.indexOf(shortName) !== -1) name = shortName;
-      }
-      skillCounts[name] = (skillCounts[name] || 0) + 1;
+  function signedPct(n) {
+    return (n > 0 ? '+' : '') + fmtPct(n);
+  }
+
+  // Sparkline polyline points in a 120x24 box.
+  function sparkPoints(values) {
+    if (!values || values.length < 2) return '';
+    const max = Math.max.apply(null, values) || 1;
+    return values.map((v, i) => (i * 120 / (values.length - 1)).toFixed(1) + ',' + (22 - v / max * 20).toFixed(1)).join(' ');
+  }
+
+  // tone: which direction is good. 'up' = rise is good, 'down' = rise is bad.
+  function ovKpi(label, value, change, tone, spark, note) {
+    let deltaHtml = '';
+    if (note) {
+      deltaHtml = '<span class="ov-kpi-delta" data-tone="flat">' + escapeHtml(note) + '</span>';
+    } else if (change !== null && change !== undefined) {
+      const good = change === 0 ? 'flat' : ((change > 0) === (tone === 'up') ? 'pos' : 'neg');
+      deltaHtml = '<span class="ov-kpi-delta" data-tone="' + good + '">' + signedPct(change) + '</span>';
+    }
+    return '<div class="ov-kpi">'
+      + '<span class="ov-kpi-label">' + escapeHtml(label) + '</span>'
+      + '<span class="ov-kpi-row"><span class="ov-kpi-value">' + value + '</span>' + deltaHtml + '</span>'
+      + (spark ? '<svg class="ov-spark" viewBox="0 0 120 24" preserveAspectRatio="none" aria-hidden="true"><polyline points="' + spark + '"/></svg>' : '<span class="ov-spark"></span>')
+      + '</div>';
+  }
+
+  // Health score with only the data available at `atMs` (for the trend spark).
+  function healthInputAt(usage, sd, days, atMs) {
+    const upTo = (list) => (list || []).filter((r) => {
+      const ms = typeof r.timestamp === 'number' ? r.timestamp : new Date(r.timestamp).getTime();
+      return ms <= atMs && (days === 0 || ms > atMs - days * 86400000);
     });
-    const popularSkills = Object.entries(skillCounts)
-      .sort((a, b) => { return b[1] - a[1]; })
-      .slice(0, 5);
-
-    // Recent items
-    const allUsageItems = [].concat(
-      (usage.commands || []).map((i) => { return Object.assign({}, i, { type: 'command', typeLabel: t('command'), icon: '⌨️' }); }),
-      (usage.skills || []).map((i) => { return Object.assign({}, i, { type: 'skill', typeLabel: t('skill'), icon: '🧠' }); }),
-      (usage.agents || []).map((i) => { return Object.assign({}, i, { type: 'agent', typeLabel: t('agent'), icon: '🤖' }); })
-    ).sort((a, b) => { return new Date(b.timestamp) - new Date(a.timestamp); }).slice(0, 10);
-
-    const dailyActivity = usage.dailyActivity || [];
-
-    // Unused items
-    const unusedSkills = getItems('skills').filter((s) => { return countUsage('skills', s.name, days) === 0; });
-    const unusedAgents = getItems('agents').filter((a) => { return countUsage('agents', a.name, days) === 0; });
-    const unusedMcps = getItems('mcpServers').filter((m) => { return countUsage('mcpServers', m.name, days) === 0; });
-
-    const regressionHtml = renderRegressionCard(usage);
-    const usageBarHtml = renderUsageBarCard(
-      totalAll, totalSkills, totalAgents, totalCommands,
-      changeAll, changeSkills, changeAgents, changeCommands
-    );
-    let html = '<div class="page-header">'
-      + '<h1>' + t('overviewTitle') + '</h1>'
-      + '<div class="file-path" style="margin-top:8px"><span class="file-path-label">' + t('configPathLabel') + '</span> ' + escapeHtml(scopePath) + '</div>'
-      + '</div>'
-      + renderPeriodFilter()
-    // Health Score card
-    var healthData = computeHealthScore({
-      tokenEntries: filterByPeriod(usage.tokenEntries || [], 'timestamp', days),
+    return {
+      tokenEntries: upTo(usage.tokenEntries),
+      trendEntries: usage.tokenEntries || [],
       contextStats: sd.contextStats,
       skills: sd.skills || [], agents: sd.agents || [],
       mcpServers: sd.mcpServers || [],
       usage: { skills: usage.skills || [], agents: usage.agents || [], mcpCalls: usage.mcpCalls || [] },
       calcEntryCostFn: calcEntryCost,
       days: days,
-    });
-    var healthHtml = renderHealthScoreCard(healthData);
+      now: atMs,
+    };
+  }
 
-    html += '<div class="overview-hero' + (regressionHtml ? '' : ' solo') + '">'
-      +   regressionHtml
-      +   healthHtml
-      +   usageBarHtml
-      + '</div>';
-
-    // Weekly digest (build-time, last 7 days vs previous 7)
-    html += renderWeeklyDigestCard();
-
-    // Category distribution + Daily trend chart
-    html += '<div class="chart-row">'
-      + '<div class="section chart-section chart-section-small">'
-      + '<div class="section-title">' + t('categoryDist') + '</div>'
-      + '<div class="card chart-card"><div id="donut-chart"></div></div>'
-      + '</div>'
-      + '<div class="section chart-section">'
-      + '<div class="section-title">' + t('dailyTrend') + ' <span class="section-title-sub">' + t('dailyTrendDesc') + '</span></div>'
-      + '<div class="card chart-card"><div id="trend-chart" style="padding-top:10px"></div></div>'
-      + '</div>'
-      + '</div>';
-
-    // Anomalies — daily token/cost spikes vs trailing 7-day baseline.
-    // Baselines are computed over the full available history so the rolling
-    // mean stays accurate; the period filter only narrows which days are shown.
-    const anomalySeries = buildDailyUsageSeries(usage.tokenEntries || [], calcEntryCost);
-    const allAnomalies = detectDailyAnomalies(anomalySeries.dailyMap, anomalySeries.sortedDates);
-    const anomalyList = filterByPeriod(
-      allAnomalies.map((a) => Object.assign({ timestamp: a.date + 'T12:00:00' }, a)),
-      'timestamp', days
-    );
-    if (anomalyList.length > 0) {
-      const shownAnomalies = anomalyList.slice(0, 5);
-      const moreAnomalies = anomalyList.length - shownAnomalies.length;
-      html += '<div class="section">'
-        + '<div class="section-title">' + t('anomalyTitle') + ' (' + anomalyList.length + ') <span class="section-title-sub">' + t('anomalyDesc') + '</span></div>'
-        + '<div class="card anomaly-list">';
-      shownAnomalies.forEach((a) => {
-        const isTok = a.kind !== 'cost';
-        const ratio = isTok ? a.tokenRatio : a.costRatio;
-        const kindLabel = a.kind === 'cost' ? t('anomalyKindCost') : a.kind === 'both' ? t('anomalyKindBoth') : t('anomalyKindTokens');
-        const valueHtml = a.kind === 'cost' ? fmtCost(a.cost)
-          : a.kind === 'both' ? fmtCompact(a.tokens) + ' · ' + fmtCost(a.cost)
-          : fmtCompact(a.tokens);
-        html += '<div class="anomaly-item" data-action="goto-anomaly-day" data-date="' + a.date + '" title="' + t('anomalyClickHint') + '">'
-          + '<span class="anomaly-icon">⚠️</span>'
-          + '<span class="anomaly-date">' + a.date.replace(/-/g, '.') + '</span>'
-          + '<span class="anomaly-kind">' + kindLabel + '</span>'
-          + '<span class="anomaly-value">' + valueHtml + '</span>'
-          + '<span class="anomaly-mult">' + t('anomalyVsAvg', fmtCompact(Math.round(ratio * 10) / 10)) + '</span>'
-          + '</div>';
-      });
-      if (moreAnomalies > 0) {
-        html += '<div class="anomaly-more">' + t('anomalyMore', moreAnomalies) + '</div>';
-      }
-      html += '</div></div>';
-    }
-
-    // Popular Skills
-    if (popularSkills.length > 0) {
-      html += '<div class="section">'
-        + '<div class="section-title">' + t('popularSkills') + '</div>'
-        + '<div class="popular-grid">';
-      let rankColors = ['#4263eb', '#7c3aed', '#0ca678', '#e8590c', '#dc2626'];
-      popularSkills.forEach((pair, i) => {
-        let bgColor = rankColors[i] || '#6b7280';
-        let cardStyle = 'border-top:3px solid ' + bgColor;
-        if (i === 0) cardStyle += ';background:linear-gradient(135deg, #eef2ff 0%, #e0e7ff 100%)';
-        let rankClass = 'popular-card popular-card-ranked' + (i === 0 ? ' popular-rank-1' : '');
-        html += '<div class="' + rankClass + '" style="' + cardStyle + '" data-action="goto-detail" data-category="skills" data-name="' + escapeHtml(pair[0]) + '">'
-          + '<div class="pop-badges">' + typeBadge('skills') + parentBadge('skills', pair[0]) + '</div>'
-          + '<div class="pop-rank-big" style="color:' + bgColor + '">' + (i + 1) + '</div>'
-          + '<div class="pop-name">' + escapeHtml(pair[0]) + '</div>'
-          + '<div class="pop-count">' + fmtNum(pair[1]) + ' ' + t('calls') + '</div>'
-          + '</div>';
-      });
-      html += '</div></div>';
-    }
-
-    // Context Budget — visibility heatmap (filtered by selected period)
-    let visBarSegments = [];
+  // Context budget for the period: visible/brief turns plus startup context
+  // (hidden) multiplied by the number of sessions.
+  function overviewContextBudget(usage, sd, days) {
     const visLabels = {
       globalClaude: tp('visGlobalClaude'), projectClaude: tp('visProjectClaude'),
       autoMemory: t('visAutoMemory'), skillsDesc: t('visSkillsDesc'),
@@ -4501,120 +4402,490 @@ window.name = 'oh-my-hi';
     const periodSessionIds = new Set();
     filteredUsage.tokenEntries.forEach((e) => { if (e.sessionId) periodSessionIds.add(e.sessionId); });
     const visData = aggregateVisibility(filteredUsage, sd.contextStats || {}, visLabels, periodSessionIds.size);
-    if (visData.length > 0) {
-      const visTotal = visData.reduce((s, v) => s + v.totalTokens, 0);
-      html += '<div class="section">'
-        + '<div class="section-title">' + t('visHeatmapTitle') + ' <span class="section-title-sub">' + t('visHeatmapDesc') + '</span></div>'
-        + '<div class="card" style="padding:16px">';
-      // Canvas stacked bar
-      const hiddenTok = visData.reduce((s, v) => s + (v.hidden > 0 ? v.totalTokens : 0), 0);
-      const briefTok = visData.reduce((s, v) => s + (v.hidden === 0 && v.full === 0 ? v.totalTokens : 0), 0);
-      const fullTok = visData.reduce((s, v) => s + (v.full > 0 && v.hidden === 0 ? v.totalTokens : 0), 0);
-      visBarSegments = [
-        { label: t('visHidden'), tokens: hiddenTok, color: '#6B6964' },
-        { label: t('visBrief'),  tokens: briefTok,  color: '#E8A45C' },
-        { label: t('visFull'),   tokens: fullTok,    color: '#558A42' }
-      ].filter((s) => s.tokens > 0);
-      const barSegments = visBarSegments;
-      html += '<div style="height:24px;border-radius:6px;overflow:hidden;margin-bottom:12px;background:var(--color-bg-secondary)">'
-        + '<canvas id="vis-bar" style="width:100%;height:100%;display:block"></canvas></div>';
-      // Legend
-      html += '<div style="display:flex;gap:16px;margin-bottom:14px;font-size:12px;color:var(--text-secondary)">';
-      barSegments.forEach((seg) => {
-        html += '<span><span style="display:inline-block;width:10px;height:10px;border-radius:2px;background:' + seg.color + ';margin-right:4px;vertical-align:-1px"></span>'
-          + escapeHtml(seg.label) + ' ' + fmtCompact(seg.tokens) + '</span>';
-      });
-      html += '</div>';
-      // Top items list
-      const topItems = visData.slice(0, 8);
-      html += '<div style="display:grid;grid-template-columns:1fr auto auto;gap:4px 12px;font-size:12px;align-items:center">';
-      html += '<div style="font-weight:600;color:var(--text-secondary)">' + t('visName') + '</div>'
-        + '<div style="font-weight:600;color:var(--text-secondary);text-align:right">' + t('visTokens') + '</div>'
-        + '<div style="font-weight:600;color:var(--text-secondary);text-align:center">' + t('visVisibility') + '</div>';
-      topItems.forEach((v) => {
-        const vis = v.hidden > 0 ? 'hidden' : (v.full > 0 ? 'full' : 'brief');
-        const visColor = vis === 'hidden' ? '#6B6964' : vis === 'full' ? '#558A42' : '#E8A45C';
-        const visLabel = vis === 'hidden' ? t('visHidden') : vis === 'full' ? t('visFull') : t('visBrief');
-        html += '<div style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="' + escapeHtml(v.name) + '">' + escapeHtml(v.name) + '</div>'
-          + '<div style="text-align:right;font-family:var(--font-mono);color:var(--text-secondary)">' + fmtCompact(v.totalTokens) + '</div>'
-          + '<div style="text-align:center"><span style="display:inline-block;padding:1px 6px;border-radius:3px;font-size:10px;font-weight:600;color:#fff;background:' + visColor + '">' + escapeHtml(visLabel) + '</span></div>';
-      });
-      html += '</div></div></div>';
-    }
+    const visOf = (v) => v.hidden > 0 ? 'hidden' : (v.full > 0 ? 'full' : 'brief');
+    const sumVis = (vis) => visData.reduce((s, v) => s + (visOf(v) === vis ? v.totalTokens : 0), 0);
+    const segments = [
+      { key: 'full', label: t('visFull'), tokens: sumVis('full'), color: 'var(--vis-full)' },
+      { key: 'hidden', label: t('visHidden'), tokens: sumVis('hidden'), color: 'var(--vis-hidden)' },
+      { key: 'brief', label: t('visBrief'), tokens: sumVis('brief'), color: 'var(--vis-brief)' },
+    ];
+    return {
+      visData: visData,
+      visOf: visOf,
+      segments: segments,
+      total: visData.reduce((s, v) => s + v.totalTokens, 0),
+      hidden: segments[1].tokens,
+      sessions: periodSessionIds.size,
+    };
+  }
 
-    // Activity Heatmap — based on transcript usage data
-    html += '<div class="section">'
-      + '<div class="section-title">' + t('activity') + ' <span class="section-title-sub">' + tp('activityDesc') + '</span></div>'
-      + renderHeatmapFromMap(buildActivityMap([].concat(usage.skills || [], usage.agents || [], usage.commands || [], usage.mcpCalls || [])), days)
+  // Things worth a look, newest first: token/cost spikes, regressions,
+  // weak health factors and structure warnings.
+  function overviewEvents(usage, sd, days, healthData, anomalies) {
+    const events = [];
+    filterByPeriod(anomalies.map((a) => Object.assign({ timestamp: a.date + 'T12:00:00' }, a)), 'timestamp', days)
+      .slice(0, 3).forEach((a) => {
+        const ratio = a.kind === 'cost' ? a.costRatio : a.tokenRatio;
+        const value = a.kind === 'cost' ? fmtCost(a.cost) : fmtCompact(a.tokens);
+        events.push({
+          date: a.date.slice(5).replace('-', '.'), kind: t('ovEventSpike'), tone: 'neg',
+          text: t('ovEventSpikeText', value, fmtCompact(Math.round(ratio * 10) / 10)),
+          attrs: 'data-action="goto-anomaly-day" data-date="' + a.date + '" title="' + escapeHtml(t('anomalyClickHint')) + '"',
+        });
+      });
+    const reg = computeRegression(usage, Date.now());
+    if (reg.anyRegressed) {
+      const parts = [];
+      if (reg.latency && reg.latency.regressed) parts.push(t('regressionLatency') + ' ' + signedPct(reg.latency.deltaPct));
+      if (reg.tokensPerTurn && reg.tokensPerTurn.regressed) parts.push(t('regressionTokens') + ' ' + signedPct(reg.tokensPerTurn.deltaPct));
+      events.push({ date: t('ovEventNow'), kind: t('ovEventRegression'), tone: 'neg', text: parts.join(', '), attrs: 'href="#tokens-prompt"' });
+    }
+    const weak = healthData.factors.filter((f) => !f.na && f.score < 50);
+    if (weak.length > 0) {
+      events.push({
+        date: t('ovEventNow'), kind: t('ovEventScore'), tone: 'accent',
+        text: weak.map((f) => healthFactorLabel(f.name) + ' ' + fmtNum(f.score)).join(', '),
+        attrs: 'href="#insights"',
+      });
+    }
+    const lintCount = (sd.lint || []).length;
+    if (lintCount > 0) {
+      events.push({ date: t('ovEventNow'), kind: t('ovEventStructure'), tone: 'accent', text: t('ovEventLintText', fmtNum(lintCount)), attrs: 'href="#structure"' });
+    }
+    return events.slice(0, 5);
+  }
+
+  function healthFactorLabel(name) {
+    return {
+      contextEfficiency: t('healthFactorContext'), costTrend: t('healthFactorCostTrend'),
+      unusedItems: t('healthFactorUnused'), cacheEfficiency: t('healthFactorCache'),
+      coverage: t('healthFactorCoverage'),
+    }[name] || name;
+  }
+
+  function scoreTone(score) {
+    return score >= 80 ? 'pos' : score >= 50 ? 'warn' : 'neg';
+  }
+
+  // Harness items workbench (overview): kind chips, filters, table and the
+  // selected item's summary. Its state survives re-renders of the section.
+  const OV_ITEM_KINDS = [
+    { key: 'skills', i18nKey: 'catSkills', color: 'var(--color-skills)' },
+    { key: 'agents', i18nKey: 'catAgents', color: 'var(--color-agents)' },
+    { key: 'mcpServers', i18nKey: 'catMcpServers', color: 'var(--color-mcp)' },
+    { key: 'principles', i18nKey: 'catPrinciples', color: 'var(--color-principles)' },
+  ];
+  const OV_ITEMS_SHOWN = 12;
+  const OV_BIG_CTX = 1e6;
+  const ovItemsState = { kind: 'all', unusedOnly: false, bigCtx: false, sel: null };
+  // Set by renderOverview: what the summary panel needs beyond the row itself
+  let ovItemsCtx = { dayKeys: [], lists: {}, descOf: {} };
+
+  // One line describing a catalog item: its description, an MCP server's
+  // command, or a principle's first paragraph.
+  function ovItemDescription(kind, it) {
+    if (it.description) return it.description;
+    if (kind === 'mcpServers') return [it.command].concat(it.args || []).filter(Boolean).join(' ') || it.type || '';
+    if (it.body) {
+      const para = it.body.split(/\n\s*\n/).map((p) => p.replace(/^#+\s.*$/gm, '').trim()).find(Boolean);
+      return para || '';
+    }
+    return '';
+  }
+
+  function buildOverviewItemRows(usage, sd, days, ctx) {
+    const items = [];
+    const descOf = {};
+    OV_ITEM_KINDS.forEach((k) => (sd[k.key] || []).forEach((it) => {
+      items.push({ kind: k.key, name: it.name });
+      descOf[k.key + '/' + it.name] = ovItemDescription(k.key, it);
+    }));
+    const lists = { skills: usage.skills || [], agents: usage.agents || [], mcpServers: usage.mcpCalls || [] };
+    ovItemsCtx = { dayKeys: periodDayKeys(days), lists: lists, descOf: descOf, inPeriodSet: null };
+    const inPeriodSet = new Set([].concat(
+      filterByPeriod(lists.skills, 'timestamp', days),
+      filterByPeriod(lists.agents, 'timestamp', days),
+      filterByPeriod(lists.mcpServers, 'timestamp', days)));
+    ovItemsCtx.inPeriodSet = inPeriodSet;
+    const turnTokens = {};
+    ctx.visData.forEach((v) => { if (ctx.visOf(v) !== 'hidden') turnTokens[v.name] = v.totalTokens; });
+    const visByName = {};
+    ctx.visData.forEach((v) => { visByName[v.name] = ctx.visOf(v); });
+    const rows = buildItemRows({
+      items: items, usage: lists, inPeriod: (r) => inPeriodSet.has(r),
+      turnTokens: turnTokens, startup: (sd.contextStats && sd.contextStats.items) || [], sessions: ctx.sessions,
+    });
+    // Visibility: startup-only items are hidden context, the rest follow their turns
+    rows.forEach((r) => { r.vis = visByName[r.name] || (r.ctx > 0 ? 'hidden' : null); });
+    return rows;
+  }
+
+  function renderOverviewItems(rows) {
+    const st = ovItemsState;
+    const kindOf = {};
+    OV_ITEM_KINDS.forEach((k) => { kindOf[k.key] = k; });
+    const shown = filterItemRows(rows, { kind: st.kind, unusedOnly: st.unusedOnly, minCtx: st.bigCtx ? OV_BIG_CTX : 0 });
+    const visible = shown.slice(0, OV_ITEMS_SHOWN);
+    const sel = shown.find((r) => r.kind + '/' + r.name === st.sel) || visible[0] || null;
+    const maxCalls = Math.max.apply(null, visible.map((r) => r.calls || 0).concat([1]));
+    const dash = '<span class="ov-dim">-</span>';
+
+    const chip = (key, label, color, count) => '<button type="button" class="ov-chip" data-ov-kind="' + key + '" aria-pressed="' + (st.kind === key) + '">'
+      + '<i style="background:' + color + '"></i>' + escapeHtml(label) + ' <span class="ov-num">' + fmtNum(count) + '</span></button>';
+    let html = '<div class="ov-items-head">'
+      + '<h2 id="ov-items-title">' + t('ovItemsTitle') + ' <span class="ov-sub ov-num">' + fmtNum(rows.length) + '</span></h2>'
+      + '<div class="ov-chips" role="group" aria-label="' + escapeHtml(t('ovItemsKind')) + '">'
+      + chip('all', t('all'), 'var(--border-strong)', rows.length)
+      + OV_ITEM_KINDS.map((k) => chip(k.key, t(k.i18nKey), k.color, rows.filter((r) => r.kind === k.key).length)).join('')
+      + '</div><span class="ov-flex"></span>'
+      + '<label class="ov-check"><input type="checkbox" data-ov-filter="unusedOnly"' + (st.unusedOnly ? ' checked' : '') + '> ' + t('ovItemsUnusedOnly') + '</label>'
+      + '<label class="ov-check"><input type="checkbox" data-ov-filter="bigCtx"' + (st.bigCtx ? ' checked' : '') + '> ' + t('ovItemsBigCtx', fmtCompact(OV_BIG_CTX)) + '</label>'
       + '</div>';
 
-    // Recent
-    if (allUsageItems.length > 0) {
-      html += '<div class="section">'
-        + '<div class="section-title">' + t('recent') + '</div>'
-        + '<div class="recent-list">';
-      allUsageItems.forEach((item) => {
-        const catForType = item.type === 'skill' ? 'skills' : item.type === 'agent' ? 'agents' : null;
-        const clickAttr = catForType ? ' data-action="goto-detail" data-category="' + catForType + '" data-name="' + escapeHtml(item.name) + '"' : '';
-        html += '<div class="recent-item"' + clickAttr + '>'
-          + '<span class="ri-icon">' + item.icon + '</span>'
-          + '<span class="ri-name">' + escapeHtml(item.name) + '</span>'
-          + '<span class="ri-type badge-category" style="background:' + (catForType ? CATEGORY_COLOR_MAP[catForType] : 'var(--color-rules)') + '">' + item.typeLabel + '</span>'
-          + '<span class="ri-time">' + relativeTime(item.timestamp) + '</span>'
-          + '</div>';
+    html += '<div class="ov-items-body"><div class="ov-table-wrap">';
+    if (visible.length === 0) {
+      html += '<div class="ov-empty">' + t('ovItemsEmpty') + '</div>';
+    } else {
+      html += '<table class="ov-table"><thead><tr>'
+        + '<th scope="col">' + t('ovColName') + '</th>'
+        + '<th scope="col">' + t('ovColKind') + '</th>'
+        + '<th scope="col" class="ov-r">' + t('ovColCalls') + '</th>'
+        + '<th scope="col" class="ov-bar-col"><span class="sr-only">' + t('ovColShare') + '</span></th>'
+        + '<th scope="col" class="ov-r">' + t('ovColContext') + '</th>'
+        + '<th scope="col" class="ov-r">' + t('ovColLast') + '</th>'
+        + '</tr></thead><tbody>';
+      visible.forEach((r) => {
+        const k = kindOf[r.kind];
+        const key = r.kind + '/' + r.name;
+        const isSel = sel && key === sel.kind + '/' + sel.name;
+        html += '<tr class="ov-row' + (isSel ? ' selected' : '') + '" data-ov-select="' + escapeHtml(key) + '">'
+          + '<td><a class="ov-row-name" href="#' + r.kind + '/' + encodeURIComponent(r.name) + '">' + escapeHtml(r.name) + '</a>'
+          + (r.unused ? ' <span class="ov-flag">' + t('ovItemsUnused') + '</span>' : '') + '</td>'
+          + '<td><span class="ov-kind"><i style="background:' + k.color + '"></i>' + t(k.i18nKey) + '</span></td>'
+          + '<td class="ov-r ov-num ov-strong">' + (r.calls === null ? dash : fmtNum(r.calls)) + '</td>'
+          + '<td class="ov-bar-col"><span class="ov-track"><span style="width:' + Math.round((r.calls || 0) / maxCalls * 100) + '%;background:' + k.color + '"></span></span></td>'
+          + '<td class="ov-r ov-num">' + (r.ctx > 0 ? fmtCompact(r.ctx) : dash) + '</td>'
+          + '<td class="ov-r ov-num">' + (r.last ? escapeHtml(relativeTime(r.last)) : dash) + '</td>'
+          + '</tr>';
       });
-      html += '</div></div>';
+      html += '</tbody></table>';
     }
+    html += '<div class="ov-table-foot"><span>' + t('ovItemsShown', fmtNum(visible.length), fmtNum(shown.length)) + '</span>'
+      + (st.kind !== 'all' ? '<a href="#' + st.kind + '">' + t('ovItemsAll') + '</a>' : '') + '</div>';
+    html += '</div>';
 
-    // Insights & Recommendations
-    html += renderInsights(usage, days, unusedAgents);
+    html += renderOverviewItemDetail(sel);
+    html += '</div>';
+    return html;
+  }
 
-    // Unused Items
-    const totalUnused = unusedSkills.length + unusedAgents.length + unusedMcps.length;
-    if (totalUnused > 0) {
-      html += '<div class="section">'
-        + '<div class="section-title">' + t('unusedItems') + ' (' + totalUnused + ') <span class="section-title-sub">' + t('unusedCriteria') + '</span></div>';
-      if (totalUnused > 3) {
-        html += '<div class="insights-grid" style="margin-bottom:16px"><div class="insight-card">'
-          + '<span class="insight-card-icon">🧹</span>'
-          + '<div class="insight-card-body">'
-          + '<div class="insight-card-title">' + t('unusedCleanupTipTitle') + '</div>'
-          + '<div class="insight-card-detail">' + t('unusedCleanupTipDetail', totalUnused) + '</div>'
-          + '</div></div></div>';
+  // Summary of the hovered / focused row (the first row until then): its
+  // description, figures, daily calls over the period and latest calls.
+  function renderOverviewItemDetail(sel) {
+    if (!sel) return '';
+    const k = OV_ITEM_KINDS.find((x) => x.key === sel.kind);
+    const key = sel.kind + '/' + sel.name;
+    const href = '#' + sel.kind + '/' + encodeURIComponent(sel.name);
+    const visLabel = sel.vis === 'hidden' ? t('visHidden') : sel.vis === 'full' ? t('visFull') : sel.vis === 'brief' ? t('visBrief') : '-';
+    const desc = ovItemsCtx.descOf[key] || '';
+    let html = '<aside class="ov-item-detail" aria-label="' + escapeHtml(t('ovItemsSelected')) + '">'
+      + '<div><span class="ov-kind"><i style="background:' + k.color + '"></i>' + t(k.i18nKey) + '</span>'
+      + '<h3><a href="' + href + '" data-ov-open="' + escapeHtml(key) + '" title="' + escapeHtml(t('ovItemsOpen')) + '">' + escapeHtml(sel.name) + '</a></h3>'
+      + (desc ? '<p class="ov-item-desc" title="' + escapeHtml(desc) + '">' + escapeHtml(desc) + '</p>' : '')
+      + '</div>'
+      + '<dl>'
+      + '<dt>' + t('ovColCalls') + '</dt><dd class="ov-num ov-strong">' + (sel.calls === null ? '-' : fmtNum(sel.calls)) + '</dd>'
+      + '<dt>' + t('ovColLast') + '</dt><dd class="ov-num">' + (sel.last ? escapeHtml(relativeTime(sel.last)) : '-') + '</dd>'
+      + '<dt>' + t('ovColContext') + '</dt><dd class="ov-num">' + (sel.ctx > 0 ? fmtCompact(sel.ctx) : '-') + '</dd>'
+      + '<dt>' + t('ovColVisibility') + '</dt><dd>' + escapeHtml(visLabel) + '</dd>'
+      + '</dl>';
+    const list = ovItemsCtx.lists[sel.kind];
+    if (list) {
+      const calls = list.filter((r) => matchUsageName(r.name, sel.name));
+      const inPeriod = calls.filter((r) => ovItemsCtx.inPeriodSet && ovItemsCtx.inPeriodSet.has(r));
+      const daily = buildDailySeries({ [sel.kind === 'mcpServers' ? 'mcpCalls' : sel.kind]: inPeriod }, ovItemsCtx.dayKeys);
+      const perDay = sel.kind === 'mcpServers' ? daily.mcp : daily[sel.kind];
+      const max = Math.max.apply(null, perDay.concat([1]));
+      const dayLabel = (d) => d ? d.slice(5).replace('-', '.') : '';
+      const days = ovItemsCtx.dayKeys;
+      // Minimal axes: y shows only max and 0, x only the first and last day
+      html += '<div class="ov-item-section"><span class="ov-item-label">' + t('ovItemsDaily') + '</span>'
+        + '<div class="ov-item-chart">'
+        +   '<span class="ov-item-y ov-num"><span>' + fmtCompact(max) + '</span><span>0</span></span>'
+        +   '<div class="ov-item-bars" role="img" aria-label="' + escapeHtml(t('ovItemsDaily')) + '">'
+        +   perDay.map((v, i) => '<span style="height:' + (v ? Math.max(8, Math.round(v / max * 100)) : 0) + '%;background:' + k.color + '" title="'
+              + escapeHtml(dayLabel(days[i]) + ' · ' + fmtNum(v)) + '"></span>').join('')
+        +   '</div>'
+        +   '<span class="ov-item-x ov-num"><span>' + dayLabel(days[0]) + '</span><span>' + dayLabel(days[days.length - 1]) + '</span></span>'
+        + '</div></div>';
+      const recent = calls.slice().sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp)).slice(0, 3);
+      html += '<div class="ov-item-section"><span class="ov-item-label">' + t('ovItemsRecent') + '</span>';
+      if (recent.length === 0) {
+        html += '<span class="ov-dim">' + t('ovItemsNoCalls') + '</span>';
+      } else {
+        html += '<ul class="ov-item-recent">' + recent.map((r) => '<li class="ov-num">' + escapeHtml(formatDateTime(new Date(r.timestamp).toISOString())) + '</li>').join('') + '</ul>';
       }
-      html += '<div class="unused-grid">';
-      unusedSkills.forEach((s) => {
-        html += '<div class="unused-item" data-action="goto-detail" data-category="skills" data-name="' + escapeHtml(s.name) + '">'
-          + typeBadge('skills') + parentBadge('skills', s.name) + '<span>' + escapeHtml(s.name) + '</span></div>';
-      });
-      unusedAgents.forEach((a) => {
-        html += '<div class="unused-item" data-action="goto-detail" data-category="agents" data-name="' + escapeHtml(a.name) + '">'
-          + typeBadge('agents') + '<span>' + escapeHtml(a.name) + '</span></div>';
-      });
-      unusedMcps.forEach((m) => {
-        html += '<div class="unused-item" data-action="goto-detail" data-category="mcpServers" data-name="' + escapeHtml(m.name) + '">'
-          + typeBadge('mcpServers') + '<span>' + escapeHtml(m.name) + '</span></div>';
-      });
-      html += '</div></div>';
+      html += '</div>';
+    }
+    return html + '</aside>';
+  }
+
+  // One delegated listener on the persistent section; only it re-renders.
+  function bindOverviewItems(rows) {
+    const el = document.getElementById('ov-items');
+    if (!el) return;
+    const rerender = () => { el.innerHTML = renderOverviewItems(rows); };
+    const rowOf = (key) => rows.find((r) => r.kind + '/' + r.name === key);
+    const openItem = (key) => {
+      const r = rowOf(key);
+      if (!r) return;
+      currentView = r.kind;
+      currentDetail = { category: r.kind, name: r.name };
+      expandedCategories[r.kind] = true;
+      pushState(true);
+      render();
+    };
+    // Hover or focus previews a row in the summary panel; only the panel is replaced
+    const preview = (rowEl) => {
+      const key = rowEl.dataset.ovSelect;
+      if (key === ovItemsState.sel) return;
+      ovItemsState.sel = key;
+      el.querySelectorAll('.ov-row.selected').forEach((x) => x.classList.remove('selected'));
+      rowEl.classList.add('selected');
+      const aside = el.querySelector('.ov-item-detail');
+      if (aside) aside.outerHTML = renderOverviewItemDetail(rowOf(key));
+    };
+    el.addEventListener('mouseover', (e) => {
+      const rowEl = e.target.closest('tr[data-ov-select]');
+      if (rowEl) preview(rowEl);
+    });
+    el.addEventListener('focusin', (e) => {
+      const rowEl = e.target.closest('tr[data-ov-select]');
+      if (rowEl) preview(rowEl);
+    });
+    el.addEventListener('click', (e) => {
+      const kindBtn = e.target.closest('[data-ov-kind]');
+      if (kindBtn) { ovItemsState.kind = kindBtn.dataset.ovKind; rerender(); return; }
+      // Item rows, their name links and the summary button open the detail page.
+      // Modified clicks on a link keep the browser default (new tab, copy link).
+      const link = e.target.closest('a[href]');
+      if (link && (e.metaKey || e.ctrlKey || e.shiftKey || e.button === 1)) return;
+      const target = e.target.closest('[data-ov-open], tr[data-ov-select]');
+      if (!target) return;
+      e.preventDefault();
+      openItem(target.dataset.ovOpen || target.dataset.ovSelect);
+    });
+    el.addEventListener('change', (e) => {
+      const f = e.target.dataset && e.target.dataset.ovFilter;
+      if (f) { ovItemsState[f] = e.target.checked; rerender(); }
+    });
+  }
+
+  function renderOverview() {
+    const usage = getUsage();
+    const sd = getScopeData();
+    const days = customDateRange ? 0 : currentPeriod;
+
+    // Period panels
+    const dayKeys = periodDayKeys(days);
+    const series = buildDailySeries(usage, dayKeys, calcEntryCost);
+    // Calls = skill + agent calls (the bars below); compared with the equal
+    // period before, and left without a delta when that period has no data
+    const dailyCalls = series.skills.map((v, i) => v + series.agents[i]);
+    const totalCalls = sumArr(dailyCalls);
+    let changeCalls = null;
+    if (days > 0 && !customDateRange) {
+      const before = new Date(); before.setDate(before.getDate() - days);
+      const prev = buildDailySeries(usage, dayKeysEnding(before, days));
+      changeCalls = pctChange(totalCalls, sumArr(prev.skills) + sumArr(prev.agents));
     }
 
-    // Insights summary banner (compact; full view on #insights page)
-    html += renderInsightsBanner(usage, days, sd);
+    // Fixed 7-day panels: the last 7 days against the 7 before them
+    const wk = buildDailySeries(usage, dayKeysEnding(new Date(), 14), calcEntryCost);
+    const cur7 = (arr) => sumArr(arr.slice(7)), prev7 = (arr) => sumArr(arr.slice(0, 7));
+    const weekSessions = (from, to) => {
+      const set = new Set();
+      (usage.tokenEntries || []).forEach((e) => {
+        const k = tsDateKey(e.timestamp);
+        if (e.sessionId && k >= from && k <= to) set.add(e.sessionId);
+      });
+      return set.size;
+    };
+    const sessions7 = weekSessions(wk.days[7], wk.days[13]);
+    const sessionsPrev7 = weekSessions(wk.days[0], wk.days[6]);
+
+    const healthData = computeHealthScore(healthInputAt(usage, sd, days, Date.now()));
+    const healthTrend = [];
+    for (let i = 6; i >= 0; i--) {
+      const end = new Date(); end.setDate(end.getDate() - i); end.setHours(23, 59, 59, 999);
+      healthTrend.push(computeHealthScore(healthInputAt(usage, sd, days, Math.min(end.getTime(), Date.now()))).total);
+    }
+
+    const ctx = overviewContextBudget(usage, sd, days);
+    const anomalySeries = buildDailyUsageSeries(usage.tokenEntries || [], calcEntryCost);
+    const anomalies = detectDailyAnomalies(anomalySeries.dailyMap, anomalySeries.sortedDates);
+    const events = overviewEvents(usage, sd, days, healthData, anomalies);
+    const insightCount = sidebarInsightCount(usage, sd);
+
+    const scopeName = scopeSelect && scopeSelect.selectedIndex >= 0 ? scopeSelect.options[scopeSelect.selectedIndex].textContent : currentScope;
+    let html = '<div class="page-header ov-header">'
+      + '<h1>' + t('navOverview') + '</h1>'
+      + '<span class="ov-meta">' + escapeHtml(scopeName) + ' · ' + escapeHtml(providerLabel(currentProvider)) + ' · ' + escapeHtml(periodShortLabel(days)) + '</span>'
+      + '</div>';
+
+    // KPI strip
+    html += '<div class="ov-kpis">'
+      + ovKpi(t('ovKpiCalls', periodShortLabel(days)), fmtCompact(totalCalls), changeCalls, 'up', sparkPoints(dailyCalls.slice(-14)))
+      + ovKpi(t('ovKpiTokens7'), fmtCompact(cur7(wk.tokens)), pctChange(cur7(wk.tokens), prev7(wk.tokens)), 'down', sparkPoints(wk.tokens.slice(7)))
+      + ovKpi(t('ovKpiSessions7'), fmtNum(sessions7), pctChange(sessions7, sessionsPrev7), 'up', sparkPoints(wk.sessions.slice(7)))
+      + ovKpi(t('ovKpiCost7'), fmtCost(cur7(wk.cost)), pctChange(cur7(wk.cost), prev7(wk.cost)), 'down', sparkPoints(wk.cost.slice(7)),
+        prev7(wk.cost) ? null : t('ovPrevZero'))
+      + ovKpi(t('healthScoreTitle'), fmtNum(healthData.total), null, 'up', sparkPoints(healthTrend),
+        t('healthGrade' + healthData.grade))
+      + ovKpi(t('visHeatmapTitle'), fmtCompact(ctx.total), null, 'down', '', t('ovHiddenShare', fmtCompact(ctx.hidden)))
+      + '</div>';
+
+    // Daily calls + things to check
+    const anomalyDays = new Set(anomalies.map((a) => a.date));
+    html += '<div class="ov-grid ov-grid-main">'
+      + '<section class="card ov-panel">'
+      +   '<div class="ov-panel-head"><h2>' + t('ovDailyCalls') + '</h2>'
+      +   '<span class="ov-legend">'
+      +     '<span><i style="background:var(--color-agents)"></i>' + t('catAgents') + ' <b>' + fmtCompact(sumArr(series.agents)) + '</b></span>'
+      +     '<span><i style="background:var(--color-skills)"></i>' + t('catSkills') + ' <b>' + fmtCompact(sumArr(series.skills)) + '</b></span>'
+      +     (dayKeys.some((d) => anomalyDays.has(d)) ? '<span><i class="ov-legend-band"></i>' + t('ovSpikeDays') + '</span>' : '')
+      +   '</span></div>'
+      +   '<div id="daily-calls-chart"></div>'
+      + '</section>'
+      + '<section class="card ov-panel ov-events">'
+      +   '<div class="ov-panel-head"><h2>' + t('ovEventsTitle') + '</h2>'
+      +   (insightCount > 0 ? '<a href="#insights">' + t('ovInsightsLink', fmtNum(insightCount)) + '</a>' : '') + '</div>';
+    if (events.length === 0) {
+      html += '<div class="ov-empty">' + t('ovEventsEmpty') + '</div>';
+    } else {
+      html += '<ul class="ov-event-list">';
+      events.forEach((ev) => {
+        const tag = ev.attrs.indexOf('href=') === 0 ? 'a' : 'button';
+        html += '<li><' + tag + ' class="ov-event" ' + (tag === 'button' ? 'type="button" ' : '') + ev.attrs + '>'
+          + '<span class="ov-event-date">' + escapeHtml(ev.date) + '</span>'
+          + '<span class="ov-tag" data-tone="' + ev.tone + '">' + escapeHtml(ev.kind) + '</span>'
+          + '<span class="ov-event-text">' + escapeHtml(ev.text) + '</span>'
+          + '</' + tag + '></li>';
+      });
+      html += '</ul>';
+    }
+    html += '</section></div>';
+
+    // Health / context budget / hourly activity
+    html += '<div class="ov-grid ov-grid-3">';
+    html += '<section class="card ov-panel">'
+      + '<div class="ov-panel-head"><h2>' + t('healthScoreTitle') + '</h2>'
+      + '<span class="ov-score"><b>' + fmtNum(healthData.total) + '</b> / 100 ' + t('healthGrade' + healthData.grade) + '</span></div>';
+    healthData.factors.forEach((f) => {
+      const tip = f.name === 'costTrend' ? ' data-tooltip="' + escapeHtml(t('healthCostTrendHelp')) + '"' : '';
+      html += '<div class="ov-factor"' + tip + '>'
+        + '<span class="ov-factor-label">' + healthFactorLabel(f.name) + '</span>'
+        + '<span class="ov-track">' + (f.na ? '' : '<span data-tone="' + scoreTone(f.score) + '" style="width:' + f.score + '%"></span>') + '</span>'
+        + '<span class="ov-factor-score">' + (f.na ? t('healthNa') : fmtNum(f.score)) + '</span>'
+        + '<span class="ov-factor-weight">' + fmtPct(f.weight * 100) + '</span>'
+        + '</div>';
+    });
+    html += '</section>';
+
+    html += '<section class="card ov-panel">'
+      + '<div class="ov-panel-head"><h2>' + t('visHeatmapTitle') + ' <span class="ov-sub">' + t('ovEstimate') + '</span></h2>'
+      + '<span class="ov-sub">' + fmtCompact(ctx.total) + '</span></div>';
+    if (ctx.visData.length > 0) {
+      html += '<div class="ov-vis-bar"><canvas id="vis-bar"></canvas></div>'
+        + '<div class="ov-legend ov-legend-sm">'
+        + ctx.segments.filter((s) => s.tokens > 0).map((s) => '<span><i style="background:' + s.color + '"></i>' + escapeHtml(s.label) + '</span>').join('')
+        + '</div>';
+      ctx.visData.slice(0, 4).forEach((v) => {
+        html += '<div class="ov-ctx-row"><i style="background:var(--vis-' + ctx.visOf(v) + ')"></i>'
+          + '<span title="' + escapeHtml(v.name) + '">' + escapeHtml(v.name) + '</span>'
+          + '<span class="ov-num">' + fmtCompact(v.totalTokens) + '</span></div>';
+      });
+    } else {
+      html += '<div class="ov-empty">' + t('noUsageData') + '</div>';
+    }
+    html += '</section>';
+
+    const heat = buildHourMatrix(filterByPeriod(usage.tokenEntries || [], 'timestamp', days));
+    const dayNames = t('dayNames').split(','); // Sunday first
+    html += '<section class="card ov-panel">'
+      + '<div class="ov-panel-head"><h2>' + t('ovHourly') + '</h2>'
+      + '<a href="#tokens-session">' + t('ovSessions', fmtNum(heat.sessions)) + '</a></div>'
+      + '<div class="ov-heat" role="img" aria-label="' + escapeHtml(t('ovHourlyAria')) + '">';
+    heat.cells.forEach((row, r) => {
+      html += '<span class="ov-heat-day">' + escapeHtml(dayNames[(r + 1) % 7] || '') + '</span>';
+      row.forEach((v, h) => {
+        const level = v === 0 ? 0 : Math.min(4, Math.ceil(v / (heat.max || 1) * 4));
+        const tip = t('ovHeatTipWhen', dayNames[(r + 1) % 7], h, h + 1) + '\n'
+          + (v === 0 ? t('ovHeatTipNone')
+            : t('ovHeatTipCounts', fmtNum(v), fmtNum(heat.sessionCounts[r][h])) + '\n' + t('ovHeatTipTokens', fmtCompact(heat.tokens[r][h])));
+        html += '<span class="ov-heat-cell" data-level="' + level + '" data-tooltip="' + escapeHtml(tip) + '"></span>';
+      });
+    });
+    html += '</div><div class="ov-heat-axis"><span>0</span><span>6</span><span>12</span><span>18</span><span>23</span></div>'
+      + '<div class="ov-heat-legend"><span>' + t('ovHeatLegend', fmtNum(heat.max)) + '</span>'
+      + '<span class="ov-heat-scale">' + t('less')
+      + [0, 1, 2, 3, 4].map((l) => '<span class="ov-heat-cell" data-level="' + l + '"></span>').join('')
+      + t('more') + '</span></div>'
+      + '</section></div>';
+
+    const itemRows = buildOverviewItemRows(usage, sd, days, ctx);
+    html += '<section class="card ov-items" id="ov-items" aria-labelledby="ov-items-title">' + renderOverviewItems(itemRows) + '</section>';
 
     html += '<div class="generated-at">' + t('generatedAt') + ' ' + formatDateTime(DATA.generatedAt) + ' · ' + (DATA.configDir || '') + '</div>';
 
     content.innerHTML = html;
     bindContentActions();
     bindPeriodFilter();
+    bindOverviewItems(itemRows);
 
-    // Draw charts with billboard.js
-    drawHealthGauge(healthData.total);
-    drawTrendChart(usage, days);
-    drawDonutChart();
-    // Draw canvas stacked bar for context budget
-    if (visBarSegments.length > 0) {
-      drawStackedBar('vis-bar', visBarSegments.map((s) => ({ value: s.tokens, color: s.color })));
+    drawDailyCallsChart(series, anomalyDays);
+    const visSegments = ctx.segments.filter((s) => s.tokens > 0);
+    if (visSegments.length > 0) {
+      const css = getComputedStyle(document.body);
+      drawStackedBar('vis-bar', visSegments.map((s) => ({ value: s.tokens, color: css.getPropertyValue('--vis-' + s.key).trim() })));
     }
+  }
+
+  // Stacked daily bars (agents + skills) with spike days marked by x-grid lines.
+  function drawDailyCallsChart(series, anomalyDays) {
+    const el = document.getElementById('daily-calls-chart');
+    if (!el) return;
+    if (sumArr(series.skills) + sumArr(series.agents) === 0) {
+      el.innerHTML = '<div class="ov-empty">' + t('noUsageData') + '</div>';
+      return;
+    }
+    const css = getComputedStyle(document.body);
+    const agentsKey = t('catAgents'), skillsKey = t('catSkills');
+    makeChart({
+      bindto: '#daily-calls-chart',
+      data: {
+        x: 'x',
+        columns: [['x'].concat(series.days), [agentsKey].concat(series.agents), [skillsKey].concat(series.skills)],
+        type: 'bar',
+        groups: [[agentsKey, skillsKey]],
+        order: null,
+        colors: { [agentsKey]: css.getPropertyValue('--color-agents').trim(), [skillsKey]: css.getPropertyValue('--color-skills').trim() },
+      },
+      bar: { width: { ratio: 0.7 } },
+      axis: {
+        x: { type: 'timeseries', tick: { format: '%m.%d', count: 6, outer: false } },
+        y: { min: 0, padding: { bottom: 0 }, tick: { count: 4, format: (v) => fmtCompact(Math.round(v)) } },
+      },
+      // Spike days get a background band (half a day either side of the bar).
+      // Canvas mode reads the band color from `#daily-calls-chart .bb-region rect`.
+      regions: series.days.filter((d) => anomalyDays.has(d)).map((d) => {
+        const [y, m, day] = d.split('-').map(Number);
+        return { axis: 'x', start: new Date(y, m - 1, day, -12), end: new Date(y, m - 1, day, 12), class: 'ov-spike-region' };
+      }),
+      legend: { show: false },
+      size: { height: 200 },
+      tooltip: { format: { title: fmtChartTooltipTitle } },
+    });
   }
 
   // ── Reusable canvas stacked bar ──
@@ -4635,380 +4906,6 @@ window.name = 'oh-my-hi';
       ctx.fillStyle = r.color;
       ctx.fillRect(r.x, 0, r.w, H);
     }
-  }
-
-  // ── Charts (billboard.js) ──
-  function drawTrendChart(usage, days) {
-    let el = document.getElementById('trend-chart');
-    if (!el) return;
-
-    let allItems = [].concat(usage.commands || [], usage.skills || [], usage.agents || []);
-    if (allItems.length === 0) {
-      el.innerHTML = '<div style="text-align:center;color:#6c757d;padding:40px 0;font-size:13px">' + t('noUsageData') + '</div>';
-      return;
-    }
-
-    let numDays, endDate;
-    if (customDateRange) {
-      numDays = Math.ceil((customDateRange.end - customDateRange.start) / 86400000) + 1;
-      endDate = customDateRange.end;
-    } else if (days === 0) {
-      let dataRange = getDataDateRange();
-      if (dataRange) {
-        const startDay = new Date(dataRange.start.getFullYear(), dataRange.start.getMonth(), dataRange.start.getDate());
-        const endDay = new Date(dataRange.end.getFullYear(), dataRange.end.getMonth(), dataRange.end.getDate());
-        endDate = endDay;
-        numDays = Math.round((endDay - startDay) / 86400000) + 1;
-      } else {
-        numDays = 90;
-        endDate = new Date();
-      }
-    } else {
-      numDays = days;
-      endDate = new Date();
-    }
-    const dailyMap = {};
-    const dateLabels = ['x'];
-    const countData = [t('totalUsage')];
-    for (let i = 0; i < numDays; i++) {
-      let d = new Date(endDate);
-      d.setDate(d.getDate() - (numDays - 1 - i));
-      let key = dateKey(d);
-      dailyMap[key] = 0;
-      dateLabels.push(key);
-    }
-
-    allItems.forEach((item) => {
-      let ts = item.timestamp;
-      let key = '';
-      if (typeof ts === 'string') key = ts.substring(0, 10);
-      else if (typeof ts === 'number') key = new Date(ts).toISOString().substring(0, 10);
-      if (dailyMap.hasOwnProperty(key)) dailyMap[key] += countOf(item);
-    });
-
-    for (let j = 1; j < dateLabels.length; j++) {
-      countData.push(dailyMap[dateLabels[j]] || 0);
-    }
-
-    makeChart({
-      bindto: '#trend-chart',
-      data: {
-        x: 'x',
-        columns: [dateLabels, countData],
-        types: {},
-        type: 'area',
-        colors: {}
-      },
-      axis: {
-        x: {
-          type: 'timeseries',
-          tick: { format: '%m-%d', count: 6, outer: false, text: { inner: true } }
-        },
-        y: {
-          min: 0,
-          padding: { bottom: 0 },
-          tick: {
-            count: 5,
-            format: (v) => { return Math.round(v); }
-          }
-        }
-      },
-      point: { r: 3, focus: { only: true } },
-      legend: { show: true },
-      size: { height: 280 },
-      color: { pattern: ['#4263eb'] },
-      clipPath: false,
-      area: {
-        linearGradient: true
-      },
-      tooltip: {
-        format: {
-          title: fmtChartTooltipTitle
-        }
-      }
-    });
-  }
-
-  function drawDonutChart() {
-    let el = document.getElementById('donut-chart');
-    if (!el) return;
-
-    let sd = getScopeData();
-    const columns = [];
-    const colors = {};
-    const tempEl = document.createElement('div');
-    document.body.appendChild(tempEl);
-    let total = 0;
-
-    const donutExclude = { configFiles: 1, memory: 1, hooks: 1 };
-    CATEGORIES.forEach((cat) => {
-      if (donutExclude[cat.key]) return;
-      let count = (sd[cat.key] || []).length;
-      if (count === 0) return;
-      total += count;
-      columns.push([getCatLabel(cat), count]);
-      // resolve CSS let color
-      let color = cat.color;
-      if (color && color.startsWith('var(')) {
-        tempEl.style.color = color;
-        color = getComputedStyle(tempEl).color;
-      }
-      colors[getCatLabel(cat)] = color;
-    });
-    tempEl.remove();
-
-    if (total === 0) {
-      el.innerHTML = '<div style="text-align:center;color:#6c757d;padding:40px 0;font-size:13px">' + t('noUsageData') + '</div>';
-      return;
-    }
-
-    makeChart({
-      bindto: '#donut-chart',
-      data: {
-        columns: columns,
-        type: 'donut',
-        colors: colors
-      },
-      donut: {
-        title: fmtCompact(total),
-        label: {
-          format: (value, ratio) => { return Math.round(ratio * 100) + '%'; },
-          ratio: 1.0
-        },
-        width: 51
-      },
-      tooltip: {
-        format: {
-          value: (value, ratio) => { return fmtNum(value) + ' (' + Math.round(ratio * 100) + '%)'; }
-        }
-      },
-      legend: { position: 'bottom' },
-      size: { height: 280 }
-    });
-  }
-
-  // ── Insights ──
-  function renderInsights(usage, days, unusedAgents) {
-    const insights = [];
-    let sd = getScopeData();
-    const allItems = [].concat(usage.skills || [], usage.agents || [], usage.commands || []);
-    if (allItems.length === 0) return '';
-
-    const periodDays = customDateRange ? Math.ceil((customDateRange.end - customDateRange.start) / 86400000) : (days === 0 ? 90 : days);
-
-    // ── helpers ──
-    const allSkillDefs = sd.skills || [];
-    const skillDefMap = {};
-    allSkillDefs.forEach((s) => { skillDefMap[s.name] = s; });
-
-    function fmtHour(h) {
-      if (t('amPrefix') || t('pmPrefix')) return (h < 12 ? t('amPrefix') : t('pmPrefix')) + (h === 0 ? 12 : h <= 12 ? h : h - 12) + t('unitHourSuffix');
-      return h + ':00';
-    }
-
-    // ── data prep ──
-    const filteredSkills = filterByPeriod(usage.skills || [], 'timestamp', days);
-    const filteredAgents = filterByPeriod(usage.agents || [], 'timestamp', days);
-
-    const skillCounts = {};
-    filteredSkills.forEach((s) => { skillCounts[s.name] = (skillCounts[s.name] || 0) + 1; });
-    const sortedSkills = Object.entries(skillCounts).sort((a, b) => { return b[1] - a[1]; });
-
-    const agentCounts = {};
-    filteredAgents.forEach((a) => { agentCounts[a.name] = (agentCounts[a.name] || 0) + 1; });
-    const sortedAgents = Object.entries(agentCounts).sort((a, b) => { return b[1] - a[1]; });
-
-    // ── 1. Usage pattern - top skills with actionable detail ──
-    if (sortedSkills.length > 0) {
-      const top3 = sortedSkills.slice(0, 3);
-      const topSkillDef = skillDefMap[top3[0][0]];
-      const hasHint = topSkillDef && topSkillDef.argumentHint;
-      let usedCount = sortedSkills.length;
-      const totalCount = allSkillDefs.length;
-
-      let detail = t('insightTopSkills', top3.map((p) => { return p[0] + ' (' + fmtNum(p[1]) + t('unitCallCount') + ')'; }).join(', '));
-
-      if (!hasHint && top3[0][1] >= 5) {
-        detail += '\n' + t('insightNoArgHint', top3[0][0]);
-      } else {
-        detail += '\n' + t('insightSkillUsageRate', fmtNum(usedCount), fmtNum(totalCount), Math.round(usedCount / totalCount * 100));
-      }
-
-      insights.push({ icon: '🏆', title: t('insightUsagePatternTitle'), detail: detail });
-    }
-
-    // ── 2. Unused agents cleanup - name specific agents ──
-    if (unusedAgents && unusedAgents.length > 0) {
-      let names = unusedAgents.map((a) => { return a.name; });
-      let detail = t('insightUnusedAgents', fmtNum(names.length), fmtNum(periodDays), names.join(', '));
-      insights.push({ icon: '⚠️', title: t('insightUnusedCleanupTitle'), detail: detail });
-    }
-
-    // ── 3. Efficiency - agent-specific actionable suggestions ──
-    const agentSuggestions = {
-      'Explore': 'agentAdviceExplore',
-      'general-purpose': 'agentAdviceGeneral',
-      'Plan': 'agentAdvicePlan'
-    };
-
-    if (sortedAgents.length > 0) {
-      const topAgent = sortedAgents[0];
-      const topAgentName = topAgent[0];
-      const topAgentCount = topAgent[1];
-      const top3agents = sortedAgents.slice(0, 3);
-      const totalAgentCalls = filteredAgents.length;
-
-      if (topAgentCount >= 10) {
-        const pct = Math.round(topAgentCount / totalAgentCalls * 100);
-        const suggestion = agentSuggestions[topAgentName];
-
-        let detail = t('insightTopAgents', top3agents.map((p) => { return p[0] + ' (' + fmtNum(p[1]) + t('unitCallCount') + ')'; }).join(', '), topAgentName, pct);
-
-        if (suggestion) {
-          detail += '\n' + t(suggestion);
-        } else {
-          detail += '\n' + t('insightAgentGenericAdvice');
-        }
-
-        insights.push({ icon: '💡', title: t('insightEfficiencyTitle'), detail: detail });
-      } else {
-        let detail = t('insightMostActiveAgent', topAgentName, fmtNum(topAgentCount) + t('unitCalls'));
-        if (sortedAgents.length > 1) {
-          detail += t('insightOtherAgentTypes', sortedAgents.length - 1);
-        }
-        insights.push({ icon: '🤖', title: t('insightTopAgentTitle'), detail: detail });
-      }
-    }
-
-    // ── 4. Time analysis - peak hours with top skills in that window ──
-    const hourCounts = new Array(24).fill(0);
-    const hourSkills = {};
-    const allTimedItems = [].concat(filteredSkills, filteredAgents);
-    allTimedItems.forEach((s) => {
-      if (s.timestamp) {
-        let d = typeof s.timestamp === 'number' ? new Date(s.timestamp) : new Date(s.timestamp);
-        if (!isNaN(d.getTime())) {
-          let h = d.getHours();
-          hourCounts[h]++;
-          if (s.name) {
-            if (!hourSkills[h]) hourSkills[h] = {};
-            hourSkills[h][s.name] = (hourSkills[h][s.name] || 0) + 1;
-          }
-        }
-      }
-    });
-    const maxHourCount = Math.max(...hourCounts);
-    if (maxHourCount > 0) {
-      const peakHours = [];
-      hourCounts.forEach((c, h) => {
-        if (c >= maxHourCount * 0.7 && c > 0) peakHours.push(h);
-      });
-      if (peakHours.length > 0) {
-        const peakStr = peakHours.length <= 3
-          ? peakHours.map(fmtHour).join(', ')
-          : fmtHour(peakHours[0]) + '–' + fmtHour(peakHours[peakHours.length - 1]);
-
-        // find top skills during peak hours
-        const peakSkillCounts = {};
-        peakHours.forEach((h) => {
-          const hs = hourSkills[h] || {};
-          Object.keys(hs).forEach((name) => {
-            peakSkillCounts[name] = (peakSkillCounts[name] || 0) + hs[name];
-          });
-        });
-        const peakTopSkills = Object.entries(peakSkillCounts).sort((a, b) => { return b[1] - a[1]; }).slice(0, 3);
-
-        let detail = t('insightPeakDetail', peakStr);
-        if (peakTopSkills.length > 0) {
-          detail += '\n' + t('insightPeakTopItems', peakTopSkills.map((p) => { return p[0] + ' (' + p[1] + t('unitCallCount') + ')'; }).join(', '));
-        }
-
-        insights.push({ icon: '🕐', title: t('insightTimeTitle'), detail: detail });
-      }
-    }
-
-    // ── 5. Plugin utilization - name unused plugin skills ──
-    const plugins = sd.plugins || [];
-    const activePlugins = plugins.filter((p) => { return p.enabled !== false; });
-    if (activePlugins.length >= 2) {
-      const usedSkillNames = {};
-      filteredSkills.forEach((s) => { usedSkillNames[s.name] = true; });
-
-      const unusedPluginSkills = allSkillDefs.filter((s) => {
-        return s.plugin && !usedSkillNames[s.name];
-      });
-      const usedPluginSkills = allSkillDefs.filter((s) => {
-        return s.plugin && usedSkillNames[s.name];
-      });
-
-      // group unused by plugin
-      const unusedByPlugin = {};
-      unusedPluginSkills.forEach((s) => {
-        const pName = s.plugin || 'unknown';
-        if (!unusedByPlugin[pName]) unusedByPlugin[pName] = [];
-        unusedByPlugin[pName].push(s.name);
-      });
-
-      let detail = t('insightPluginDetail', fmtNum(usedPluginSkills.length), fmtNum(activePlugins.length));
-
-      if (unusedPluginSkills.length > 0) {
-        const pluginEntries = Object.entries(unusedByPlugin).slice(0, 3);
-        detail += '\n' + t('insightUnusedLabel', '');
-        detail += pluginEntries.map((entry) => {
-          let names = entry[1].slice(0, 2).join(', ');
-          if (entry[1].length > 2) names += t('insightPluginMore', entry[1].length - 2);
-          return entry[0] + ' → ' + names;
-        }).join('; ') + '.';
-        detail += '\n' + t('insightPluginAdvice');
-      }
-
-      insights.push({ icon: '📦', title: t('insightPluginTitle'), detail: detail });
-    }
-
-    // ── 6. Memory management - type breakdown with specific advice ──
-    const memoryItems = sd.memory || [];
-    if (memoryItems.length >= 5) {
-      const typeCounts = {};
-      memoryItems.forEach((m) => {
-        let mtype = m.type || 'reference';
-        typeCounts[mtype] = (typeCounts[mtype] || 0) + 1;
-      });
-      const sortedTypes = Object.entries(typeCounts).sort((a, b) => { return b[1] - a[1]; });
-      const breakdown = sortedTypes.map((p) => { return p[0] + ' ' + p[1] + t('unitItems'); }).join(', ');
-
-      const memoryAdvice = {
-        feedback: 'insightMemAdviceFeedback',
-        project: 'insightMemAdviceProject',
-        user: 'insightMemAdviceUser',
-        reference: 'insightMemAdviceReference'
-      };
-
-      const topType = sortedTypes[0][0];
-      let detail = t('insightMemoryDetail', fmtNum(memoryItems.length), breakdown);
-
-      const advice = memoryAdvice[topType];
-      if (advice) {
-        detail += '\n' + t(advice);
-      }
-
-      insights.push({ icon: '💾', title: t('insightMemoryTitle'), detail: detail });
-    }
-
-    if (insights.length === 0) return '';
-
-    let html = '<div class="section">'
-      + '<div class="section-title">' + t('insights') + '</div>'
-      + '<div class="insights-grid">';
-    insights.forEach((ins) => {
-      html += '<div class="insight-card">'
-        + '<span class="insight-card-icon">' + ins.icon + '</span>'
-        + '<div class="insight-card-body">'
-        + '<div class="insight-card-title">' + escapeHtml(ins.title) + '</div>'
-        + '<div class="insight-card-detail"><ul class="insight-list">' + escapeHtml(ins.detail).split('\n').map((line) => '<li>' + line + '</li>').join('') + '</ul></div>'
-        + '</div></div>';
-    });
-    html += '</div></div>';
-    return html;
   }
 
   const countOf = (r) => typeof r.count === 'number' ? r.count : 1;
@@ -5073,9 +4970,7 @@ window.name = 'oh-my-hi';
     const map = {};
     items.forEach((item) => {
       let ts = item.timestamp;
-      let key = '';
-      if (typeof ts === 'string') key = ts.substring(0, 10);
-      else if (typeof ts === 'number') key = new Date(ts).toISOString().substring(0, 10);
+      let key = tsDateKey(ts);
       if (key) map[key] = (map[key] || 0) + (valueFn ? valueFn(item) : 1);
     });
     return map;
@@ -5145,10 +5040,6 @@ window.name = 'oh-my-hi';
       + '<div class="heatmap-cell" data-level="4"></div>'
       + '<span>' + t('more') + '</span>'
       + '</div></div>';
-  }
-
-  function dateKey(d) {
-    return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
   }
 
   // ── Insights page ──
@@ -5248,7 +5139,7 @@ window.name = 'oh-my-hi';
         }
 
         var sourceLabel = t('insightsSource_' + ins.source) || ins.source || '';
-        listHtml += '<div class="insight-row" data-sev="' + escapeHtml(ins.severity || 'low') + '"' + actionAttr + '>'
+        listHtml += '<div class="insight-row" data-sev="' + escapeHtml(ins.severity || 'low') + '" data-source="' + escapeHtml(ins.source || '') + '"' + actionAttr + '>'
           + '<span class="insight-row-dot" data-sev="' + escapeHtml(ins.severity || 'low') + '"></span>'
           + '<div class="insight-row-body">'
           + '<div class="insight-row-header">'
@@ -5308,6 +5199,8 @@ window.name = 'oh-my-hi';
       + '<tr><td class="help-param-code"><code>/omh --disable-auto</code></td><td>' + t('helpParamDisableAuto') + '</td></tr>'
       + '<tr><td class="help-param-code"><code>/omh --update</code></td><td>' + t('helpParamUpdate') + '</td></tr>'
       + '<tr><td class="help-param-code"><code>/omh --status</code></td><td>' + t('helpParamStatus') + '</td></tr>'
+      + '<tr><td class="help-param-code"><code>/omh --enable-auto-update</code></td><td>' + t('helpParamEnableAutoUpdate') + '</td></tr>'
+      + '<tr><td class="help-param-code"><code>/omh --disable-auto-update</code></td><td>' + t('helpParamDisableAutoUpdate') + '</td></tr>'
       + '<tr><td class="help-param-code"><code>/omh &lt;path&gt; [path...]</code></td><td>' + t('helpParamPaths') + '</td></tr>'
       + '</tbody></table>'
       + '</div></div>';
@@ -5316,6 +5209,19 @@ window.name = 'oh-my-hi';
     function breadcrumb(parent, icon, label) {
       return '<span class="help-breadcrumb">' + parent + ' ›</span> ' + icon + ' ' + label;
     }
+
+    // 📊 Overview (control panel)
+    html += '<div class="section">'
+      + '<div class="section-title">📊 ' + t('navOverview') + '</div>'
+      + '<div class="card help-list">'
+      + helpRow('helpOvKpis', 'helpOvKpisDesc', '▦')
+      + helpRow('helpOvDailyCalls', 'helpOvDailyCallsDesc', '📊')
+      + helpRow('helpOvToCheck', 'helpOvToCheckDesc', '⚠️')
+      + helpRow('helpOvHealth', 'helpOvHealthDesc', '❤️')
+      + helpRow('helpOvContext', 'helpOvContextDesc', '🪟')
+      + helpRow('helpOvHourly', 'helpOvHourlyDesc', '🕒')
+      + helpRow('helpOvItems', 'helpOvItemsDesc', '🧩')
+      + '</div></div>';
 
     // 🧰 Multi-tool (Claude Code + Codex)
     html += '<div class="section">'
@@ -5420,6 +5326,14 @@ window.name = 'oh-my-hi';
       + helpRow('helpExport', 'helpExportDesc', '📤')
       + helpRow('helpFtsSearch', 'helpFtsSearchDesc', '🔍')
       + helpRow('helpMultiMachine', 'helpMultiMachineDesc', '🖥️')
+      + '</div></div>';
+
+    // 🔄 Updates & data
+    html += '<div class="section">'
+      + '<div class="section-title">🔄 ' + t('helpUpdatesTitle') + '</div>'
+      + '<div class="card help-list">'
+      + helpRow('helpAutoUpdate', 'helpAutoUpdateDesc', '🔄')
+      + helpRow('helpDataLocation', 'helpDataLocationDesc', '💾')
       + '</div></div>';
 
     // Data parsing reference
@@ -6418,7 +6332,7 @@ window.name = 'oh-my-hi';
       const rowStyle = 'display:flex;align-items:flex-start;border-radius:6px;cursor:pointer;'
         + 'background:' + rowBg + ';outline:' + outline + ';opacity:' + (dimmed ? 0.35 : 1) + ';'
         + 'transition:background 0.1s,opacity 0.15s;'
-        + (isSub ? 'margin-left:28px;padding-left:10px;border-left:2px solid var(--cw-mcp-ring);' : '');
+        + (isSub ? 'margin-left:28px;padding-left:10px;' : '');
 
       html += '<div data-cw-item="' + i + '" style="' + rowStyle + '">';
       const dotSz = (evt.kind === 'user' || evt.kind === 'compact') ? 10 : 7;
@@ -7550,10 +7464,8 @@ window.name = 'oh-my-hi';
         html += '<div class="section"><div class="section-title">' + t('topUsed') + '</div><div class="popular-grid">';
         topUsed.forEach((pair, i) => {
           const bgColor = rankColors[i] || '#6b7280';
-          let cardStyle = 'border-top:3px solid ' + bgColor;
-          if (i === 0) cardStyle += ';background:linear-gradient(135deg, #eef2ff 0%, #e0e7ff 100%)';
           const rankClass = 'popular-card popular-card-ranked' + (i === 0 ? ' popular-rank-1' : '');
-          html += '<div class="' + rankClass + '" style="' + cardStyle + '" data-action="goto-detail" data-category="' + currentView + '" data-name="' + escapeHtml(pair[0]) + '">'
+          html += '<div class="' + rankClass + '" data-action="goto-detail" data-category="' + currentView + '" data-name="' + escapeHtml(pair[0]) + '">'
             + '<div class="pop-badges">' + typeBadge(currentView) + parentBadge(currentView, pair[0]) + '</div>'
             + '<div class="pop-rank-big" style="color:' + bgColor + '">' + (i + 1) + '</div>'
             + '<div class="pop-name">' + escapeHtml(pair[0]) + '</div>'
@@ -7630,8 +7542,7 @@ window.name = 'oh-my-hi';
             ? '<span class="badge badge-enabled">Enabled</span>'
             : '<span class="badge badge-disabled">Disabled</span>';
         } else if (currentView === 'memory') {
-          let mtype = item.type || 'reference';
-          extra = '<span class="badge badge-type-' + mtype + '">' + mtype + '</span>';
+          extra = memoryTypeBadge(item.type);
         } else if (currentView === 'teams') {
           extra = '<span class="ri-time">' + (item.members || 0) + ' members</span>';
         } else if (currentView === 'todos') {
@@ -7934,9 +7845,8 @@ window.name = 'oh-my-hi';
   }
 
   function renderMemoryDetail(item) {
-    const mtype = item.type || 'reference';
     let html = '<div class="detail-meta">';
-    html += '<div class="meta-card"><div class="meta-label">TYPE</div><div class="meta-value"><span class="badge badge-type-' + mtype + '">' + mtype + '</span></div></div>';
+    html += '<div class="meta-card"><div class="meta-label">TYPE</div><div class="meta-value">' + memoryTypeBadge(item.type) + '</div></div>';
     if (item.scope) html += metaCard('SCOPE', item.scope);
     html += '</div>';
 
@@ -8067,75 +7977,6 @@ window.name = 'oh-my-hi';
       + '<div class="meta-label">' + label + '</div>'
       + '<div class="meta-value">' + escapeHtml(String(value)) + '</div>'
       + '</div>';
-  }
-
-  // ── Health Score card ──
-  // billboard.js gauge (left) + factor details (right), always visible.
-
-  function drawHealthGauge(score) {
-    makeChart({
-      bindto: '#health-gauge-chart',
-      data: {
-        columns: [['score', score]],
-        type: 'gauge',
-      },
-      gauge: {
-        label: { show: false },
-        title: String(score),
-        width: 18,
-        max: 100,
-        min: 0,
-      },
-      color: {
-        pattern: ['#ef4444', '#f97316', '#eab308', '#22c55e'],
-        threshold: { values: [40, 60, 80, 100] },
-      },
-      size: { height: 60 },
-      legend: { show: false },
-      tooltip: {
-        format: {
-          value: function(value) { return value + ' / 100'; },
-        },
-      },
-    });
-  }
-
-  function renderHealthScoreCard(healthData) {
-    var gradeLabel = { A: t('healthGradeA'), B: t('healthGradeB'), C: t('healthGradeC'), D: t('healthGradeD'), F: t('healthGradeF') };
-    var gradeColor = healthData.total >= 80 ? '#22c55e' : healthData.total >= 60 ? '#eab308' : healthData.total >= 40 ? '#f97316' : '#ef4444';
-    var factorNames = {
-      contextEfficiency: t('healthFactorContext'),
-      costTrend: t('healthFactorCostTrend')
-        + '<span class="health-factor-help" data-tooltip="' + escapeHtml(t('healthCostTrendHelp')) + '">?</span>',
-      unusedItems: t('healthFactorUnused'),
-      cacheEfficiency: t('healthFactorCache'),
-      coverage: t('healthFactorCoverage'),
-    };
-    var html = '<div class="health-score-card card">'
-      + '<div class="health-score-top">'
-      + '<span class="health-score-title">' + t('healthScoreTitle') + '</span>'
-      + '<span class="health-grade" style="color:' + gradeColor + '">' + (gradeLabel[healthData.grade] || healthData.grade) + '</span>'
-      + '</div>'
-      + '<div class="health-score-inner">'
-      + '<div class="health-score-header">'
-      + '<div id="health-gauge-chart"></div>'
-      + '</div>'
-      + '<div class="usage-bar-rows">';
-    for (var i = 0; i < healthData.factors.length; i++) {
-      var f = healthData.factors[i];
-      var barColor = f.score >= 80 ? '#22c55e' : f.score >= 60 ? '#eab308' : f.score >= 40 ? '#f97316' : '#ef4444';
-      var isNa = f.na === true;
-      html += '<div class="usage-bar-row">'
-        + '<div class="usage-bar-row-label">' + (factorNames[f.name] || f.name) + '</div>'
-        + '<div class="usage-bar-row-track">'
-        + (isNa ? '' : '<div class="usage-bar-row-fill" style="width:' + f.score + '%;background:' + barColor + '"></div>')
-        + '</div>'
-        + '<div class="usage-bar-row-value">' + (isNa ? t('healthNa') : f.score) + '</div>'
-        + '<div class="usage-bar-row-pct">' + Math.round(f.weight * 100) + '%</div>'
-        + '</div>';
-    }
-    html += '</div></div></div>';
-    return html;
   }
 
   // ── Session Compare View ──
@@ -8284,53 +8125,12 @@ window.name = 'oh-my-hi';
     });
   }
 
-  // ── Optimizer section ──
-  // Compact insights banner shown on #overview — replaces the full optimizer section.
-  // Full detail lives on the #insights page.
-  function renderInsightsBanner(usage, days, sd) {
-    var suggestions = computeSuggestions({
-      tokenEntries: filterByPeriod(usage.tokenEntries || [], 'timestamp', days),
-      contextStats: sd.contextStats,
-      skills: sd.skills || [], agents: sd.agents || [],
-      mcpServers: sd.mcpServers || [],
-      memory: sd.memory || [],
-      usage: { skills: usage.skills || [], agents: usage.agents || [], mcpCalls: usage.mcpCalls || [] },
-      dismissed: [],
-      calcEntryCostFn: calcEntryCost,
-    });
-
-    var lintCount = getLintWarnings().length;
-    var counts = { high: 0, medium: lintCount, low: 0 };
-    for (var i = 0; i < suggestions.length; i++) {
-      var sev = suggestions[i].severity;
-      if (counts[sev] != null) counts[sev]++;
-    }
-    var total = counts.high + counts.medium + counts.low;
-    if (total === 0) return '';
-
-    var top = suggestions.length > 0 ? t(suggestions[0].titleKey) : '';
-
-    var countsHtml = '';
-    if (counts.high > 0)   countsHtml += '<span class="insights-count high">● ' + counts.high + ' High</span>';
-    if (counts.medium > 0) countsHtml += '<span class="insights-count medium">● ' + counts.medium + ' Medium</span>';
-    if (counts.low > 0)    countsHtml += '<span class="insights-count low">● ' + counts.low + ' Low</span>';
-
-    return '<div class="card insights-banner">'
-      + '<div class="insights-banner-head">'
-      + '<span class="section-title">' + t('insightsBannerTitle') + '</span>'
-      + '<a class="insights-banner-link" data-action="nav" data-view="insights" href="#insights">'
-      + t('insightsBannerViewAll') + ' →</a>'
-      + '</div>'
-      + '<div class="insights-banner-counts">' + countsHtml + '</div>'
-      + (top ? '<div class="insights-banner-top">' + escapeHtml(top) + '</div>' : '')
-      + '</div>';
-  }
-
   // Rule-based suggestions for #insights page, powered by context-optimizer.mjs.
 
   function renderOptimizerSection(usage, days, sd) {
     var suggestions = computeSuggestions({
       tokenEntries: filterByPeriod(usage.tokenEntries || [], 'timestamp', days),
+      trendEntries: usage.tokenEntries || [],
       contextStats: sd.contextStats,
       skills: sd.skills || [], agents: sd.agents || [],
       mcpServers: sd.mcpServers || [],
@@ -8634,130 +8434,6 @@ window.name = 'oh-my-hi';
     }
     html += '</div>';
     return html;
-  }
-
-  // Harness usage bar card — thin wrapper around renderBarCard
-  function renderUsageBarCard(totalAll, totalSkills, totalAgents, totalCommands, changeAll, changeSkills, changeAgents, changeCommands) {
-    return renderBarCard({
-      titleKey: 'totalUsage',
-      total: totalAll,
-      totalChange: changeAll,
-      rows: [
-        { label: t('skillCalls'),  value: totalSkills,   change: changeSkills,   color: 'var(--color-skills)' },
-        { label: t('agentCalls'),  value: totalAgents,   change: changeAgents,   color: 'var(--color-agents)' },
-        { label: t('commands'),    value: totalCommands, change: changeCommands, color: '#6366f1' },
-      ],
-    });
-  }
-
-  // F5: Compact regression card shown inside the Overview card-grid.
-  // Returns empty string when there's no regression — opt-in by data.
-  // - Shows the worst regressed metric as the headline (icon + delta %).
-  // - Secondary metric count appears as "+1 more" when both metrics
-  //   regressed.
-  // - Probable cause (cache drop / opus shift) or generic hint is
-  //   embedded as a title attribute (hover tooltip) and the card
-  //   navigates to that sub-page on click.
-  function renderRegressionCard(usage) {
-    const report = computeRegression(usage, Date.now());
-    if (!report.anyRegressed) return '';
-
-    // Pick the "worst" metric (highest deltaPct) as the headline.
-    const candidates = [];
-    if (report.latency && report.latency.regressed) {
-      candidates.push({
-        metric: 'latency',
-        icon: '🐢',
-        label: t('regressionLatency'),
-        delta: report.latency.deltaPct,
-        detail: fmtMs(report.latency.previous) + ' → ' + fmtMs(report.latency.current),
-      });
-    }
-    if (report.tokensPerTurn && report.tokensPerTurn.regressed) {
-      candidates.push({
-        metric: 'tokensPerTurn',
-        icon: '📈',
-        label: t('regressionTokens'),
-        delta: report.tokensPerTurn.deltaPct,
-        detail: fmtCompact(Math.round(report.tokensPerTurn.previous)) + ' → ' + fmtCompact(Math.round(report.tokensPerTurn.current)),
-      });
-    }
-    candidates.sort((a, b) => b.delta - a.delta);
-    const worst = candidates[0];
-    const moreCount = candidates.length - 1;
-
-    // Determine the most actionable insight + navigation target.
-    // Priority: data-driven causes > generic per-metric hints.
-    let insightText = '';
-    let linkView = 'tokens-prompt';
-    let linkLabel = t('regressionCheckLatency');
-    if (report.causes && report.causes.cacheDrop) {
-      const c = report.causes.cacheDrop;
-      insightText = t('regressionCauseCacheDrop', fmtPct(c.prev * 100), fmtPct(c.cur * 100));
-      linkView = 'tokens-prompt';
-      linkLabel = t('regressionCheckCache');
-    } else if (report.causes && report.causes.opusShift) {
-      const c = report.causes.opusShift;
-      insightText = t('regressionCauseOpusShift', fmtPct(c.prev * 100), fmtPct(c.cur * 100));
-      linkView = 'tokens';
-      linkLabel = t('regressionCheckModels');
-    } else if (worst.metric === 'latency') {
-      insightText = t('regressionGenericLatency');
-      linkView = 'tokens-prompt';
-      linkLabel = t('regressionCheckLatency');
-    } else {
-      insightText = t('regressionGenericTokens');
-      linkView = 'tokens-session';
-      linkLabel = t('regressionCheckSessions');
-    }
-
-    const moreBadge = moreCount > 0
-      ? '<span class="regression-card-more">+' + moreCount + ' ' + t('regressionMore') + '</span>'
-      : '';
-
-    // Build the comparison period text using explicit dates so there's
-    // no confusion with the sidebar's period filter (7d/30d/all). The
-    // regression check is ALWAYS today-anchored, independent of filter.
-    const fmtShortDate = (ms) => {
-      const d = new Date(ms);
-      return String(d.getMonth() + 1).padStart(2, '0') + '.' + String(d.getDate()).padStart(2, '0');
-    };
-    // current window is [start, end) — show [start, end-1day] as inclusive
-    const curStartStr = fmtShortDate(report.currentWindow.startMs);
-    const curEndStr = fmtShortDate(report.currentWindow.endMs - 1);
-    const prevStartStr = fmtShortDate(report.previousWindow.startMs);
-    const prevEndStr = fmtShortDate(report.previousWindow.endMs - 1);
-    const periodHtml = '<div class="regression-card-period-bars">'
-      +   '<div class="regression-card-period-bar prev"></div>'
-      +   '<div class="regression-card-period-bar cur"></div>'
-      + '</div>'
-      + '<div class="regression-card-period-cols">'
-      +   '<div class="regression-card-period-col">'
-      +     '<span class="regression-card-period-col-label">' + t('regressionPrev7d') + '</span> '
-      +     '<span class="regression-card-period-col-dates">' + prevStartStr + '~' + prevEndStr + '</span>'
-      +   '</div>'
-      +   '<div class="regression-card-period-col">'
-      +     '<span class="regression-card-period-col-label cur">' + t('regressionLast7d') + '</span> '
-      +     '<span class="regression-card-period-col-dates">' + curStartStr + '~' + curEndStr + '</span>'
-      +   '</div>'
-      + '</div>';
-
-    return '<div class="stat-card regression-card" '
-      + 'data-action="nav-view" data-view="' + linkView + '" '
-      + 'title="' + escapeHtml(insightText + ' — ' + linkLabel) + '">'
-      + '<div class="stat-label"><span class="regression-card-warn">⚠️</span> ' + t('regressionTitle') + '</div>'
-      + '<div class="regression-card-period">' + periodHtml + '</div>'
-      + '<div class="stat-value regression-card-value">'
-      +   '<span class="regression-card-icon">' + worst.icon + '</span>'
-      +   '<span class="regression-card-delta">+' + fmtPct(worst.delta) + '</span>'
-      + '</div>'
-      + '<div class="stat-change regression-card-sub">'
-      +   '<span class="regression-card-metric-label">' + escapeHtml(worst.label) + '</span>'
-      +   '<span class="regression-card-detail">' + escapeHtml(worst.detail) + '</span>'
-      +   moreBadge
-      + '</div>'
-      + '<div class="regression-card-link">' + escapeHtml(linkLabel) + ' →</div>'
-      + '</div>';
   }
 
   // F2: Efficiency section for a skill or agent detail page

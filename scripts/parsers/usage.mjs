@@ -533,6 +533,10 @@ async function parseTranscriptFile(jsonlPath, cutoffMs) {
   const promptStats = []; // user prompt stats
   const latencyEntries = []; // response latency
   const lastHumanTs = {}; // sessionId → timestamp of last human message
+  // Claude Code writes one line per content block of an assistant message, each
+  // repeating the message's full usage. Count a message's tokens once; a later
+  // block's tool_use still sets the context the message is attributed to.
+  const entryByMessageId = new Map(); // message.id → token entry
 
   for (const line of raw.split('\n')) {
     const trimmed = line.trim();
@@ -623,17 +627,17 @@ async function parseTranscriptFile(jsonlPath, cutoffMs) {
             const skillName = item.input?.skill;
             if (skillName) {
               sessionContext[sid] = { type: 'skill', name: skillName };
-              skills.push({ name: skillName, timestamp: tsMs || entry.timestamp, sessionId: entry.sessionId ?? null });
+              skills.push({ id: item.id, name: skillName, timestamp: tsMs || entry.timestamp, sessionId: entry.sessionId ?? null });
             }
           } else if (item.name === 'Agent') {
             const agentName = item.input?.subagent_type ?? item.input?.description ?? 'unknown';
             sessionContext[sid] = { type: 'agent', name: agentName };
-            agents.push({ name: agentName, timestamp: tsMs || entry.timestamp, sessionId: entry.sessionId ?? null });
+            agents.push({ id: item.id, name: agentName, timestamp: tsMs || entry.timestamp, sessionId: entry.sessionId ?? null });
           } else if (item.name.startsWith('mcp__')) {
             const parts = item.name.split('__');
             const serverName = parts[1] || item.name;
             sessionContext[sid] = { type: 'mcp', name: serverName };
-            mcpCalls.push({ name: serverName, tool: item.name, timestamp: tsMs || entry.timestamp, sessionId: entry.sessionId ?? null });
+            mcpCalls.push({ id: item.id, name: serverName, tool: item.name, timestamp: tsMs || entry.timestamp, sessionId: entry.sessionId ?? null });
           } else {
             // Built-in tools (Read, Write, Edit, Bash, Grep, Glob, etc.)
             sessionContext[sid] = { type: 'tool', name: item.name };
@@ -643,9 +647,16 @@ async function parseTranscriptFile(jsonlPath, cutoffMs) {
 
       // Token usage with context
       const usage = entry.message?.usage;
-      if (usage) {
+      const messageId = entry.message?.id ?? null;
+      const seen = messageId ? entryByMessageId.get(messageId) : null;
+      if (usage && seen) {
         const ctx = sessionContext[sid] || { type: 'general', name: 'conversation' };
-        tokenEntries.push({
+        seen.context = ctx.type;
+        seen.contextName = ctx.name;
+      } else if (usage) {
+        const ctx = sessionContext[sid] || { type: 'general', name: 'conversation' };
+        const tokenEntry = {
+          messageId,
           timestamp: tsMs || entry.timestamp,
           model: entry.message?.model || 'unknown',
           // Provider-normalized token fields (inputTokens, outputTokens,
@@ -654,7 +665,9 @@ async function parseTranscriptFile(jsonlPath, cutoffMs) {
           context: ctx.type,
           contextName: ctx.name,
           sessionId: entry.sessionId ?? null,
-        });
+        };
+        tokenEntries.push(tokenEntry);
+        if (messageId) entryByMessageId.set(messageId, tokenEntry);
       }
     } catch {
       // Skip on parse failure

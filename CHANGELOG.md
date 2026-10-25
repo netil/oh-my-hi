@@ -1,5 +1,35 @@
 # Changelog
 
+## [0.16.0] - 2026-10-25
+
+### Added
+- **Overview control panel**: the overview is rebuilt around a KPI strip (calls for the period; tokens, sessions and cost for 7 days; health score; context budget) with sparklines, a daily calls chart with token spike days shaded, a "to check" list (spikes, regressions, weak health factors, lint warnings), compact health score and context budget panels, and a weekday × hour activity grid with a legend and per-cell tooltips (responses, sessions, tokens).
+- **Harness items table**: skills, agents, MCP servers and principles with calls, share of calls, estimated context tokens and last use; kind chips and "unused only" / "context ≥ 1M" filters. Hovering a row fills the summary panel (description, daily calls, latest calls); clicking a row or the panel's name opens the item's detail page.
+- **Self-update**: a marketplace install now installs new releases by itself. `/omh` and the session-end auto-refresh check at most every 12 hours, run `claude plugin marketplace update` + `claude plugin update` in the background, and the next `/omh` reports it. `--enable-auto-update` / `--disable-auto-update` control it and `--status` shows the last attempt. It stays off in CI and when `DISABLE_AUTOUPDATER` / `DISABLE_UPDATES` is set (unless `FORCE_AUTOUPDATE_PLUGINS=1`).
+- **Per-item startup context**: `contextStats.items` keeps each skill description, MCP server and principle's share of the startup estimate.
+
+### Changed
+- **Usage data survives updates**: a marketplace install keeps its output (SQLite DBs, caches) in the plugin's persistent data folder `plugins/data/oh-my-hi-<marketplace>/` instead of its version folder, which Claude Code replaced on every update. The first run copies the newest older version's data. A server still running from an older version is replaced without opening a new tab, and the Stop hook is repointed to the installed version.
+- **Sidebar**: grouped as Overview / Insights, Tokens & cost, Usage analysis, Components; stroke icons and category color dots replace emoji; alert badges for insights and lint; the active item is a tint instead of a left border.
+- **Insights page**: findings fill a multi-column grid; anomaly rows have a red background; severity shows through the whole border.
+- **API usage window**: the dashboard fetches at least 60 days (and the previous equal-length period) from local midnight, so "% vs previous period" figures compare against real data instead of showing +100%.
+- **One pricing table**: `templates/pricing.mjs` is shared by the dashboard, exports and the weekly digest; Claude 5 models (Opus 5 / 5.5, Sonnet 5.5, Haiku 5.5, Fable, Mythos) are priced, and the pricing page parser follows the page's current layout.
+- **Help page, GUIDE and SPEC** describe the new overview, self-update and data location.
+
+### Fixed
+- **Token counts roughly doubled**: transcripts write one line per content block, each repeating the message's usage; entries are now unique per message id (SQLite schema v4). Pre-v4 rows that still have transcripts behind them are replaced once.
+- **Skill / agent / MCP counts accumulated on every rebuild**: these are now stored one row per call, keyed by the tool_use id, so re-parsing never adds to them; the API returns each call with its own time.
+- **MCP usage was always 0 in API mode**: calls are reported under their server name, matching the MCP server catalog.
+- **Days shifted by the UTC offset**: daily charts, budgets and anomaly days group by the local calendar day.
+- **Cost showed $0 for Claude 5 models** (missing from the fallback table and the page parser).
+- **Health score "cost trend" was N/A for the 7-day period**: it now compares against the 7 days before, outside the selected window.
+- **Security**: the local server rejects foreign `Host` / `Origin` headers (DNS rebinding) and serves only the dashboard's own files (no DB, cache or data.json); settings `env` and MCP `headers` values are masked.
+- **Robustness**: a malformed settings.json or plugin file no longer aborts the build; YAML block scalars (`|`, `>`) in frontmatter are parsed; the legacy DB split keeps its source until it completes; tests run in an isolated output folder instead of the real one.
+- **Mobile layout**: wide tables no longer widen the page past the screen.
+
+### Upgrade note
+- 0.15.0 and earlier have no self-update: update once with `/omh --update` (or `claude plugin update oh-my-hi@oh-my-hi`). From 0.16.0 on, updates install automatically.
+
 ## [0.15.0] - 2026-07-06
 
 ### Changed

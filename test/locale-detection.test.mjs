@@ -63,25 +63,25 @@ describe('detectSystemLocale source — supported locales', () => {
 
   it('maps ko from LANG', () => {
     const fnIdx = src.indexOf('function detectSystemLocale');
-    const snippet = src.slice(fnIdx, fnIdx + 600);
+    const snippet = src.slice(fnIdx, src.indexOf('\n}\n', fnIdx));
     assert.ok(snippet.includes("'ko'"), 'ko mapped');
   });
 
   it('maps ja from LANG', () => {
     const fnIdx = src.indexOf('function detectSystemLocale');
-    const snippet = src.slice(fnIdx, fnIdx + 800);
+    const snippet = src.slice(fnIdx, src.indexOf('\n}\n', fnIdx));
     assert.ok(snippet.includes("'ja'"), 'ja mapped');
   });
 
   it('maps zh from LANG', () => {
     const fnIdx = src.indexOf('function detectSystemLocale');
-    const snippet = src.slice(fnIdx, fnIdx + 800);
+    const snippet = src.slice(fnIdx, src.indexOf('\n}\n', fnIdx));
     assert.ok(snippet.includes("'zh'"), 'zh mapped');
   });
 
   it('defaults to en', () => {
     const fnIdx = src.indexOf('function detectSystemLocale');
-    const snippet = src.slice(fnIdx, fnIdx + 600);
+    const snippet = src.slice(fnIdx, src.indexOf('\n}\n', fnIdx));
     assert.ok(snippet.includes("systemLocale = 'en'"), 'en default set');
   });
 });
@@ -97,21 +97,21 @@ describe('writeHtml source — locale file handling', () => {
 
   it('loads existing locale file when present', () => {
     const fnIdx = src.indexOf('function writeHtml');
-    const snippet = src.slice(fnIdx, fnIdx + 900);
+    const snippet = src.slice(fnIdx, src.indexOf('\n}\n', fnIdx));
     assert.ok(snippet.includes('fs.existsSync(localePath)'), 'checks file exists');
     assert.ok(snippet.includes('localeObj._lang'), 'sets _lang marker');
   });
 
   it('creates en.json-based template for unknown locale', () => {
     const fnIdx = src.indexOf('function writeHtml');
-    const snippet = src.slice(fnIdx, fnIdx + 900);
+    const snippet = src.slice(fnIdx, src.indexOf('\n}\n', fnIdx));
     assert.ok(snippet.includes('fs.writeFileSync(localePath'), 'writes template');
     assert.ok(snippet.includes('created template'), 'logs creation notice');
   });
 
   it('always loads en.json as base regardless of locale', () => {
     const fnIdx = src.indexOf('function writeHtml');
-    const snippet = src.slice(fnIdx, fnIdx + 900);
+    const snippet = src.slice(fnIdx, src.indexOf('\n}\n', fnIdx));
     assert.ok(snippet.includes('en.json'), 'en.json always loaded');
   });
 });
@@ -206,14 +206,14 @@ describe('notifyUpdateIfAvailable — locale-aware message', () => {
 
   it('shows Korean message for ko locale', () => {
     const fnIdx = src.indexOf('function notifyUpdateIfAvailable');
-    const snippet = src.slice(fnIdx, fnIdx + 700);
-    assert.ok(snippet.includes("locale === 'ko'"), 'ko branch');
+    const snippet = src.slice(fnIdx, src.indexOf('\n}\n', fnIdx));
+    assert.ok(snippet.includes("=== 'ko'"), 'ko branch');
     assert.ok(snippet.includes('최신 버전'), 'Korean text in ko branch');
   });
 
   it('shows English message for non-ko locale (en/ja/zh/fr)', () => {
     const fnIdx = src.indexOf('function notifyUpdateIfAvailable');
-    const snippet = src.slice(fnIdx, fnIdx + 700);
+    const snippet = src.slice(fnIdx, src.indexOf('\n}\n', fnIdx));
     assert.ok(snippet.includes('available'), 'English text in else branch');
     assert.ok(snippet.includes('/omh --update'), 'update command shown');
   });
@@ -222,7 +222,7 @@ describe('notifyUpdateIfAvailable — locale-aware message', () => {
     // Logic: only locale === 'ko' gets Korean; all others get English
     // Verify source has no other locale branches in notifyUpdateIfAvailable
     const fnIdx = src.indexOf('function notifyUpdateIfAvailable');
-    const snippet = src.slice(fnIdx, fnIdx + 700);
+    const snippet = src.slice(fnIdx, src.indexOf('\n}\n', fnIdx));
     const koBranchCount = (snippet.match(/'ko'/g) || []).length;
     // Should have exactly one 'ko' check (no ja/zh/fr branches)
     assert.equal(koBranchCount, 1, 'only one locale branch (ko), others fall through to English');

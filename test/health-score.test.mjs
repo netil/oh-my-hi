@@ -199,3 +199,12 @@ describe('cost trend factor', () => {
     assert.equal(costFactor.na, true);
   });
 });
+
+describe('scoring at a past moment (now)', () => {
+  it('ignores usage after `now`', () => {
+    // all three items were only used today; a week ago they were unused
+    const report = computeHealthScore(baseInput({ now: NOW - 7 * DAY }));
+    const factor = report.factors.find(f => f.name === 'unusedItems');
+    assert.equal(factor.score, 0);
+  });
+});

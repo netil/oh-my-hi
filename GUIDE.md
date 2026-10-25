@@ -47,21 +47,19 @@ Categories with more than 50 items show only the first 50 when expanded, followe
 
 ## Main Pages
 
-### 📊 Harness (Overview)
+### 📊 Overview
 
-The landing page showing a high-level summary of your harness activity.
+The landing page is a control panel: what happened, what needs a look, and every harness item in one place.
 
 | Section | Description |
 |---------|-------------|
-| **Response Performance Regression** *(conditional)* | When last-7-days avg response latency or avg tokens per turn degrades by ≥15% vs. the previous 7 days, a compact warning card appears in the hero row. Shows the worst-regressed metric, a dual time-period bar (직전 7일 / 최근 7일) with explicit dates, probable cause (cache hit rate drop, Opus share increase) or a generic hint, and a click-through link to the most actionable sub-page. |
-| **Usage Bar Card** | Replaces the old 4 stat cards. Shows total usage as a headline number with its period-over-period change, then proportional horizontal bars for skill calls / agent calls / commands. Each bar row shows the raw count, linear %, and % change. Values go through `fmtCompact`. |
-| **Category Distribution** | Donut chart showing the proportion of skills, agents, and commands. |
-| **Daily Trend** | Line chart of daily activity (skills + agents + commands combined). |
-| **Popular Skills** | Top 5 most-used skills ranked by call count. |
-| **Context Budget** | Estimated token distribution between visible and invisible contexts. A canvas stacked bar shows the proportion of hidden (startup: CLAUDE.md, memory, skill descriptions, MCP tools, principles), brief (tool outputs), and full (user-visible) tokens. The top 8 context consumers are listed with their token count and visibility badge. Hidden startup tokens are multiplied by the number of sessions in the selected period. |
-| **Activity Heatmap** | GitHub-style calendar heatmap of daily activity intensity. |
-| **Recent Activity** | Timeline of the 10 most recent skill, agent, and command invocations. |
-| **Unused Items** | Skills, agents, and MCP servers that were registered but never called in the selected period. When more than 3 items are unused, a cleanup tip is shown suggesting how to reduce context loading. |
+| **KPI strip** | Calls in the selected period, then tokens, sessions and cost for the last 7 days, the health score and the context budget. Each shows the change against the equal period before (hidden when that period has no data) and a sparkline. |
+| **Daily calls** | Agent and skill calls per day, stacked. Token spike days (more than 2× the trailing 7-day average) get a red background. |
+| **To check** | Up to five items worth a look: token spikes, response-latency or tokens-per-turn regressions, weak health factors, structure warnings. Click one to open the related page. |
+| **Health score** | Weighted 0 ~ 100 score of context efficiency, cost trend, unused items, cache efficiency and coverage, with each factor's score and weight. |
+| **Context budget** | Estimated tokens that entered the context in the period, split into full, brief and hidden (startup context, multiplied by the period's sessions), with the four largest items. |
+| **Activity by hour** | Responses per weekday × hour. The legend explains the shading; hover a cell for its responses, sessions and tokens. |
+| **Harness items** | Skills, agents, MCP servers and principles, most called first, with calls, share of calls, context tokens and last use. Filter by kind, unused only or context ≥ 1M. Hover a row to see its description, daily calls and latest calls in the summary panel; click a row (or the name in the panel) to open its detail page. |
 
 ---
 
@@ -240,4 +238,10 @@ Enable auto-refresh with `/omh --enable-auto` to collect data on every session e
 
 ### Update
 
-Run `/omh --update` to check for and install the latest version. An update check also runs automatically once per day when you use `/omh`.
+New releases install automatically: `/omh` and the session-end auto-refresh check for a newer version at most every 12 hours and install it in the background. It loads in your next session (or after `/reload-plugins`), and the next `/omh` tells you it happened.
+
+- `/omh --update` checks and installs right away.
+- `/omh --disable-auto-update` turns automatic installs off; `/omh --enable-auto-update` turns them back on. `/omh --status` shows the state and the last attempt.
+- Nothing installs in CI or when Claude Code's updates are turned off (`DISABLE_AUTOUPDATER`, `DISABLE_UPDATES`); set `FORCE_AUTOUPDATE_PLUGINS=1` to allow plugin updates anyway.
+
+Usage data for a marketplace install lives in the plugin's data folder (`plugins/data/oh-my-hi-<marketplace>/`), so updates keep your history. The first run of a new version copies the data an older version kept in its own folder. If your Claude config directory sits in a cloud-synced folder, the SQLite files there are synced too.

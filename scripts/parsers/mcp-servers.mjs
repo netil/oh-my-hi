@@ -5,6 +5,16 @@ import fs from 'fs';
 import path from 'path';
 
 /**
+ * Replace every value of a key/value map with '***', keeping the key names.
+ * @param {Record<string, unknown>} obj
+ */
+function maskValues(obj) {
+  const masked = {};
+  for (const k of Object.keys(obj)) masked[k] = '***';
+  return masked;
+}
+
+/**
  * @param {string} configDir
  * @returns {Array<{ name: string, command: string, args: string[], type: string|null, envKeys: string[], sourcePath: string }>}
  */
@@ -32,13 +42,11 @@ export function parseMcpServers(configDir) {
       if (seen.has(name)) continue; // first source wins (avoid duplicates)
       seen.add(name);
 
-      // Construct raw JSON with env values masked
+      // Construct raw JSON with env and header values masked (headers carry
+      // auth tokens for http/sse servers, e.g. Authorization: Bearer …)
       const safeCfg = { ...cfg };
-      if (safeCfg.env) {
-        const maskedEnv = {};
-        for (const k of Object.keys(safeCfg.env)) maskedEnv[k] = '***';
-        safeCfg.env = maskedEnv;
-      }
+      if (safeCfg.env) safeCfg.env = maskValues(safeCfg.env);
+      if (safeCfg.headers) safeCfg.headers = maskValues(safeCfg.headers);
 
       result.push({
         name,

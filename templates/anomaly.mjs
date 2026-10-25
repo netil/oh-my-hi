@@ -6,6 +6,8 @@
 // after the fact. Follows the project's 7-day rolling-window convention
 // (see cache-ttl.mjs), but the baseline EXCLUDES the day being evaluated.
 
+import { tsDateKey } from './date-key.mjs';
+
 /**
  * @typedef {{ tokens: number, cost: number }} DayUsage
  * @typedef {{ dailyMap: Record<string, DayUsage>, sortedDates: string[] }} DailySeriesResult
@@ -37,9 +39,8 @@ export function buildDailyUsageSeries(tokenEntries, calcEntryCostFn) {
   /** @type {Record<string, DayUsage>} */
   const dailyMap = {};
   tokenEntries.forEach((e) => {
-    const d = new Date(typeof e.timestamp === 'number' ? e.timestamp : new Date(e.timestamp));
-    if (isNaN(d.getTime())) return;
-    const dk = d.toISOString().substring(0, 10);
+    const dk = tsDateKey(e.timestamp);
+    if (!dk) return;
     if (!dailyMap[dk]) dailyMap[dk] = { tokens: 0, cost: 0 };
     dailyMap[dk].tokens += (e.rawInput || 0) + (e.outputTokens || 0) + (e.cacheRead || 0) + (e.cacheCreation || 0);
     if (calcEntryCostFn) dailyMap[dk].cost += calcEntryCostFn(e) || 0;

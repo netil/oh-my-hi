@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { tsDateKey } from '../templates/date-key.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, '..');
@@ -100,7 +101,7 @@ describe('Web UI — Templates', () => {
       assert.ok(js.includes('function tp(key)'), 'has tp() helper');
       assert.ok(js.includes("const ck = key + 'Codex'"), 'tp resolves {key}Codex variant');
       // render sites route through tp()
-      for (const call of ["tp('tokensDesc')", "tp('activityDesc')", "tp('visGlobalClaude')", "tp('cwe_ev6_label')", 'tp(catDesc.key)']) {
+      for (const call of ["tp('tokensDesc')", "tp('visGlobalClaude')", "tp('cwe_ev6_label')", 'tp(catDesc.key)']) {
         assert.ok(js.includes(call), 'routes through tp: ' + call);
       }
       // Codex doc links hidden on the category page
@@ -256,9 +257,10 @@ describe('Web UI — Templates', () => {
 
     it('should define MODEL_PRICING', () => {
       assert.ok(js.includes('MODEL_PRICING'));
-      assert.ok(js.includes('opus-4'));
-      assert.ok(js.includes('sonnet-4'));
-      assert.ok(js.includes('haiku-4'));
+      const pricing = fs.readFileSync(path.join(TEMPLATES, 'pricing.mjs'), 'utf-8');
+      for (const key of ['opus-4', 'sonnet-4', 'haiku-4', 'opus-5-5', 'sonnet-5-5', 'haiku-5-5']) {
+        assert.ok(pricing.includes(`'${key}'`), `missing pricing key: ${key}`);
+      }
     });
 
     it('should use localStorage for state persistence', () => {
@@ -280,9 +282,10 @@ describe('Web UI — Templates', () => {
       assert.ok(js.includes('budget-alert-dismiss'), 'dismiss button class');
     });
 
-    it('should have weekly digest card on overview', () => {
-      assert.ok(js.includes('function renderWeeklyDigestCard'), 'digest render function');
-      assert.ok(js.includes('DATA.weeklyDigest'), 'reads build-time digest from DATA');
+    it('should show the 7-day tokens / sessions / cost panels on overview', () => {
+      // Last 7 days against the 7 before, from usage (API mode fetches 60+ days)
+      assert.ok(js.includes("dayKeysEnding(new Date(), 14)"), '14-day window for the 7-day comparison');
+      for (const k of ["t('ovKpiTokens7')", "t('ovKpiSessions7')", "t('ovKpiCost7')"]) assert.ok(js.includes(k), k);
     });
 
     it('should have cache tips feature', () => {
@@ -690,18 +693,17 @@ describe('Web UI — Templates', () => {
       assert.ok(valLabelIdx < headValueIdx, 'value label rendered before total');
     });
 
-    it('should have daily usage anomaly section on overview', () => {
+    it('should list daily usage anomalies on overview', () => {
       // Pure detection logic lives in templates/anomaly.mjs (unit-tested in
-      // test/anomaly.test.mjs); app.js renders the list and binds navigation.
+      // test/anomaly.test.mjs); the overview lists spikes under "to check".
       assert.ok(js.includes('buildDailyUsageSeries'), 'daily series builder used');
       assert.ok(js.includes('detectDailyAnomalies'), 'anomaly detector used');
-      assert.ok(js.includes("t('anomalyTitle')"), 'section title localized');
-      assert.ok(js.includes("t('anomalyVsAvg'"), 'multiplier label localized');
+      assert.ok(js.includes("t('ovEventSpikeText'"), 'spike row text localized');
       // Clicking a flagged day reuses the existing custom-date-range path
       assert.ok(js.includes('data-action="goto-anomaly-day"'), 'row click action rendered');
       assert.ok(js.includes("[data-action=\"goto-anomaly-day\"]"), 'click handler bound');
-      // Token trend chart marks anomalous days via x-grid lines
-      assert.ok(js.includes('anomaly-grid-line'), 'grid line class used on token trend chart');
+      // Daily charts mark anomalous days via x-grid lines
+      assert.ok(js.includes('anomaly-grid-line'), 'grid line class used on daily charts');
     });
 
     it('should render changeBadge before total (% then number order)', () => {
@@ -904,11 +906,11 @@ describe('Web UI — Templates', () => {
     });
 
     // ── Nail-tip pattern removal ──────────────────────────────────────────────
-    it('regression-card uses border-top accent, not border-left', () => {
-      const idx = css.indexOf('.regression-card {');
-      const block = css.slice(idx, idx + 300);
-      assert.ok(block.includes('border-top'), 'regression-card has border-top accent');
-      assert.ok(!block.includes('border-left'), 'regression-card has no border-left');
+    it('uses no one-sided colored edge accents', () => {
+      // Severity and rank show through the whole border, a tint or text color
+      assert.ok(!/border-(left|top):\s*[2-9]px solid var\(--(negative|warning|accent|cw-mcp-ring)\)/.test(css), 'no colored edge band in CSS');
+      const appJs = fs.readFileSync(path.join(TEMPLATES, 'app.js'), 'utf-8');
+      assert.ok(!appJs.includes("'border-top:3px solid ' + bgColor"), 'popular cards have no colored top edge');
     });
 
     it('insight-row-dot is hidden (nail-tip circle dot removed)', () => {
@@ -925,11 +927,11 @@ describe('Web UI — Templates', () => {
       );
     });
 
-    it('insight rows use border-top per data-sev for severity indicator', () => {
+    it('insight rows color their whole border per data-sev for severity', () => {
       assert.ok(css.includes('.insight-row[data-sev="high"]'), 'high severity targets row via data-sev');
       const idx = css.indexOf('.insight-row[data-sev="high"]');
       const block = css.slice(idx, idx + 100);
-      assert.ok(block.includes('border-top'), 'border-top used as severity indicator');
+      assert.ok(block.includes('border-color'), 'whole border color used as severity indicator');
     });
   });
 
@@ -1010,5 +1012,73 @@ describe('Web UI — Templates', () => {
         assert.ok(val.length > 0, `ko.${key} is empty`);
       }
     });
+  });
+});
+
+// Behavior checks for app.js fixes. Functions are extracted from the browser
+// bundle and evaluated in isolation (same approach as number-format.test.mjs).
+describe('app.js — rendering/i18n fixes', () => {
+  let js;
+  const extract = (name) => {
+    const m = js.match(new RegExp('function ' + name + '\\([\\s\\S]*?\\n  }'));
+    if (!m) throw new Error('could not locate ' + name + ' in templates/app.js');
+    return m[0];
+  };
+  const bodyOf = (name) => {
+    const start = js.indexOf('function ' + name + '(');
+    const next = js.indexOf('\n  function ', start + 1);
+    return js.slice(start, next);
+  };
+  before(() => { js = fs.readFileSync(path.join(TEMPLATES, 'app.js'), 'utf-8'); });
+
+  it('session detail falls back to an existing render function', () => {
+    assert.ok(!js.includes('renderTokensAnalysis('), 'renderTokensAnalysis is not defined');
+    assert.ok(bodyOf('renderSessionDetail').includes('renderTokensSession()'));
+  });
+
+  it('t() honors intentionally empty translations instead of showing the key', () => {
+    // eslint-disable-next-line no-new-func
+    const t = new Function('I18N', 'currentLang', 'DATA', extract('t') + '\nreturn t;')(
+      { en: { amPrefix: '', hello: 'Hello {0}' }, ko: { amPrefix: '오전 ', unitCallCount: '' } }, 'ko', {});
+    assert.equal(t('amPrefix'), '오전 ');
+    assert.equal(t('unitCallCount'), '', 'empty ko value must not fall back to the key');
+    assert.equal(t('hello', 'x'), 'Hello x', 'missing ko key falls back to en');
+    assert.equal(t('nope'), 'nope', 'unknown key still returns the key');
+  });
+
+  it('memory type badge escapes the label and only allows known type classes', () => {
+    // eslint-disable-next-line no-new-func
+    const badge = new Function(extract('escapeHtml') + '\n'
+      + "const MEMORY_TYPES = ['user', 'feedback', 'project', 'reference'];\n"
+      + extract('memoryTypeBadge') + '\nreturn memoryTypeBadge;')();
+    assert.equal(badge('user'), '<span class="badge badge-type-user">user</span>');
+    assert.equal(badge(undefined), '<span class="badge badge-type-reference">reference</span>');
+    const evil = badge('x" onmouseover="alert(1)<img>');
+    assert.ok(!evil.includes('<img>') && !evil.includes('" onmouseover'), evil);
+    assert.ok(evil.startsWith('<span class="badge">'), 'unknown type gets no type class');
+  });
+
+  it('activity heatmap sums each row count', () => {
+    // eslint-disable-next-line no-new-func
+    const buildActivityMap = new Function('tsDateKey', extract('buildActivityMap') + '\nreturn buildActivityMap;')(tsDateKey);
+    const countOf = (r) => typeof r.count === 'number' ? r.count : 1;
+    const map = buildActivityMap([
+      { timestamp: '2026-10-01T01:00:00', count: 3 },
+      { timestamp: '2026-10-01T02:00:00' },
+    ], countOf);
+    assert.equal(map['2026-10-01'], 4);
+  });
+
+  it('sidebar listeners are bound once in init, not per render', () => {
+    assert.ok(!bodyOf('renderSidebar').includes("addEventListener('keydown'"), 'renderSidebar must not add keydown listeners');
+    assert.ok(!bodyOf('renderSidebarPeriod').includes('bindDelegatedTooltips('), 'renderSidebarPeriod must not rebind tooltips');
+    const init = bodyOf('init');
+    assert.ok(init.includes("sidebarNav.addEventListener('keydown'"));
+    assert.ok(init.includes('bindDelegatedTooltips(sidebarPeriodEl)'));
+  });
+
+  it('sidebar insight badge is memoized', () => {
+    assert.ok(bodyOf('renderSidebar').includes('sidebarInsightCount(usage, sd)'));
+    assert.ok(!bodyOf('renderSidebar').includes('computeAllInsights('), 'renderSidebar must not recompute insights directly');
   });
 });

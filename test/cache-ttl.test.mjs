@@ -8,7 +8,8 @@ import {
 } from '../templates/cache-ttl.mjs';
 
 // Helpers
-const ts = (dateStr) => new Date(dateStr).getTime();
+// Local wall-clock times: days are keyed by the local calendar day
+const ts = (dateStr) => new Date(dateStr.length === 10 ? dateStr + 'T12:00:00' : dateStr).getTime();
 const MODEL_PRICING = {
   'sonnet-4': { input: 3, output: 15, cacheRead: 0.3, cacheCreation: 3.75 },
   'haiku-4':  { input: 0.8, output: 4, cacheRead: 0.08, cacheCreation: 1 },
@@ -36,7 +37,7 @@ test('buildDailyCacheMap - groups entries by date', () => {
 
 test('buildDailyCacheMap - handles string timestamps', () => {
   const entries = [
-    { timestamp: '2026-03-05T12:00:00Z', cacheRead: 100, cacheCreation: 10 },
+    { timestamp: '2026-03-05T12:00:00', cacheRead: 100, cacheCreation: 10 },
   ];
   const { sortedDates } = buildDailyCacheMap(entries);
   assert.equal(sortedDates[0], '2026-03-05');
