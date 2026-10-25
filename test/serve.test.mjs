@@ -14,10 +14,10 @@ const ROOT = path.resolve(__dirname, '..');
 const TMP_OUT = fs.mkdtempSync(path.join(os.tmpdir(), 'omh-serve-'));
 process.env.OMH_OUTPUT_DIR = TMP_OUT;
 
-function get(server, pathname) {
+function get(server, pathname, headers = {}) {
   return new Promise((resolve, reject) => {
     const { port } = server.address();
-    const req = http.get(`http://127.0.0.1:${port}${pathname}`, (res) => {
+    const req = http.get(`http://127.0.0.1:${port}${pathname}`, { headers }, (res) => {
       let body = '';
       res.setEncoding('utf-8');
       res.on('data', (chunk) => { body += chunk; });
@@ -150,6 +150,86 @@ describe('serve.mjs — requestHandler', () => {
     it('should return 404', async () => {
       const res = await get(server, '/nonexistent-path-xyz');
       assert.strictEqual(res.status, 404);
+    });
+
+    it('should return 404 for a malformed %-escape', async () => {
+      const res = await get(server, '/static/%E0%A4%A');
+      assert.strictEqual(res.status, 404);
+    });
+  });
+
+  describe('Host / Origin guard (DNS rebinding)', () => {
+    it('accepts the loopback Host for the listening port', async () => {
+      const { port } = server.address();
+      const res = await get(server, '/open', { host: `localhost:${port}` });
+      assert.strictEqual(res.status, 200);
+    });
+
+    it('rejects a foreign Host with 403', async () => {
+      const { port } = server.address();
+      const res = await get(server, '/api/meta', { host: `evil.example:${port}` });
+      assert.strictEqual(res.status, 403);
+    });
+
+    it('rejects a loopback Host on a different port with 403', async () => {
+      const res = await get(server, '/open', { host: '127.0.0.1:1' });
+      assert.strictEqual(res.status, 403);
+    });
+
+    it('rejects a cross-site Origin with 403', async () => {
+      const res = await get(server, '/api/meta', { origin: 'http://evil.example' });
+      assert.strictEqual(res.status, 403);
+    });
+
+    it('accepts a same-origin Origin', async () => {
+      const { port } = server.address();
+      const res = await get(server, '/open', { origin: `http://127.0.0.1:${port}` });
+      assert.strictEqual(res.status, 200);
+    });
+  });
+
+  describe('static file allow-list', () => {
+    before(() => {
+      fs.mkdirSync(path.join(TMP_OUT, 'static'), { recursive: true });
+      fs.mkdirSync(path.join(TMP_OUT, 'cache'), { recursive: true });
+      fs.mkdirSync(path.join(TMP_OUT, 'db', '2026'), { recursive: true });
+      fs.mkdirSync(path.join(TMP_OUT, 'rescue'), { recursive: true });
+      fs.writeFileSync(path.join(TMP_OUT, 'index.html'), '<!doctype html>');
+      fs.writeFileSync(path.join(TMP_OUT, 'version.json'), '{"version":"0"}');
+      fs.writeFileSync(path.join(TMP_OUT, 'static', 'app-test.js'), '// app');
+      fs.writeFileSync(path.join(TMP_OUT, 'cache', 'mtime-index.json'), '{}');
+      fs.writeFileSync(path.join(TMP_OUT, 'db', '2026', 'x.sqlite'), 'db');
+      fs.writeFileSync(path.join(TMP_OUT, 'rescue', 'r.json'), '{}');
+      fs.writeFileSync(path.join(TMP_OUT, 'task-categories.json'), '{}');
+    });
+
+    for (const p of ['/', '/index.html', '/version.json', '/static/app-test.js']) {
+      it(`serves ${p}`, async () => {
+        const res = await get(server, p);
+        assert.strictEqual(res.status, 200);
+      });
+    }
+
+    for (const p of ['/data.json', '/cache/mtime-index.json', '/db/2026/x.sqlite', '/rescue/r.json',
+      '/task-categories.json', '/static/../data.json', '/static/%2e%2e/data.json']) {
+      it(`does not serve ${p}`, async () => {
+        const res = await get(server, p);
+        assert.ok([403, 404].includes(res.status), `expected 403/404, got ${res.status}`);
+      });
+    }
+  });
+
+  describe('GET /api/usage — from/to validation', () => {
+    it('rejects a non-numeric from with 400', async () => {
+      const res = await get(server, '/api/usage?scope=global&from=abc');
+      assert.strictEqual(res.status, 400);
+      assert.strictEqual(JSON.parse(res.body).error, 'bad_from');
+    });
+
+    it('rejects a non-numeric to with 400', async () => {
+      const res = await get(server, '/api/usage?scope=global&from=0&to=12x');
+      assert.strictEqual(res.status, 400);
+      assert.strictEqual(JSON.parse(res.body).error, 'bad_to');
     });
   });
 

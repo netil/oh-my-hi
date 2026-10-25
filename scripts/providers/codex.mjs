@@ -118,14 +118,16 @@ export const codexProvider = {
     const files = collectRolloutFiles(configDir);
     for (const file of files) {
       // Skip unchanged files (stat is cheap metadata; readFile would download).
+      let mt;
       if (mtimeIndex) {
-        let mt;
         try { mt = fs.statSync(file).mtimeMs; } catch { continue; }
         if (mtimeIndex[file] === mt) continue;
-        mtimeIndex[file] = mt;
       }
       let raw;
       try { raw = await fsp.readFile(file, 'utf8'); } catch { continue; }
+      // Index only files that were actually read (an unreadable file, e.g. an
+      // iCloud placeholder, must be retried next run).
+      if (mtimeIndex) mtimeIndex[file] = mt;
       const sessionId = path.basename(file).replace(/\.jsonl$/, '');
       let currentModel = null;
       let currentContext = null; // last tool/function call before the next token_count

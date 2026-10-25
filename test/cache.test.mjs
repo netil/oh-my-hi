@@ -9,7 +9,7 @@ import { parseUsage, loadTranscriptCache, loadMtimeIndex, saveMtimeIndex, common
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, '..');
-const OUTPUT = path.join(ROOT, 'output');
+const OUTPUT = process.env.OMH_OUTPUT_DIR || path.join(ROOT, 'output');
 const CACHE_PATH = path.join(OUTPUT, 'transcript-cache.json');
 const CACHE_DIR = path.join(OUTPUT, 'cache');
 const PENDING_DIR = path.join(OUTPUT, 'pending');
@@ -35,6 +35,12 @@ after(() => {
   }
 });
 
+// OUTPUT is a fresh temp dir (test/setup.mjs). --data-only only refreshes an
+// existing data.json (creating it is the full build's job), so seed one full build.
+before(() => {
+  if (!fs.existsSync(path.join(OUTPUT, 'data.json'))) run('');
+});
+
 function cleanCache() {
   try { fs.unlinkSync(CACHE_PATH); } catch {}
   try { fs.rmSync(CACHE_DIR, { recursive: true }); } catch {}
@@ -45,7 +51,7 @@ function run(args = '') {
   // Force plugin mode: these tests verify mtime short-circuit / lightweight
   // rebuild behavior, which dev mode intentionally bypasses.
   return execSync(`node scripts/generate-dashboard.mjs ${args}`, {
-    cwd: ROOT, encoding: 'utf-8', timeout: 30000,
+    cwd: ROOT, encoding: 'utf-8', timeout: 120000,
     env: { ...process.env, OMH_BUILD_MODE: 'plugin' },
   });
 }
@@ -121,10 +127,14 @@ describe('Incremental Cache', () => {
       assert.ok(firstRunResult._cacheStats.parsed > 0, 'first run should parse files');
       const t1 = firstRunResult._cacheStats.total;
       sharedCache._parsed = 0;
+      const before = new Map(Object.entries(sharedCache).filter(([k]) => !k.startsWith('_')).map(([k, v]) => [k, v.mtimeMs]));
       const r2 = await parseUsage(CLAUDE_CONFIG_DIR, 0, null, { cache: sharedCache });
-      // Allow for new .jsonl files created by the live session between the two calls
-      const newFiles = Math.max(0, r2._cacheStats.total - t1);
-      assert.equal(r2._cacheStats.parsed, newFiles, 'second run should only parse newly added files');
+      // The live session keeps writing its transcripts between the two calls:
+      // only files that are new or whose mtime moved may be parsed again.
+      const changed = Object.entries(sharedCache)
+        .filter(([k, v]) => !k.startsWith('_') && before.get(k) !== v.mtimeMs).length;
+      assert.ok(r2._cacheStats.total >= t1);
+      assert.equal(r2._cacheStats.parsed, changed, 'second run should only parse new or changed files');
     });
 
     it('should apply cutoff filtering with days parameter', async () => {

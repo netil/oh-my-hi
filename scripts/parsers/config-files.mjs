@@ -46,11 +46,20 @@ export function parseConfigFiles(configDir, projectPath = null) {
         if (parsed.permissions) stats.permissions = true;
         if (parsed.env) stats.env = Object.keys(parsed.env).length;
 
+        // Mask env values (API keys, tokens) the same way mcp-servers.mjs does;
+        // the key names stay visible.
+        const safe = { ...parsed };
+        if (safe.env && typeof safe.env === 'object') {
+          const maskedEnv = {};
+          for (const k of Object.keys(safe.env)) maskedEnv[k] = '***';
+          safe.env = maskedEnv;
+        }
+
         files.push({
           name,
           filePath: fp,
           body: null,
-          jsonContent: JSON.stringify(parsed, null, 2),
+          jsonContent: JSON.stringify(safe, null, 2),
           jsonKeys: keys,
           jsonStats: stats,
           scope: 'global',

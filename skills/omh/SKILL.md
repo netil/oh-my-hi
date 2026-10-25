@@ -1,7 +1,7 @@
 ---
 name: omh
 description: Generate oh-my-hi dashboard. Visual catalog and usage/token analysis across Claude Code & Codex — skills, agents, plugins, hooks, memory, MCP servers, rules, and principles. Triggered by "/omh", "harness status", "dashboard", etc.
-argument-hint: "[--data-only] [--enable-auto] [--disable-auto] [--status] [--update] [--help]"
+argument-hint: "[--data-only] [--enable-auto] [--disable-auto] [--status] [--update] [--enable-auto-update] [--disable-auto-update] [--help]"
 ---
 
 # oh-my-hi
@@ -16,8 +16,10 @@ Generates a full harness insights dashboard (Claude Code & Codex) and opens it i
 - `/omh --data-only` — Regenerate data files only (server continues serving updated files)
 - `/omh --enable-auto` — Enable automatic rebuild on session end
 - `/omh --disable-auto` — Disable automatic rebuild
-- `/omh --status` — Check auto-refresh status
-- `/omh --update` — Check and install latest version
+- `/omh --status` — Check auto-refresh and auto-update status
+- `/omh --update` — Check and install latest version now
+- `/omh --enable-auto-update` — Install new releases automatically (on by default)
+- `/omh --disable-auto-update` — Stop installing new releases automatically
 - `/omh --help` — Show help
 
 ## First Run Guide
@@ -42,6 +44,8 @@ If the user chooses **enable**, run `--enable-auto`. If they choose **disable**,
 - **Local HTTP server**: `scripts/serve.mjs` serves `output/` over HTTP (port 8282, auto-detects next available); re-uses running instance on subsequent `/omh` calls
 - **--data-only**: Regenerates data files only; server continues serving the updated files on next browser refresh
 - **Auto-refresh**: `--enable-auto` registers a Stop hook — rebuilds data on every session end
+- **Auto-update**: a background check (at most every 12 hours, on `/omh` and on auto-refresh) installs a newer release with `claude plugin update`; it loads in the next session. Off in CI and when `DISABLE_AUTOUPDATER` / `DISABLE_UPDATES` is set. If the output says it auto-updated, tell the user the new version applies after `/reload-plugins` or a new session
+- **Data location**: a marketplace install keeps its usage DB in the plugin's persistent data directory (`plugins/data/oh-my-hi-<marketplace>/`), so updates keep the history
 - **Browser open**: macOS `open`, Windows `start`, Linux `xdg-open`
 
 Find and run the script (picks the latest version from cache, falls back to marketplaces):

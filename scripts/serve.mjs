@@ -15,6 +15,7 @@ import fs from 'fs';
 import path from 'path';
 import { execSync, spawnSync } from 'child_process';
 import { fileURLToPath } from 'url';
+import { resolveOutputDir } from './paths.mjs';
 import {
   buildExportRows, toCsv, parseDateParam, exportFilename, PRICING_FALLBACK,
 } from './export.mjs';
@@ -22,8 +23,8 @@ import {
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const ROOT = path.resolve(__dirname, '..');
-// OMH_OUTPUT_DIR override matches generate-dashboard.mjs (also used by tests).
-const OUTPUT_DIR = process.env.OMH_OUTPUT_DIR || path.join(ROOT, 'output');
+// Same resolver as generate-dashboard.mjs (OMH_OUTPUT_DIR override for tests).
+const OUTPUT_DIR = resolveOutputDir(ROOT);
 const LEGACY_DB_PATH = path.join(OUTPUT_DIR, 'oh-my-hi.sqlite');
 const DATA_JSON = path.join(OUTPUT_DIR, 'data.json');
 const CACHE_DIR = path.join(OUTPUT_DIR, 'cache');
@@ -234,6 +235,10 @@ function handleUsage(req, res, url) {
   const scope = url.searchParams.get('scope') || 'global';
   const fromRaw = url.searchParams.get('from');
   const toRaw = url.searchParams.get('to');
+  // from/to are epoch ms; reject anything else rather than letting parseInt
+  // turn junk into NaN (which silently matches no DB / no rows).
+  if (fromRaw != null && !/^\d+$/.test(fromRaw)) return sendJson(res, 400, { error: 'bad_from', detail: 'from must be epoch ms' });
+  if (toRaw != null && !/^\d+$/.test(toRaw)) return sendJson(res, 400, { error: 'bad_to', detail: 'to must be epoch ms' });
   const from = fromRaw != null ? parseInt(fromRaw, 10) : 0;
   const to = toRaw != null ? parseInt(toRaw, 10) : Number.MAX_SAFE_INTEGER;
 
@@ -268,9 +273,23 @@ function handleSearch(req, res, url) {
   }
 }
 
+// Only the files the dashboard page actually loads are served. Everything else
+// under output/ (db/*.sqlite, cache/, rescue/, data.json, …) holds raw usage and
+// prompt data and is reachable only through the /api/* endpoints.
+const STATIC_FILES = new Set(['/index.html', '/version.json']);
+function isAllowedStatic(rel) {
+  if (STATIC_FILES.has(rel)) return true;
+  // /static/<file>: one level only, no nested paths
+  return /^\/static\/[^/\\]+$/.test(rel);
+}
+
 function serveStatic(req, res, pathname) {
-  const rel = pathname === '/' ? '/index.html' : pathname;
-  const filePath = path.normalize(path.join(OUTPUT_DIR, decodeURIComponent(rel)));
+  let rel;
+  try { rel = pathname === '/' ? '/index.html' : decodeURIComponent(pathname); } catch { rel = null; } // malformed %-escape
+  if (rel == null || !isAllowedStatic(rel)) {
+    res.writeHead(404); res.end('not found'); return;
+  }
+  const filePath = path.normalize(path.join(OUTPUT_DIR, rel));
   // Path traversal guard
   if (!filePath.startsWith(OUTPUT_DIR + path.sep) && filePath !== OUTPUT_DIR) {
     res.writeHead(403); res.end('forbidden'); return;
@@ -316,8 +335,29 @@ function handleOpen(req, res) {
   res.end(html);
 }
 
+/**
+ * DNS-rebinding / cross-origin guard. The server binds to 127.0.0.1, but a
+ * hostile page can still point its own hostname at 127.0.0.1 and read responses
+ * as same-origin. Require a loopback Host for the port we are listening on, and
+ * when the browser sends Origin, require it to match that Host.
+ */
+function isAllowedRequest(req) {
+  const port = req.socket && req.socket.localPort;
+  const host = req.headers.host || '';
+  const allowedHosts = [`127.0.0.1:${port}`, `localhost:${port}`];
+  if (!allowedHosts.includes(host.toLowerCase())) return false;
+  const origin = req.headers.origin;
+  if (origin != null && origin.toLowerCase() !== `http://${host.toLowerCase()}`) return false;
+  return true;
+}
+
 function requestHandler(req, res) {
   try {
+    if (!isAllowedRequest(req)) {
+      res.writeHead(403, { 'Content-Type': 'text/plain; charset=utf-8' });
+      res.end('forbidden');
+      return;
+    }
     const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
     const pathname = url.pathname;
     if (pathname === '/api/meta') return handleMeta(req, res);
@@ -339,7 +379,8 @@ function requestHandler(req, res) {
 function writeLockFile(port) {
   try {
     fs.mkdirSync(CACHE_DIR, { recursive: true });
-    fs.writeFileSync(LOCK_FILE, JSON.stringify({ port, pid: process.pid }));
+    // root: the install this server runs from, so a newer build can tell it is stale
+    fs.writeFileSync(LOCK_FILE, JSON.stringify({ port, pid: process.pid, root: ROOT }));
   } catch { /* ignore */ }
 }
 

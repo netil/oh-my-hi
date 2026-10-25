@@ -10,16 +10,8 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, '..');
 const SCRIPT = path.join(ROOT, 'scripts', 'generate-dashboard.mjs');
 
-// ── semverGt (extracted from script, must stay in sync) ──────────────────
-function semverGt(a, b) {
-  const pa = a.split('.').map(Number);
-  const pb = b.split('.').map(Number);
-  for (let i = 0; i < 3; i++) {
-    if ((pa[i] || 0) > (pb[i] || 0)) return true;
-    if ((pa[i] || 0) < (pb[i] || 0)) return false;
-  }
-  return false;
-}
+// semverGt is shared with the script through scripts/auto-update.mjs
+import { semverGt } from '../scripts/auto-update.mjs';
 
 describe('Update Check', () => {
   let src;
@@ -60,7 +52,7 @@ describe('Update Check', () => {
 
     it('uses detectSystemLocale for locale-aware notice', () => {
       const fnIdx = src.indexOf('function notifyUpdateIfAvailable');
-      const snippet = src.slice(fnIdx, fnIdx + 700);
+      const snippet = src.slice(fnIdx, src.indexOf('\n}\n', fnIdx));
       assert.ok(snippet.includes('detectSystemLocale()'), 'locale detected');
       assert.ok(snippet.includes("'ko'"), 'Korean branch');
       assert.ok(snippet.includes('최신 버전'), 'Korean message');
@@ -70,14 +62,14 @@ describe('Update Check', () => {
 
     it('uses 12-hour cache threshold in scheduleUpdateCacheRefresh', () => {
       const fnIdx = src.indexOf('function scheduleUpdateCacheRefresh');
-      const snippet = src.slice(fnIdx, fnIdx + 600);
+      const snippet = src.slice(fnIdx, src.indexOf('\n}\n', fnIdx));
       assert.ok(snippet.includes('TWELVE_HOURS'), 'constant defined');
       assert.ok(snippet.includes('12 * 60 * 60 * 1000'), 'correct value');
     });
 
     it('spawns a detached unref\'d child process for background refresh', () => {
       const fnIdx = src.indexOf('function scheduleUpdateCacheRefresh');
-      const snippet = src.slice(fnIdx, fnIdx + 600);
+      const snippet = src.slice(fnIdx, src.indexOf('\n}\n', fnIdx));
       assert.ok(snippet.includes('detached: true'), 'detached flag');
       assert.ok(snippet.includes("stdio: 'ignore'"), 'stdio suppressed');
       assert.ok(snippet.includes('child.unref()'), 'parent unblocked');
@@ -90,19 +82,19 @@ describe('Update Check', () => {
 
     it('passes CLAUDE_CONFIG_DIR env to background child', () => {
       const fnIdx = src.indexOf('function scheduleUpdateCacheRefresh');
-      const snippet = src.slice(fnIdx, fnIdx + 600);
+      const snippet = src.slice(fnIdx, src.indexOf('\n}\n', fnIdx));
       assert.ok(snippet.includes('CLAUDE_CONFIG_DIR'), 'env forwarded');
     });
 
     it('uses 6000ms timeout for network requests in _runUpdateCacheRefresh', () => {
       const fnIdx = src.indexOf('async function _runUpdateCacheRefresh');
-      const snippet = src.slice(fnIdx, fnIdx + 1000);
+      const snippet = src.slice(fnIdx, src.indexOf('\n}\n', fnIdx));
       assert.ok(snippet.includes('6000'), '6s timeout');
     });
 
     it('tries GitHub API then falls back to npm registry', () => {
       const fnIdx = src.indexOf('async function _runUpdateCacheRefresh');
-      const snippet = src.slice(fnIdx, fnIdx + 1400);
+      const snippet = src.slice(fnIdx, src.indexOf('\n}\n', fnIdx));
       const ghIdx = snippet.indexOf('api.github.com');
       const npmIdx = snippet.indexOf('registry.npmjs.org');
       assert.ok(ghIdx !== -1, 'GitHub API used');
@@ -112,7 +104,7 @@ describe('Update Check', () => {
 
     it('writes timestamp + current + latest to cache file', () => {
       const fnIdx = src.indexOf('async function _runUpdateCacheRefresh');
-      const snippet = src.slice(fnIdx, fnIdx + 2000);
+      const snippet = src.slice(fnIdx, src.indexOf('\n}\n', fnIdx));
       assert.ok(snippet.includes('timestamp'), 'timestamp written');
       assert.ok(snippet.includes('current'), 'current version written');
       assert.ok(snippet.includes('latest'), 'latest version written');
@@ -127,13 +119,9 @@ describe('Update Check', () => {
     it('equal: 1.0.0 == 1.0.0 → false', () => assert.equal(semverGt('1.0.0', '1.0.0'), false));
     it('lower: 0.9.0 < 1.0.0 → false', () => assert.equal(semverGt('0.9.0', '1.0.0'), false));
     it('lower minor: 0.9.0 < 0.10.0 → false', () => assert.equal(semverGt('0.9.0', '0.10.0'), false));
-    it('semverGt in script matches inline implementation', () => {
-      // Verify the script's semverGt body matches what we test above
-      const fnIdx = src.indexOf('function semverGt(a, b)');
-      assert.ok(fnIdx !== -1, 'semverGt defined in script');
-      const snippet = src.slice(fnIdx, fnIdx + 200);
-      assert.ok(snippet.includes('split'), 'splits on dot');
-      assert.ok(snippet.includes('map(Number)'), 'numeric comparison');
+    it('script uses the shared semverGt', () => {
+      assert.ok(src.includes("semverGt") && src.includes("from './auto-update.mjs'"), 'imported from auto-update.mjs');
+      assert.ok(!src.includes('function semverGt('), 'no private copy');
     });
   });
 

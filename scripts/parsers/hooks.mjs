@@ -11,7 +11,13 @@ export function parseHooks(configDir) {
   const settingsFile = path.join(configDir, 'settings.json');
   if (!fs.existsSync(settingsFile)) return [];
 
-  const settings = JSON.parse(fs.readFileSync(settingsFile, 'utf-8'));
+  // A malformed settings.json must not abort the whole build: show no hooks.
+  let settings;
+  try {
+    settings = JSON.parse(fs.readFileSync(settingsFile, 'utf-8'));
+  } catch {
+    return [];
+  }
   const hooks = settings.hooks || {};
 
   // Group by event+matcher, merge commands into array

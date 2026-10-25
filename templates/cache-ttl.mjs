@@ -1,6 +1,8 @@
 // @ts-check
 // cache-ttl.mjs — Cache TTL impact analysis (pure logic, no DOM)
 
+import { tsDateKey } from './date-key.mjs';
+
 /**
  * @typedef {{ read: number, creation: number }} DayCacheData
  * @typedef {{ dailyCacheMap: Record<string, DayCacheData>, sortedDates: string[] }} CacheMapResult
@@ -17,8 +19,8 @@ export function buildDailyCacheMap(tokenEntries) {
   /** @type {Record<string, DayCacheData>} */
   const dailyCacheMap = {};
   tokenEntries.forEach((e) => {
-    const dk = new Date(typeof e.timestamp === 'number' ? e.timestamp : new Date(e.timestamp))
-      .toISOString().substring(0, 10);
+    const dk = tsDateKey(e.timestamp);
+    if (!dk) return;
     if (!dailyCacheMap[dk]) dailyCacheMap[dk] = { read: 0, creation: 0 };
     dailyCacheMap[dk].read += e.cacheRead || 0;
     dailyCacheMap[dk].creation += e.cacheCreation || 0;

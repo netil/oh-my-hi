@@ -13,6 +13,8 @@ import { parseAgents } from '../scripts/parsers/agents.mjs';
 import { parseHooks } from '../scripts/parsers/hooks.mjs';
 import { parseMcpServers } from '../scripts/parsers/mcp-servers.mjs';
 import { parseMemory } from '../scripts/parsers/memory.mjs';
+import { parsePlugins } from '../scripts/parsers/plugins.mjs';
+import { parseConfigFiles } from '../scripts/parsers/config-files.mjs';
 
 // --- Fixture helpers --------------------------------------------------------
 
@@ -72,6 +74,32 @@ describe('parsers/frontmatter', () => {
     assert.equal(meta.name, 'ok');
     assert.equal(meta.another, 'val');
     assert.equal(Object.keys(meta).length, 2);
+  });
+
+  it('reads a literal block scalar (|) as multi-line text', () => {
+    const fp = path.join(tmp, 'f.md');
+    write(fp, '---\nname: x\ndescription: |\n  Line one.\n  "quoted": still text\n\n  Line three.\nmodel: haiku\n---\nBody\n');
+    const { meta } = parseFrontmatter(fp);
+    assert.equal(meta.description, 'Line one.\n"quoted": still text\n\nLine three.\n');
+    assert.equal(meta.model, 'haiku', 'key after the block is still parsed');
+    assert.ok(!('"quoted"' in meta), 'colon inside the block is not a key');
+  });
+
+  it('folds a > block scalar and honors chomping indicators', () => {
+    const fp = path.join(tmp, 'g.md');
+    write(fp, '---\na: >\n  one\n  two\n\n  three\nb: |-\n  keep\n  lines\nc: >-\n  no\n  newline\n---\n');
+    const { meta } = parseFrontmatter(fp);
+    assert.equal(meta.a, 'one two\nthree\n');
+    assert.equal(meta.b, 'keep\nlines');
+    assert.equal(meta.c, 'no newline');
+  });
+
+  it('returns an empty string for an empty block scalar', () => {
+    const fp = path.join(tmp, 'h.md');
+    write(fp, '---\ndescription: |\nname: y\n---\n');
+    const { meta } = parseFrontmatter(fp);
+    assert.equal(meta.description, '');
+    assert.equal(meta.name, 'y');
   });
 });
 
@@ -222,6 +250,16 @@ describe('parsers/hooks', () => {
     }
   });
 
+  it('returns [] instead of throwing when settings.json is malformed', () => {
+    const bad = makeTmpDir('hooks-bad');
+    try {
+      write(path.join(bad, 'settings.json'), '{ "hooks": ');
+      assert.deepEqual(parseHooks(bad), []);
+    } finally {
+      fs.rmSync(bad, { recursive: true, force: true });
+    }
+  });
+
   it('returns [] when settings.json missing', () => {
     const empty = makeTmpDir('hooks-empty');
     try {
@@ -247,6 +285,7 @@ describe('parsers/mcp-servers', () => {
           env: { API_TOKEN: 'secret-value', OTHER: 'shh' },
         },
         'no-env': { command: 'python', args: ['x.py'] },
+        'remote': { type: 'http', url: 'https://example.invalid/mcp', headers: { Authorization: 'Bearer header-secret' } },
       },
     };
     write(path.join(tmp, '.claude.json'), JSON.stringify(cfg));
@@ -268,6 +307,13 @@ describe('parsers/mcp-servers', () => {
     // critical: raw JSON must not contain the real token value
     assert.ok(!my.rawJson.includes('secret-value'), 'secret must be masked');
     assert.ok(my.rawJson.includes('***'), 'mask placeholder present');
+  });
+
+  it('masks header values (auth tokens) but keeps header names', () => {
+    const servers = parseMcpServers(tmp);
+    const remote = servers.find(s => s.name === 'remote');
+    assert.ok(!remote.rawJson.includes('header-secret'), 'header value must be masked');
+    assert.deepEqual(JSON.parse(remote.rawJson).remote.headers, { Authorization: '***' });
   });
 
   it('handles servers with no env block', () => {
@@ -334,6 +380,56 @@ describe('parsers/memory', () => {
       assert.equal(mems[0].type, 'unknown');
     } finally {
       fs.rmSync(tmp2, { recursive: true, force: true });
+    }
+  });
+});
+
+// --- plugins ---------------------------------------------------------------
+
+describe('parsers/plugins', () => {
+  it('returns [] instead of throwing when installed_plugins.json is malformed', () => {
+    const tmp = makeTmpDir('plugins-bad');
+    try {
+      write(path.join(tmp, 'plugins', 'installed_plugins.json'), '{ "plugins": ');
+      assert.deepEqual(parsePlugins(tmp), []);
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it('still lists plugins (as not enabled) when settings.json is malformed', () => {
+    const tmp = makeTmpDir('plugins-bad-settings');
+    try {
+      write(path.join(tmp, 'plugins', 'installed_plugins.json'),
+        JSON.stringify({ plugins: { 'p@m': [{ scope: 'user', version: '1.0.0' }] } }));
+      write(path.join(tmp, 'settings.json'), '{ broken');
+      const plugins = parsePlugins(tmp);
+      assert.equal(plugins.length, 1);
+      assert.equal(plugins[0].name, 'p');
+      assert.equal(plugins[0].enabled, false);
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+});
+
+// --- config-files ----------------------------------------------------------
+
+describe('parsers/config-files', () => {
+  it('masks settings.json env values but keeps key names', () => {
+    const tmp = makeTmpDir('config-env');
+    try {
+      write(path.join(tmp, 'settings.json'),
+        JSON.stringify({ env: { ANTHROPIC_API_KEY: 'sk-secret-value' }, model: 'opus' }));
+      const settings = parseConfigFiles(tmp).find(f => f.name === 'settings.json');
+      assert.ok(settings);
+      assert.ok(!settings.jsonContent.includes('sk-secret-value'), 'env value must be masked');
+      const parsed = JSON.parse(settings.jsonContent);
+      assert.deepEqual(parsed.env, { ANTHROPIC_API_KEY: '***' });
+      assert.equal(parsed.model, 'opus', 'non-env values are kept');
+      assert.equal(settings.jsonStats.env, 1);
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
     }
   });
 });

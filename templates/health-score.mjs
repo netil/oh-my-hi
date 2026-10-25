@@ -31,8 +31,13 @@
  *     agents?: Array<{ name: string, timestamp: number|string }>,
  *     mcpCalls?: Array<{ name: string, timestamp: number|string }> },
  *   calcEntryCostFn?: (entry: any) => number,
- *   days?: number
+ *   days?: number,
+ *   now?: number,
+ *   trendEntries?: HealthInput['tokenEntries']
  * }} HealthInput
+ *
+ * `now` (epoch ms, default Date.now()) is the moment the score is taken at,
+ * so a past day's score can be computed from entries up to that day.
  */
 
 const WEIGHTS = {
@@ -113,9 +118,11 @@ function naCostTrend() {
 function scoreCostTrend(data) {
   // No comparison baseline available — exclude from scoring
   if (data.days === 0) return naCostTrend();
-  const entries = data.tokenEntries || [];
+  // Compares the last 7 days with the 7 before, so it needs entries beyond
+  // the selected period (`trendEntries`) when the caller has them.
+  const entries = data.trendEntries || data.tokenEntries || [];
   const costFn = data.calcEntryCostFn || (() => 0);
-  const now = Date.now();
+  const now = data.now ?? Date.now();
   const d7 = 7 * 86400000;
 
   let currentCost = 0, prevCost = 0;
@@ -124,6 +131,7 @@ function scoreCostTrend(data) {
     const ms = tsMs(entries[i].timestamp);
     if (isNaN(ms)) continue;
     const age = now - ms;
+    if (age < 0) continue; // after `now`
     if (age <= d7) {
       currentCost += costFn(entries[i]);
       currentCount++;
@@ -158,7 +166,8 @@ function scoreCostTrend(data) {
  */
 function scoreUnusedItems(data) {
   const d30 = 30 * 86400000;
-  const cutoff = Date.now() - d30;
+  const now = data.now ?? Date.now();
+  const cutoff = now - d30;
 
   // Build set of names used in last 30 days
   const usedNames = new Set();
@@ -167,7 +176,7 @@ function scoreUnusedItems(data) {
     const list = lists[li] || [];
     for (let i = 0; i < list.length; i++) {
       const ms = tsMs(list[i].timestamp);
-      if (!isNaN(ms) && ms >= cutoff) usedNames.add(list[i].name);
+      if (!isNaN(ms) && ms >= cutoff && ms <= now) usedNames.add(list[i].name);
     }
   }
 

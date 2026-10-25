@@ -11,7 +11,8 @@ import {
 } from '../templates/anomaly.mjs';
 
 // Helpers
-const ts = (dateStr) => new Date(dateStr).getTime();
+// Local wall-clock times: days are keyed by the local calendar day
+const ts = (dateStr) => new Date(dateStr.length === 10 ? dateStr + 'T12:00:00' : dateStr).getTime();
 // Flat cost: $1 per 1M tokens of anything, to keep math simple
 const calcCost = (e) =>
   ((e.rawInput || 0) + (e.outputTokens || 0) + (e.cacheRead || 0) + (e.cacheCreation || 0)) / 1e6;
@@ -29,9 +30,9 @@ function series(tokensByDate) {
 
 test('buildDailyUsageSeries - groups entries by date and sums all token kinds', () => {
   const entries = [
-    { timestamp: ts('2026-03-01T10:00:00Z'), rawInput: 100, outputTokens: 50, cacheRead: 1000, cacheCreation: 10 },
-    { timestamp: ts('2026-03-01T18:00:00Z'), rawInput: 40, outputTokens: 0, cacheRead: 0, cacheCreation: 0 },
-    { timestamp: ts('2026-03-02T09:00:00Z'), rawInput: 1, outputTokens: 2 },
+    { timestamp: ts('2026-03-01T10:00:00'), rawInput: 100, outputTokens: 50, cacheRead: 1000, cacheCreation: 10 },
+    { timestamp: ts('2026-03-01T18:00:00'), rawInput: 40, outputTokens: 0, cacheRead: 0, cacheCreation: 0 },
+    { timestamp: ts('2026-03-02T09:00:00'), rawInput: 1, outputTokens: 2 },
   ];
   const { dailyMap, sortedDates } = buildDailyUsageSeries(entries, calcCost);
   assert.deepEqual(sortedDates, ['2026-03-01', '2026-03-02']);
@@ -41,7 +42,7 @@ test('buildDailyUsageSeries - groups entries by date and sums all token kinds', 
 });
 
 test('buildDailyUsageSeries - handles string timestamps', () => {
-  const entries = [{ timestamp: '2026-03-05T12:00:00Z', rawInput: 7 }];
+  const entries = [{ timestamp: '2026-03-05T12:00:00', rawInput: 7 }];
   const { sortedDates, dailyMap } = buildDailyUsageSeries(entries, calcCost);
   assert.deepEqual(sortedDates, ['2026-03-05']);
   assert.equal(dailyMap['2026-03-05'].tokens, 7);
@@ -50,14 +51,14 @@ test('buildDailyUsageSeries - handles string timestamps', () => {
 test('buildDailyUsageSeries - skips invalid timestamps', () => {
   const entries = [
     { timestamp: 'not-a-date', rawInput: 5 },
-    { timestamp: '2026-03-01T00:00:00Z', rawInput: 5 },
+    { timestamp: '2026-03-01T00:00:00', rawInput: 5 },
   ];
   const { sortedDates } = buildDailyUsageSeries(entries, calcCost);
   assert.deepEqual(sortedDates, ['2026-03-01']);
 });
 
 test('buildDailyUsageSeries - cost is zero without a cost function', () => {
-  const entries = [{ timestamp: '2026-03-01T00:00:00Z', rawInput: 5 }];
+  const entries = [{ timestamp: '2026-03-01T00:00:00', rawInput: 5 }];
   const { dailyMap } = buildDailyUsageSeries(entries);
   assert.equal(dailyMap['2026-03-01'].cost, 0);
 });

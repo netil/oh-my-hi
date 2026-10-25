@@ -19,7 +19,9 @@ oh-my-hi/
 ├── scripts/
 │   ├── generate-dashboard.mjs   # Main entry point
 │   ├── db.mjs                   # SQLite helper (openDb, upsertUsage, schema migrations)
-│   ├── serve.mjs                # Local HTTP server (port 7942, /api/meta, /api/usage)
+│   ├── serve.mjs                # Local HTTP server (port 8282, /api/meta, /api/usage)
+│   ├── paths.mjs                # Output directory resolver + migration from older versions
+│   ├── auto-update.mjs          # Self-update decision, Stop hook repoint, install lookup
 │   └── parsers/
 │       ├── agents.mjs           # agents/*.md (frontmatter)
 │       ├── commands.mjs         # commands/*.md (frontmatter)
@@ -45,11 +47,15 @@ oh-my-hi/
 │   ├── cost-projection.mjs      # Month-end cost projection (projectMonthEnd, testable)
 │   ├── canvas-bars.mjs          # Stacked/session bar layout + log-scale helpers (testable)
 │   ├── regression.mjs           # Week-over-week regression detection (testable)
+│   ├── date-key.mjs             # Local calendar-day keys (dateKey, tsDateKey)
+│   ├── overview-data.mjs        # Overview series: daily calls, 7x24 activity, harness item rows
+│   ├── pricing.mjs              # Model pricing table + cost formula (browser and Node)
 │   ├── work-types.json          # Task category schema (25 types)
 │   └── locales/
 │       ├── en.json              # English locale (base)
 │       └── ko.json              # Korean locale
-└── output/                      # Generated artifacts
+└── output/                      # Generated artifacts. Dev checkout: <repo>/output.
+                                 # Marketplace install: plugins/data/oh-my-hi-<marketplace>/ (survives updates)
     ├── data.json                # Raw data (API source of truth + /api/meta base)
     ├── db/
     │   └── {year}/
@@ -60,7 +66,9 @@ oh-my-hi/
     │   ├── base-*.json.gz       # Compacted cache (after 50 segments)
     │   ├── seg-*.json.gz        # Incremental cache segments
     │   ├── .serve.json          # Lock file: running server PID + URL
-    │   └── .update-check        # npm registry check cache (24h TTL)
+    │   ├── .update-check        # Latest-version check cache (12h TTL)
+    │   ├── .auto-update.json    # Self-update state: disabled flag, last attempt, last update
+    │   └── legacy-v4-purged     # Marker: pre-v4 usage rows already replaced
     └── pending/
         └── *.json               # Lightweight mode deltas (plain JSON)
 ```
@@ -73,8 +81,10 @@ oh-my-hi/
 | `--data-only` | Lightweight data collection — parse changed files, update data.json + SQLite (skip full build) |
 | `--enable-auto` | Register Stop hook for auto-rebuild on session end |
 | `--disable-auto` | Remove Stop hook |
-| `--update` | Check npm registry and install latest version |
-| `--status` | Show auto-refresh hook status |
+| `--update` | Check for the latest version (GitHub tags, npm fallback) and install it now |
+| `--status` | Show auto-refresh hook and auto-update status |
+| `--enable-auto-update` | Install new releases automatically (default) |
+| `--disable-auto-update` | Stop installing new releases automatically |
 | `<path> [path...]` | Include only specified project paths |
 | `--help` | Show help |
 
@@ -188,7 +198,7 @@ Built at build time in `generate-dashboard.mjs`. Persisted in `task-categories.j
 
 | Page | Hash | Content |
 |------|------|---------|
-| Harness Overview | `#overview` | Stats cards, category distribution donut, daily trend, popular skills, context budget (canvas stacked bar + top items, estimated), activity heatmap, recent activity, insights, unused items (incl. MCP servers + cleanup tips) |
+| Harness Overview | `#overview` | Control panel: KPI strip (calls for the period; tokens, sessions, cost for 7 days; health score; context budget) with sparklines, daily calls (agents + skills, spike days shaded), "to check" list (spikes, regressions, weak health factors, lint), health score factors, context budget, 7x24 activity with tooltips, harness items table (kind chips, unused / context filters, hover summary, click to detail) |
 | Token Overview | `#tokens` | Token stats, model distribution donut, trend chart, activity heatmap, task category bar, tool context bar, model table, insights |
 | Token: Cost | `#tokens-cost` | Cost cards, budget config + progress bars, cost trend charts (daily/weekly/monthly with budget grid lines), cost formula |
 | Token Breakdown | `#breakdown` | Startup context cost (CLAUDE.md + skills + principles + MCP × session count, period comparison), type bar chart (skill/agent/MCP/tool/conversation), Top 5 per type, expandable accordion per type |
@@ -215,7 +225,8 @@ configFiles, skills, agents, plugins, hooks, memory, mcpServers, rules, principl
 4. **Incremental cache**: Transcript parse results cached as gzipped segments (append-only). Only changed files are re-parsed. Compaction merges segments when count exceeds 50.
 5. **Lightweight mode**: `--data-only` (Stop hook) uses a mtime-index for change detection without loading full cache. Writes plain JSON pending files, merges into `data.json`, and syncs changes to SQLite.
 6. **Persistent category mapping**: `task-categories.json` auto-generated at every build from `work-types.json` schema.
-7. **Auto-update check**: `/omh` queries npm registry asynchronously (3s timeout, 24h cache). Notifies when new version is available.
+7. **Self-update**: `/omh` and the Stop-hook refresh spawn a detached check (GitHub tags, npm fallback; at most every 12h). A marketplace install with a newer release runs `claude plugin marketplace update` + `claude plugin update`, confirms the new version in `installed_plugins.json`, repoints the Stop hook, and records the result in `cache/.auto-update.json`; the next `/omh` announces it once. Skipped in CI, for dev / npm installs, when the user opted out, and when `DISABLE_UPDATES` / `DISABLE_AUTOUPDATER` / `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC` is set (unless `FORCE_AUTOUPDATE_PLUGINS`). A failed version is retried after 24h.
+7a. **Persistent output for installs**: Claude Code replaces a plugin's version directory on update and deletes it 14 days later, so `paths.mjs` puts a marketplace install's output in `plugins/data/<id>/` (`${CLAUDE_PLUGIN_DATA}`). The first run copies the newest older version's `db/` and `cache/` (WAL included, source left in place). A server whose lock file names another install directory is replaced on the next build, without opening a new tab.
 8. **Server lock file reuse**: `cache/.serve.json` stores the running server's PID and URL. On subsequent builds, the generator checks if the process is still alive before spawning a new one. On macOS + Chromium, AppleScript focuses an existing tab by URL match or opens a new one; other platforms use the `/open` launcher route.
 9. **`version.json`**: written alongside every `writeDataJs` call (`{ generatedAt }`). Served with `no-store`. The dashboard polls it every 30 s to detect data updates and show a refresh banner without requiring a manual reload.
 9. **Pure modules prepended to `app.js`**: `session-events.mjs`, `context-example.mjs`, `cost-projection.mjs`, `canvas-bars.mjs`, and `regression.mjs` are authored as ESM for unit-testability. The generator strips `export` keywords and prepends them to `app.js` so symbols land in the same script scope. Source of truth lives in the `.mjs` files — never edit the inlined copies.

@@ -45,9 +45,9 @@ function cleanDir(dir) {
 // ── Schema ──────────────────────────────────────────────────────────────────
 
 describe('Schema', () => {
-  it('openDb creates a v3 schema (fresh install)', () => {
+  it('openDb creates a v4 schema (fresh install)', () => {
     const db = freshDb();
-    assert.equal(getSchemaVersion(db), 3);
+    assert.equal(getSchemaVersion(db), 4);
     db.close();
   });
 
@@ -629,14 +629,14 @@ describe('appendUsageMonthly — completedMonths retry skip', () => {
     }
   });
 
-  it('without completedMonths (legacy callers) behavior is unchanged', () => {
+  it('without completedMonths, rewriting the same entries is still idempotent', () => {
     const out = tempDir();
     try {
       const usage = { skills: [{ name: 'skill-a', count: 2, timestamp: Date.UTC(2025, 2, 5) }] };
       appendUsageMonthly(out, 'global', usage);
-      appendUsageMonthly(out, 'global', usage); // counts accumulate as before
+      appendUsageMonthly(out, 'global', usage); // same entry again: no inflation
       const db = openDb(getMonthlyDbPath(out, 2025, 3));
-      assert.equal(db.prepare("SELECT count FROM skill_usage WHERE name = 'skill-a'").get().count, 4);
+      assert.equal(db.prepare("SELECT SUM(count) AS c FROM skill_usage WHERE name = 'skill-a'").get().c, 2);
       db.close();
     } finally {
       cleanDir(out);
@@ -1141,8 +1141,8 @@ describe('v1 → v2 migration — machine column', () => {
       v1.prepare(`INSERT INTO latency_entries (scope, session_id, timestamp, latency_ms) VALUES ('global', 's1', 1000, 200)`).run();
       v1.close();
 
-      const db = openDb(dbPath); // triggers migration (v1 → v2 → v3)
-      assert.equal(getSchemaVersion(db), 3, 'user_version bumped to 3');
+      const db = openDb(dbPath); // triggers migration (v1 → v2 → v3 → v4)
+      assert.equal(getSchemaVersion(db), 4, 'user_version bumped to 4');
       const me = getMachineId();
       for (const table of ['token_entries', 'prompt_entries', 'skill_usage', 'agent_usage', 'mcp_calls', 'latency_entries']) {
         const rows = db.prepare(`SELECT * FROM ${table}`).all();
@@ -1192,7 +1192,7 @@ describe('v1 → v2 migration — machine column', () => {
       createV1Db(dbPath).close();
       openDb(dbPath).close();
       const db = openDb(dbPath); // second open must not re-migrate / throw
-      assert.equal(getSchemaVersion(db), 3);
+      assert.equal(getSchemaVersion(db), 4);
       db.close();
     } finally { cleanDir(out); }
   });
@@ -1294,18 +1294,21 @@ describe('importUsageDir — cross-machine merge', () => {
     } finally { cleanDir(srcOut); cleanDir(destOut); }
   });
 
-  it('picks up grown counts from the source without inflating (max merge)', () => {
+  it('picks up the source\'s new calls on re-import without inflating', () => {
     const srcOut = buildSourceOutput('machine-b');
     const destOut = tempDir();
     try {
       importUsageDir(path.join(srcOut, 'db'), destOut);
-      // source machine keeps working: count grows 4 → 9
+      // source machine keeps working: 5 more calls on the same day (4 → 9)
       appendUsageMonthly(srcOut, 'global', {
-        skills: [{ name: 'sk', count: 5, date: '2026-01-15', machine: 'machine-b' }],
+        skills: Array.from({ length: 5 }, (_, i) => ({
+          id: `toolu_${i}`, name: 'sk', timestamp: Date.UTC(2026, 0, 15, 12, i), machine: 'machine-b',
+        })),
       });
       importUsageDir(path.join(srcOut, 'db'), destOut);
+      importUsageDir(path.join(srcOut, 'db'), destOut); // re-run changes nothing
       const db = openDb(getMonthlyDbPath(destOut, 2026, 1));
-      assert.equal(db.prepare('SELECT count FROM skill_usage WHERE machine = ?').get('machine-b').count, 9);
+      assert.equal(db.prepare('SELECT SUM(count) AS c FROM skill_usage WHERE machine = ?').get('machine-b').c, 9);
       db.close();
     } finally { cleanDir(srcOut); cleanDir(destOut); }
   });
