@@ -5,7 +5,7 @@
 
 Parses your Claude Code and Codex configuration and usage data, stores results in a local SQLite database, and serves an interactive dashboard via a local HTTP server. It discovers each tool by its config directory, so a single dashboard shows them side by side.
 
-<img src="./assets/dashboard.png?v=3" alt="Dashboard preview" width="800">
+<img src="./assets/dashboard.png?v=0.16.0" alt="Dashboard preview" width="800">
 
 ## What it shows
 
@@ -22,14 +22,14 @@ Parses your Claude Code and Codex configuration and usage data, stores results i
 - **Multi-tool** — Claude Code and Codex side by side; pick a tool from the selector to see its tokens, cost, sessions, and structure (each with tool-correct pricing and wording)
 - **Multi-workspace** — switch between global and per-project scopes
 
-<img src="./assets/token-overview.png?v=1" alt="Tokens" width="800">
-<img src="./assets/insights.png" alt="Insights" width="800">
+<img src="./assets/token-overview.png?v=0.16.0" alt="Tokens" width="800">
+<img src="./assets/insights.png?v=0.16.0" alt="Insights" width="800">
 
 ### Token Breakdown
 
 Breaks down token usage by context type and individual item. Shows which skills, agents, MCP servers, and built-in tools are consuming the most tokens — and how much of that cost comes from startup context that loads on every session.
 
-<img src="./assets/token-breakdown.png" alt="Token Breakdown" width="800">
+<img src="./assets/token-breakdown.png?v=0.16.0" alt="Token Breakdown" width="800">
 
 **Startup context cost** estimates the cumulative token cost of items that load automatically before every session (CLAUDE.md, skill descriptions, principles, MCP tool listings). Multiplied by session count for the selected period, it gives you a concrete number to act on — trim a large CLAUDE.md or remove unused skills to reduce your baseline cost per session.
 
@@ -37,13 +37,13 @@ Breaks down token usage by context type and individual item. Shows which skills,
 
 Tracks how much the [cache TTL regression](https://github.com/anthropics/claude-code/issues/46829) (5 min vs 1 hr) may be costing you. Compares 7-day rolling cache hit rates to estimate excess re-creation cost — drops in the trend chart indicate periods when caches expired before being reused.
 
-<img src="./assets/cache-ttl-impact.png" alt="Cache TTL Impact" width="800">
+<img src="./assets/cache-ttl-impact.png?v=0.16.0" alt="Cache TTL Impact" width="800">
 
 ### Context Window Explorer
 
 Pick a real session from your Claude Code or Codex history and replay it turn-by-turn. The explorer breaks down every API turn into its contribution to the context window — system prompt, CLAUDE.md / AGENTS.md, memory, skill descriptions, MCP tools, user prompts, model responses, tool calls — so you can see exactly where your tokens went and when compaction kicked in. For Codex, each turn is classified by the tool it used (`exec_command`, `apply_patch`, …).
 
-<img src="./assets/context-explorer.png" alt="Context Window Explorer" width="800">
+<img src="./assets/context-explorer.png?v=0.16.0" alt="Context Window Explorer" width="800">
 
 You can also view a guided example session to walk through the mechanics before loading your own:
 
